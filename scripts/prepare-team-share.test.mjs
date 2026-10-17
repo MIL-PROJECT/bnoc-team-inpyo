@@ -25,10 +25,10 @@ async function fixture(t, files = {}) {
 test('allowlist excludes tracked runtime, raw documents, secrets and generated files', () => {
   for (const path of ['.local/secrets.json', 'runtime/data/db', 'docs/sources/original.pdf',
     'docs/설문조사및스크린샷/1.pdf', 'backend/build/app.jar', 'frontend/node_modules/a.js',
-    'frontend/.env', 'frontend/.env.local', '.codex/private.pem', '.git/config', '../README.md']) assert.equal(allowedPath(path), false, path);
+    '요구사항.md', 'docs/업무검증기록.md', 'frontend/.env', 'frontend/.env.local', '.codex/private.pem', '.git/config', '../README.md']) assert.equal(allowedPath(path), false, path);
   for (const path of ['Dockerfile', 'compose.yaml', 'design/tokens.css', '.github/workflows/team-ci.yml',
     '.codex/agents/verifier.toml', 'scripts/bnoc-team.mjs', 'docker/entrypoint.mjs',
-    'backend/src/main/kotlin/bnoc/Application.kt', 'docs/업무검증기록.md']) assert.equal(allowedPath(path), true, path);
+    'backend/src/main/kotlin/bnoc/Application.kt', 'docs/records/업무검증기록.md']) assert.equal(allowedPath(path), true, path);
 });
 
 test('known credential formats and local personal paths rejected without printing their values', () => {
@@ -51,16 +51,16 @@ test('snapshot omits raw files and history, retains product bytes and private ev
     'frontend/src/app.ts': 'export const value = 1;\n',
     'runtime/evidence/private.json': 'raw evidence',
     'docs/sources/source.pdf': 'private original',
-    'docs/업무검증기록.md': '[검증](../runtime/evidence/private.json)\n[요구](../요구사항.md)\n',
-    '요구사항.md': '# 요구\n',
+    'docs/records/업무검증기록.md': '[검증](../../runtime/evidence/private.json)\n[요구](../spec/요구사항.md)\n',
+    'docs/spec/요구사항.md': '# 요구\n',
   });
   await writeFile(join(root, 'frontend/untracked.ts'), 'untracked');
   const manifest = await prepareTeamShare({ root, name: 'success', require: ['README.md'] });
   const output = join(root, manifest.output);
   assert.equal(await readFile(join(output, 'frontend/src/app.ts'), 'utf8'), 'export const value = 1;\n');
-  const log = await readFile(join(output, 'docs/업무검증기록.md'), 'utf8');
+  const log = await readFile(join(output, 'docs/records/업무검증기록.md'), 'utf8');
   assert.match(log, /비공개 원본 이력/);
-  assert.match(log, /\[요구\]\(\.\.\/요구사항.md\)/);
+  assert.match(log, /\[요구\]\(\.\.\/spec\/요구사항.md\)/);
   assert.ok(!(await readdir(output)).includes('.git'));
   assert.ok(!(await readdir(output)).includes('runtime'));
   assert.ok(!(await readdir(join(output, 'frontend'))).includes('untracked.ts'));
@@ -99,8 +99,8 @@ test('existing snapshot never overwritten and path traversal rejected', async t 
 
 test('personal preparation data generalized only in share text and references stay historical', () => {
   const original = '# 대회\n\n참가 희망자: 공군 병사.\n**사용자 확인(2026-09-10):** 본인은 공군 병사이며 30110 특기.\n**추가 작업 전제:** 본인은 BNOC 소속이며 하루 3시간·주 21시간.\n### 본인의 개발환경 계획\n집에 있는 개인 PC\n## 8. 제출물\n';
-  const { text, changes } = shareText('docs/대회정보.md', original, new Set());
-  assert.deepEqual(secretFindings('docs/대회정보.md', text), []);
+  const { text, changes } = shareText('docs/reference/대회정보.md', original, new Set());
+  assert.deepEqual(secretFindings('docs/reference/대회정보.md', text), []);
   assert.match(text, /## 8\. 제출물/);
   assert.ok(changes.includes('personal-preparation-generalized'));
   assert.match(original, /30110/);

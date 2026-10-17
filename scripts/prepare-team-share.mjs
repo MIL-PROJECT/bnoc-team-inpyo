@@ -7,12 +7,12 @@ import { fileURLToPath } from 'node:url';
 const rootFiles = new Set([
   '.gitignore', '.dockerignore', '.gitattributes', 'Dockerfile', 'compose.yaml', 'design/tokens.css',
   'AGENTS.md', 'README.md', 'package.json', 'package-lock.json', 'playwright.config.ts',
-  '요구사항.md', '유스케이스.md', '시스템요구사항.md', '아키텍처설계.md',
-  '아키텍처설계.html', '개발명세서.md',
 ]);
 const documents = new Set([
-  'docs/대회정보.md', 'docs/조사근거.md', 'docs/개발진행.md', 'docs/작업기록.md',
-  'docs/AI활용기록.md', 'docs/업무검증기록.md', 'docs/AI개발방식_비교와도입안.md',
+  'docs/spec/요구사항.md', 'docs/spec/유스케이스.md', 'docs/spec/시스템요구사항.md',
+  'docs/spec/아키텍처설계.md', 'docs/spec/아키텍처설계.html', 'docs/spec/개발명세서.md',
+  'docs/reference/대회정보.md', 'docs/reference/조사근거.md', 'docs/records/개발진행.md', 'docs/records/작업기록.md',
+  'docs/records/AI활용기록.md', 'docs/records/업무검증기록.md', 'docs/reference/AI개발방식_비교와도입안.md',
 ]);
 const prefixes = ['frontend/', 'backend/', 'mock-provider/', 'scripts/', 'e2e/',
   'experiments/ai-workflow/', '.agents/', '.codex/', '.github/', 'docker/'];
@@ -26,8 +26,6 @@ export const requiredFiles = [
   '.agents/skills/bnoc-workflow/SKILL.md', '.codex/config.toml',
   '.github/workflows/team-ci.yml', 'scripts/check-team-handoff.mjs',
   ...documents,
-  '요구사항.md', '유스케이스.md', '시스템요구사항.md', '아키텍처설계.md',
-  '아키텍처설계.html', '개발명세서.md',
 ];
 
 export function allowedPath(path) {
@@ -49,13 +47,13 @@ export function secretFindings(path, content) {
     ['personal-phone', /\b01[016789][ -]?\d{3,4}[ -]?\d{4}\b/],
   ];
   const found = patterns.filter(([, pattern]) => pattern.test(content)).map(([name]) => name);
-  if (path === 'docs/대회정보.md' && /30110|본인은 BNOC|하루 3시간|주 21시간|집에 있는 개인 PC/.test(content)) found.push('personal-preparation');
+  if (path === 'docs/reference/대회정보.md' && /30110|본인은 BNOC|하루 3시간|주 21시간|집에 있는 개인 PC/.test(content)) found.push('personal-preparation');
   return found;
 }
 
 export function shareText(path, text, selected) {
   const changes = [];
-  if (path === 'docs/대회정보.md') {
+  if (path === 'docs/reference/대회정보.md') {
     const before = text;
     text = text.replace('참가 희망자: 공군 병사.', '개인 참가 준비 정보는 공유본에서 제외했다.')
       .replaceAll('본인에게 필요한 확인', '참가팀 확인 사항')

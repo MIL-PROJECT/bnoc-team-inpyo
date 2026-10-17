@@ -8,9 +8,9 @@
 
 우선 보강할 것은 **사용자 설명에서 합격 기준을 만들고, 그 기준이 잘못된 구현을 실제로 걸러내는지 검사하는 절차**다. 다음으로 실행 기록을 비교해 개발 방식 자체를 개선한다. 새 에이전트 수보다 업무 해석 오류·수정 부담·실행 비용을 줄였다는 증거가 중요하다.
 
-첫 조사에서 외부 사례, 일정 결정 권한 실험, 후속 비교 계획을 정리했다. 이어 사용자가 원문 근거·검사 능력 점검·실패 재사용 세 절차의 적용을 지시해 `AGENTS.md`, 프로젝트 스킬, 세 역할 지침에 반영했다. [실패·재검사 기록](업무검증기록.md)도 연결했다. **절차 반영과 효과 입증은 별개다.** AI 개발 방식 간 비교와 현업 검수는 아직 하지 않았다.
+첫 조사에서 외부 사례, 일정 결정 권한 실험, 후속 비교 계획을 정리했다. 이어 사용자가 원문 근거·검사 능력 점검·실패 재사용 세 절차의 적용을 지시해 `AGENTS.md`, 프로젝트 스킬, 세 역할 지침에 반영했다. [실패·재검사 기록](../records/업무검증기록.md)도 연결했다. **절차 반영과 효과 입증은 별개다.** AI 개발 방식 간 비교와 현업 검수는 아직 하지 않았다.
 
-반복 절차는 [.agents/skills/bnoc-workflow/SKILL.md](../.agents/skills/bnoc-workflow/SKILL.md)에 둔다. 프로젝트 스킬 위치와 AGENTS의 필수 실행 연결은 [OpenAI의 저장소 스킬 활용 사례](https://developers.openai.com/blog/skills-agents-sdk)와 [공식 스킬 문서](https://learn.chatgpt.com/docs/build-skills)의 구조를 참고했다. 자동 호출을 허용하고, 목록 표시와 무관하게 AGENTS에서 정확한 경로로 읽도록 했다. 현재 앱에서의 자동 목록 갱신은 별도 확인 대상이다.
+반복 절차는 [.agents/skills/bnoc-workflow/SKILL.md](../../.agents/skills/bnoc-workflow/SKILL.md)에 둔다. 프로젝트 스킬 위치와 AGENTS의 필수 실행 연결은 [OpenAI의 저장소 스킬 활용 사례](https://developers.openai.com/blog/skills-agents-sdk)와 [공식 스킬 문서](https://learn.chatgpt.com/docs/build-skills)의 구조를 참고했다. 자동 호출을 허용하고, 목록 표시와 무관하게 AGENTS에서 정확한 경로로 읽도록 했다. 현재 앱에서의 자동 목록 갱신은 별도 확인 대상이다.
 
 ## 대회에서 입증해야 할 것
 
@@ -37,11 +37,11 @@
 
 ## 이전 실패에 맞춘 보강
 
-기존 [개발 계약](../AGENTS.md)에는 계약 확인 담당, 구현자, 독립 검토자와 검증자가 이미 있다. 부족했던 것은 모든 역할이 참고하는 **업무 정답의 근거**였다.
+기존 [개발 계약](../../AGENTS.md)에는 계약 확인 담당, 구현자, 독립 검토자와 검증자가 이미 있다. 부족했던 것은 모든 역할이 참고하는 **업무 정답의 근거**였다.
 
 폐기 전 보존본에서는 같은 일정 필수화가 한 곳에는 확정 요구사항, 다른 곳에는 검토 대기 제안으로 기록됐다. 시험도 ‘예정일이 없으면 오류’를 기대하도록 바뀌었다. 코드와 시험이 일치해도 잘못된 업무 규칙을 통과시킬 수 있는 상태였다. 보존본은 원인 조사 자료이며 현재 개발 명세로 사용하지 않는다.
 
-현재 복원 명세는 작업반의 일정 입력과 일정 미정을 허용한다. 사용자도 BNOC·사지센은 구체 작업 예정일을 정할 수 없고 작업 부서가 정한다고 설명했다. 요청자의 희망 일정과 작업 부서의 실제 작업 일정을 구별해야 한다. [요구사항 §4·§6](../요구사항.md)
+현재 복원 명세는 작업반의 일정 입력과 일정 미정을 허용한다. 사용자도 BNOC·사지센은 구체 작업 예정일을 정할 수 없고 작업 부서가 정한다고 설명했다. 요청자의 희망 일정과 작업 부서의 실제 작업 일정을 구별해야 한다. [요구사항 §4·§6](../spec/요구사항.md)
 
 사용자 요청으로 반영한 절차는 기존 역할에 다음 책임을 보강한다.
 
@@ -73,10 +73,10 @@
 
 재현 방법: `node experiments/ai-workflow/run-sensitivity.mjs`
 
-- [실험 조건과 후속 비교 계획](../experiments/ai-workflow/README.md)
-- [원문 근거 검사](../experiments/ai-workflow/schedule-contract.test.mjs)
-- 실행 결과와 소스 해시 (비공개 원본 이력: `../runtime/evidence/ai-workflow-20261013/summary.json`)
-- 오류 복사본의 기존 시험 로그 (비공개 원본 이력: `../runtime/evidence/ai-workflow-20261013/mutated-existing.log`), 추가 검사의 실패 로그 (비공개 원본 이력: `../runtime/evidence/ai-workflow-20261013/mutated-contract.log`)
+- [실험 조건과 후속 비교 계획](../../experiments/ai-workflow/README.md)
+- [원문 근거 검사](../../experiments/ai-workflow/schedule-contract.test.mjs)
+- 실행 결과와 소스 해시 (비공개 원본 이력: `../../runtime/evidence/ai-workflow-20261013/summary.json`)
+- 오류 복사본의 기존 시험 로그 (비공개 원본 이력: `../../runtime/evidence/ai-workflow-20261013/mutated-existing.log`), 추가 검사의 실패 로그 (비공개 원본 이력: `../../runtime/evidence/ai-workflow-20261013/mutated-contract.log`)
 
 ## 다음 비교와 채택 기준
 

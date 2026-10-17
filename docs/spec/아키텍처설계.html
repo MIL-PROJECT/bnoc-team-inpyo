@@ -147,14 +147,14 @@ button:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid var(
 <div class="wrap">
   <header class="top">
     <h1>BNOC 아키텍처 설계</h1>
-    <p><b>사용성 개선 · 설계 0.8 구현 완료</b> — 요구사항·유스케이스를 기능 명세로 구체화하고 담당 모듈에 배정했습니다. 제품 실행 검증 결과는 <a href="docs/작업기록.md#usability-design-20261017">작업 기록</a>에서 확인합니다.</p>
+    <p><b>사용성 개선 · 설계 0.8 구현 완료</b> — 요구사항·유스케이스를 기능 명세로 구체화하고 담당 모듈에 배정했습니다. 제품 실행 검증 결과는 <a href="../records/작업기록.md#usability-design-20261017">작업 기록</a>에서 확인합니다.</p>
     <p>왼쪽은 외부 연동·저장소, 가운데는 <b>백엔드 서버</b>, 오른쪽은 <b>프런트엔드</b>입니다. 화살표는 호출하는 곳에서 호출받는 곳을 가리킵니다. 모듈을 누르면 주고받는 값과 실패 조건을 확인합니다.</p>
     <p class="doc-links"><a href="요구사항.md#current-requirements">요구사항</a> · <a href="유스케이스.md#current-usecases">유스케이스</a> · <a href="시스템요구사항.md#current-spec">기능 명세</a> · <a href="아키텍처설계.md#allocation">모듈 배정</a> · <a href="개발명세서.md#api">개발 명세</a></p>
     <div class="legend" id="legend"></div>
   </header>
   <nav class="boundaries" aria-label="실행 영역"><button type="button" data-domain="frontend"><b>프런트엔드</b><span>화면·입력·API 호출</span></button><span class="crossing">HTTPS API</span><button type="button" data-domain="backend"><b>백엔드 서버</b><span>권한·업무 규칙·조회·저장</span></button><span class="crossing">서버만 연결</span><button type="button" data-domain="storage"><b>영구 저장소</b><span>DB·비공개 첨부</span></button><button type="button" data-domain="external"><b>외부 연동</b><span>실제 경계·대회용 모의 제공자</span></button></nav>
   <p class="scope-note" id="integration-note"><b>대회 연동:</b> 모의 서버가 인증·GPS·CPCON 정보를 제공하고, BNOC 서버가 세션·권한·수집·저장·조회합니다. 실제 연동 경로는 후속 전환 대상입니다. <a href="#module=DemoIdentityProvider">모의 인증</a> · <a href="#module=DemoSituationFeed">모의 상황</a> · <a href="#sr=SR-BE-035">CPCON 기능</a></p>
-  <p class="scope-note">이 웹은 설계 0.8의 기능·모듈·호출 연결을 탐색합니다. 실행 검증 결과와 실제 SSO/GPS/CPCON 연동 여부는 <a href="docs/작업기록.md#usability-design-20261017">작업 기록</a>에서 구분합니다. <a href="#review-items">기술값·후속 조건 보기</a></p>
+  <p class="scope-note">이 웹은 설계 0.8의 기능·모듈·호출 연결을 탐색합니다. 실행 검증 결과와 실제 SSO/GPS/CPCON 연동 여부는 <a href="../records/작업기록.md#usability-design-20261017">작업 기록</a>에서 구분합니다. <a href="#review-items">기술값·후속 조건 보기</a></p>
   <div class="toolbar">
     <select id="sr-select" aria-label="시스템 요구사항 선택"><option value="">기능 명세 선택…</option></select>
     <select id="module-select" aria-label="모듈 바로가기"><option value="">모듈 바로가기…</option></select>
@@ -174,7 +174,7 @@ button:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid var(
   <div id="panel"><div class="placeholder">위 지도의 상자를 클릭하면 무엇을 하는 곳인지, 무엇을 주고받는지 전체 설명이 여기 펼쳐집니다.</div></div>
 
   <details class="deploy-note" id="review-items"><summary>설계값·후속 조건 — 업무 답변과 구분</summary><p>업무 답변과 기술 설계값을 반영했습니다. 항목을 누르면 정한 조건과 실제 공군 연동 때 확인할 후속 조건을 구분해 볼 수 있습니다.</p><div id="review-list"></div></details>
-  <footer class="credit">설계 0.8 · 2026-10-17 구현 완료. 원본 복구는 Git <code>fed2b10</code>에 보존했습니다. <a href="docs/작업기록.md#usability-design-20261017">합격 기준·실행 기록</a>과 실제 공군 연동은 구분합니다.</footer>
+  <footer class="credit">설계 0.8 · 2026-10-17 구현 완료. 원본 복구는 Git <code>fed2b10</code>에 보존했습니다. <a href="../records/작업기록.md#usability-design-20261017">합격 기준·실행 기록</a>과 실제 공군 연동은 구분합니다.</footer>
 </div>
 
 <script>

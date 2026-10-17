@@ -9,7 +9,7 @@ import { chromium, firefox } from '@playwright/test';
 
 const root = new URL('../', import.meta.url);
 const sourceOption = process.argv.indexOf('--html');
-const htmlUrl = sourceOption < 0 ? new URL('아키텍처설계.html', root) : pathToFileURL(resolve(process.argv[sourceOption + 1]));
+const htmlUrl = sourceOption < 0 ? new URL('docs/spec/아키텍처설계.html', root) : pathToFileURL(resolve(process.argv[sourceOption + 1]));
 const html = await readFile(htmlUrl, 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 assert.ok(script, 'DESIGN_SCRIPT_REQUIRED');
@@ -75,9 +75,9 @@ for (const c of data.CLASSES) {
   }
   for (const sr of c.srs) assert.ok(data.SRS[sr], `UNKNOWN_REQUIREMENT:${sr}`);
 }
-const spec = await readFile(new URL('시스템요구사항.md',root),'utf8');
-const architecture = await readFile(new URL('아키텍처설계.md',root),'utf8');
-const development = await readFile(new URL('개발명세서.md',root),'utf8');
+const spec = await readFile(new URL('docs/spec/시스템요구사항.md',root),'utf8');
+const architecture = await readFile(new URL('docs/spec/아키텍처설계.md',root),'utf8');
+const development = await readFile(new URL('docs/spec/개발명세서.md',root),'utf8');
 const runtimeCombination = development.match(/^\| 실행 조합 \| (.+?)\. 직접 SQL\/JDBC/m)?.[1];
 assert.ok(runtimeCombination, 'TECH_STACK_CONTRACT_REQUIRED');
 assert.ok(data.SRS['SR-BE-034'].pending.includes(runtimeCombination), 'TECH_STACK_DRIFT:SR-BE-034');
@@ -101,7 +101,7 @@ for(const c of data.CLASSES) {
     if(m.note) assert.ok(architecture.includes(m.note),`METHOD_CONDITION_DRIFT:${c.id}:${m.sig}`);
   }
 }
-assert.match(html,/백엔드 서버/);assert.match(html,/설계 0\.8 구현 완료/);assert.doesNotMatch(html,/구현 진행 중|현재 제품은 0\.7/);assert.match(html,/docs\/작업기록\.md#usability-design-20261017/);
+assert.match(html,/백엔드 서버/);assert.match(html,/설계 0\.8 구현 완료/);assert.doesNotMatch(html,/구현 진행 중|현재 제품은 0\.7/);assert.match(html,/\.\.\/records\/작업기록\.md#usability-design-20261017/);
 assert.ok(!html.includes('id="restoration-note"'));
 const evidenceOption = process.argv.indexOf('--evidence-dir');
 const evidence = evidenceOption < 0 ? new URL('.local/external-integration-design/',root) : pathToFileURL(resolve(process.argv[evidenceOption + 1]) + '/');
@@ -166,7 +166,14 @@ for(const [name,engine] of [['chromium',chromium],['firefox',firefox]]) {
     await page.locator('#sr-select').selectOption(id);
     assert.match(await page.locator('#sr-context').innerText(),pattern);
     assert.equal(await page.locator('.node.sr-hl').count(),data.SRS[id].owners.length);
-    assert.ok(await page.locator('#sr-context a').count()>=3);
+    const links = await page.locator('#sr-context a[href]').evaluateAll(nodes => nodes.map(node => node.getAttribute('href')));
+    assert.deepEqual(links, [`시스템요구사항.md#${id.toLowerCase()}`, ...data.SRS[id].sources.map(source => source.href)], 'DESIGN_DOCUMENT_LINKS_MUST_RESOLVE_WITHIN_SPEC');
+    for (const href of links) {
+     const target = new URL(href, htmlUrl), anchor = decodeURIComponent(target.hash.slice(1));
+     target.hash = '';
+     const document = await readFile(target, 'utf8');
+     assert.ok(document.includes(`id="${anchor}"`) || document.includes(`id='${anchor}'`), `DESIGN_DOCUMENT_ANCHOR_MISSING:${href}`);
+    }
    }
    await page.locator('#sr-context [data-jump="DirectiveService"]').click();
    assert.match(await page.locator('#panel').innerText(),/BNOC 공지게시판 처리/);

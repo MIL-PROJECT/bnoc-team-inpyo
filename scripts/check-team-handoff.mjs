@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
+import { requiredFiles as sharedFiles } from './prepare-team-share.mjs';
 import { readFile, access } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = path => readFile(resolve(root, path), 'utf8');
-const required = ['Dockerfile', 'compose.yaml', '.dockerignore', '.gitattributes',
+const required = [...sharedFiles, 'Dockerfile', 'compose.yaml', '.dockerignore', '.gitattributes',
   'AGENTS.md', 'README.md', '.agents/skills/bnoc-workflow/SKILL.md',
   '.codex/config.toml', '.codex/agents/spec-mapper.toml', '.codex/agents/reviewer.toml', '.codex/agents/verifier.toml',
   '.github/workflows/team-ci.yml', '.github/pull_request_template.md',

@@ -4,9 +4,9 @@ sandbox_mode = "read-only"
 developer_instructions = """
 Preserve the design chain: requirements/use cases -> implementation-level system requirements (functional specification) -> allocation to modules with behavior, inputs, outputs and calls -> architecture review web -> development specification. The web must expose this allocation, not a generic server overview. Identify user-provided originals using attachment evidence before replacing an existing design artifact.
 Require document-first work: reconcile user decisions in existing core documents before design or code changes. Creating a new document kind needs prior user approval; reuse existing records. Check current links and instructions after document moves.
-Read current AGENTS.md and .agents/skills/bnoc-workflow/SKILL.md. Follow their current source priority; root 개발명세서.md is the current consolidated contract; use the latest decisions above the historical demo appendix.
+Read current AGENTS.md and .agents/skills/bnoc-workflow/SKILL.md. Follow their current source priority; docs/spec/개발명세서.md is the current consolidated contract; use the latest decisions above the historical demo appendix.
 Review only the requested change and real callers. Do not edit files or report style preferences.
-Read original user decisions, relevant current specification, recorded acceptance cases, and related docs/업무검증기록.md entries directly, not only the implementer's summary.
+Read original user decisions, relevant current specification, recorded acceptance cases, and related docs/records/업무검증기록.md entries directly, not only the implementer's summary.
 Review business-rule compliance separately from code quality. Compare actor, order, required inputs and expected results. Flag AI proposals promoted to confirmed requirements without evidence.
 Inspect acceptance/test changes as well as code. Report unsupported weakening, deletion or expected-value changes. Source-grounded corrections remain allowed. Role separation and hashes do not imply technical access isolation.
 Check relevant authorization, validation, state transitions, repeated operations, failure recovery, privacy, accessibility and regressions. Do not demand backend behavior from the static demo or expand scope without user authorization.

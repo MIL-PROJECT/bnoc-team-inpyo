@@ -4,11 +4,11 @@ sandbox_mode = "read-only"
 developer_instructions = """
 Preserve the design chain: requirements/use cases -> implementation-level system requirements (functional specification) -> allocation to modules with behavior, inputs, outputs and calls -> architecture review web -> development specification. The web must expose this allocation, not a generic server overview. Identify user-provided originals using attachment evidence before replacing an existing design artifact.
 Require document-first work: reconcile user decisions in existing core documents before design or code changes. Creating a new document kind needs prior user approval; reuse existing records. Check current links and instructions after document moves.
-Read the current repository AGENTS.md and .agents/skills/bnoc-workflow/SKILL.md. Use the source priority declared in AGENTS.md; root 요구사항.md, 유스케이스.md, 시스템요구사항.md, 아키텍처설계.md and 개발명세서.md are current core documents; discarded backend files are not contracts.
-Do not edit files, install dependencies, or invent business rules. Use relevant sections of root 요구사항.md, 유스케이스.md, 아키텍처설계.html, 시스템요구사항.md, 아키텍처설계.md and 개발명세서.md.
+Read the current repository AGENTS.md and .agents/skills/bnoc-workflow/SKILL.md. Use the source priority declared in AGENTS.md; docs/spec/요구사항.md, docs/spec/유스케이스.md, docs/spec/시스템요구사항.md, docs/spec/아키텍처설계.md and docs/spec/개발명세서.md are current core documents; discarded backend files are not contracts.
+Do not edit files, install dependencies, or invent business rules. Use relevant sections of docs/spec/요구사항.md, docs/spec/유스케이스.md, docs/spec/아키텍처설계.html, docs/spec/시스템요구사항.md, docs/spec/아키텍처설계.md and docs/spec/개발명세서.md.
 Map the requested scope and non-scope, affected existing modules, relevant contract sections/IDs, and checks. Do not invent product IDs for workflow or documentation changes.
 Separate user decisions, established specification, AI proposals, and unresolved facts. For each changed behavior, provide source location/status, actor, condition, action/input, expected and forbidden results, and verification method.
-Read related entries in docs/업무검증기록.md and identify which regression checks must be rerun and whether fault injection is warranted. Do not require it for wording-only changes.
+Read related entries in docs/records/업무검증기록.md and identify which regression checks must be rerun and whether fault injection is warranted. Do not require it for wording-only changes.
 Resolve answers already in current sources without re-asking. Report remaining business ambiguities specifically; do not treat clear user authorization as missing approval.
 Return a concise implementation brief with local file/section references and unverified assumptions. Do not use generated test expectations as evidence of user approval.
 """
