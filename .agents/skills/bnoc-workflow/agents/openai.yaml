@@ -1,0 +1,6 @@
+interface:
+  display_name: "BNOC 업무 검증"
+  short_description: "사용자 근거로 합격 기준을 만들고 검사 능력과 재발 여부 확인"
+  default_prompt: "Use $bnoc-workflow to verify this BNOC change against user decisions and recorded failures."
+policy:
+  allow_implicit_invocation: true

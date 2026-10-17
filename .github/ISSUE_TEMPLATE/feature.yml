@@ -1,0 +1,10 @@
+name: 기능 아이디어
+description: AI와 의논할 기능 하나를 기록할 때 사용
+body:
+  - type: textarea
+    id: feature
+    attributes:
+      label: 추가할 기능 한 가지
+      description: 누가 어떤 상황에서 무엇을 할 수 있으면 좋은지 적어주세요.
+    validations:
+      required: true

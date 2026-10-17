@@ -1,0 +1,106 @@
+import { useEffect, useRef, useState } from 'react';
+import type { Actor, AttachmentMeta, RequestDetail } from '../types';
+import { priorityLabel } from '../types';
+import type { RunCommand } from './RequestRegistrationForm';
+import { ApiClient } from '../api/apiClient.mjs';
+import { errorMessage, useResource } from '../app/useResource';
+import { useSubmission } from '../app/useSubmission';
+import { useUnsavedChanges } from '../app/useUnsavedChanges';
+import { displayTime, localInputToUtc, utcToLocalInput } from '../app/dateTime.mjs';
+import { WorkExecutionPanel } from './WorkExecutionPanel';
+import { HistoryPanel } from './HistoryPanel';
+import { ResourceStatus } from './ResourceStatus';
+import { AttachmentPicker, type UploadAttachment } from './AttachmentPicker';
+import { focusFormError, saveFailureMessage } from '../app/formFeedback.mjs';
+type DetailDraft = { detail: string; location: string; contact: string; scheduledAt: string; documentRef: string; attachments: AttachmentMeta[] };
+const editingInput = (detail: RequestDetail): DetailDraft => ({ detail: detail.detail, location: detail.location, contact: detail.contact ?? '', scheduledAt: utcToLocalInput(detail.scheduledAt), documentRef: detail.documentRef ?? '', attachments: detail.attachments });
+export function RequestDetailWorkspace({ actor, requestNumber, api, teams, run, upload, revision = 0, onBack, initialMessage = '' }: { actor: Actor; requestNumber: string; api: ApiClient; teams: string[]; run: RunCommand; upload: UploadAttachment; revision?: number; onBack: () => void; initialMessage?: string }) {
+  const result = useResource<RequestDetail>(signal => api.getRequestDetail(requestNumber, signal), [api, actor.id, requestNumber, revision]);
+  const detail = result.data;
+  const [selected, setSelected] = useState<string[]>([]), [reassignment, setReassignment] = useState<Record<string,string[]>>({}), [addingTeams,setAddingTeams]=useState<string[]>([]);
+  const [priorityDraft, setPriorityDraft] = useState<string|null>(null), [editingPriority,setEditingPriority]=useState(false), [editing, setEditing] = useState(false), [draft, setDraft] = useState<DetailDraft | null>(null), [draftRevision, setDraftRevision] = useState(0);
+  const [assignmentRevision,setAssignmentRevision] = useState<number | null>(null), [priorityRevision,setPriorityRevision] = useState<number | null>(null), [reassignmentRevisions,setReassignmentRevisions] = useState<Record<string,number>>({});
+  const [message, setMessage] = useState(initialMessage), [errors, setErrors] = useState<Record<string,string>>({}), [conflict, setConflict] = useState(false), [uploading, setUploading] = useState(false);
+  const [failed,setFailed] = useState(false), [errorAction,setErrorAction] = useState('');
+  const feedbackRef = useRef<HTMLParagraphElement>(null), formRef = useRef<HTMLElement | null>(null);
+  useEffect(() => { if (failed) focusFormError(formRef.current, feedbackRef.current); }, [errors, message, failed]);
+  const { saving, submit } = useSubmission(run);
+  const dirty = (editing && !!draft && !!detail && JSON.stringify(draft) !== JSON.stringify(editingInput(detail))) || selected.length > 0 || addingTeams.length>0 || Object.values(reassignment).some(items => items.length > 0) || (!!priorityDraft && priorityDraft!==detail?.priority);
+  useUnsavedChanges(dirty);
+  const clearFeedback = () => { setErrors({}); setMessage(''); setFailed(false); };
+  const changeDraft = (next: DetailDraft) => { setDraft(next); clearFeedback(); };
+  const act = async (type: string, payload: Record<string,unknown>, workNumber?: string, expectedRevision = detail?.revision, form?: HTMLElement) => {
+    if (!detail) return;
+    formRef.current = form ?? null; setErrorAction(type + (workNumber ? ':' + workNumber : '')); setMessage(''); setFailed(false);
+    const response = await submit(type, payload, { requestNumber: detail.requestNumber, ...(workNumber ? { workNumber } : {}) }, expectedRevision);
+    if (!response) return;
+    if (response.ok) {
+      const successes: Record<string,string> = {
+        updateRequest:`요청 ${detail.requestNumber} 내용을 저장했습니다.`,
+        cancelRequest:`요청 ${detail.requestNumber}을 취소했습니다.`,
+        moveToDocumentWaiting:`요청 ${detail.requestNumber}을 문서 대기로 변경했습니다.`,
+        assignTeams:`요청 ${detail.requestNumber}을 ${(payload.teamIds as string[] | undefined)?.join(', ')}에 배정했습니다.`,
+        changePriority:`요청 ${detail.requestNumber}의 일반·긴급을 ${priorityLabel(payload.priority as string)}으로 저장했습니다.`,
+        reassignAssignedWork:`작업 ${workNumber}의 배정을 ${(payload.teamIds as string[] | undefined)?.join(', ')}으로 변경했습니다.`,
+        reassignReturnedWork:`작업 ${workNumber}을 ${(payload.teamIds as string[] | undefined)?.join(', ')}에 재배정했습니다.`,
+        addTeams:`요청 ${detail.requestNumber}에 ${(payload.teamIds as string[] | undefined)?.join(', ')}을 추가 배정했습니다.`,
+        withdrawReturnedWork:`작업 ${workNumber}의 부서 배정을 해제했습니다.`
+      };
+      const success = successes[type] ?? `요청 ${detail.requestNumber}의 변경을 저장했습니다.`;
+      setSelected([]);setAddingTeams([]); setReassignment({}); setPriorityDraft(null);setEditingPriority(false); setAssignmentRevision(null);setPriorityRevision(null);setReassignmentRevisions({});setEditing(false); setDraft(null); setConflict(false); setErrors({}); setMessage(success); result.reload();
+    }
+    else { setConflict(response.errorCode === 'CONFLICT'); setErrors(response.fieldErrors ?? {}); setMessage(saveFailureMessage(response)); setFailed(true); }
+  };
+  const beginEdit = () => { if (!detail) return; setEditing(true); setDraft(editingInput(detail)); setDraftRevision(detail.revision); clearFeedback(); };
+  const reloadLatest = async () => { try { const latest = await api.getRequestDetail(requestNumber) as RequestDetail; if (editing) { setDraft(editingInput(latest)); setDraftRevision(latest.revision); } setSelected([]);setAddingTeams([]); setReassignment({}); setPriorityDraft(null);setEditingPriority(false);setAssignmentRevision(null);setPriorityRevision(null);setReassignmentRevisions({});setConflict(false); setErrors({}); setFailed(false); setMessage('최신 내용을 불러왔습니다. 다시 선택하세요.'); result.reload(); } catch (error) { setMessage(errorMessage(error instanceof Error ? error : new Error('최신 내용을 조회하지 못했습니다. 입력은 유지됩니다.'))); setFailed(true); } };
+  const toggle = (values: string[], team: string) => values.includes(team) ? values.filter(item => item !== team) : [...values, team];
+  const editErrors: Record<string,string> = errorAction === 'updateRequest' ? errors : {};
+  const priorityErrors: Record<string,string> = errorAction === 'changePriority' ? errors : {};
+  const assignmentErrors: Record<string,string> = errorAction === 'assignTeams' ? errors : {};
+  const editField = (key: keyof Omit<DetailDraft,'attachments'>) => {
+    if (!draft) return null;
+    const label = { detail:'내용',location:'위치',contact:'연락처',scheduledAt:'희망 일정',documentRef:'문서 참조정보' }[key];
+    const optional = key === 'scheduledAt' || key === 'documentRef';
+    const errorId = `request-edit-${key}-error`,hint=key==='documentRef'?'예: 관련 공문 제목이나 문서번호. 없으면 비워도 됩니다.':undefined;
+    return <label className="field" key={key}><span>{label}<small className="field-hint" aria-hidden="true">{optional ? '선택' : '필수'}</small></span>{key === 'detail' ? <textarea rows={4} maxLength={10000} value={draft[key]} aria-label={label} aria-required="true" aria-invalid={!!editErrors[key]} aria-describedby={editErrors[key] ? errorId : undefined} onChange={e => changeDraft({ ...draft, [key]:e.target.value })} /> : <input type={key === 'scheduledAt' ? 'datetime-local' : 'text'} value={draft[key]} aria-label={label} aria-required={!optional} aria-invalid={!!editErrors[key]} aria-describedby={[editErrors[key]?errorId:undefined,hint?`${errorId}-hint`:undefined].filter(Boolean).join(' ') || undefined} onChange={e => changeDraft({ ...draft, [key]:e.target.value })} />}{hint && <small id={`${errorId}-hint`} className="field-hint">{hint}</small>}{editErrors[key] && <small id={errorId} className="field-error">{editErrors[key]}</small>}</label>;
+  };
+  return <><button className="back" onClick={onBack}>신청 목록</button><ResourceStatus loading={result.loading} error={result.error} retry={result.reload} />
+    {detail && <><div className="page-head"><div><small>요청 번호 {detail.requestNumber} · 등록 {displayTime(detail.registeredAt)}</small><h1>신청 상세</h1></div><span className={`badge status-${detail.status.replace(' ','-')}`}>{detail.status}</span></div>
+    {message && <p ref={feedbackRef} tabIndex={-1} role={failed ? 'alert' : 'status'} className={failed ? 'error' : 'notice'}>{message}</p>}
+    {dirty && !message && <p className="draft-status" role="status">요청 {detail.requestNumber}에 저장하지 않은 변경이 있습니다.</p>}
+    {conflict && <div className="notice" role="alert"><p>다른 변경이 반영됐습니다. 입력은 유지됩니다. 최신 내용을 불러오면 현재 입력을 교체합니다.</p><button onClick={() => void reloadLatest()}>최신 내용 다시 불러오기</button></div>}
+    <div className="detail-grid" onChangeCapture={clearFeedback}><section className="card"><h2>신청 내용</h2><dl>
+      <dt>요청자</dt><dd>{detail.requesterDisplayText}</dd><dt>유형</dt><dd>{detail.category}</dd><dt>일반·긴급</dt><dd>{priorityLabel(detail.priority)}</dd>
+      <dt>위치</dt><dd>{detail.location}</dd>{typeof detail.contact === 'string' && <><dt>연락처</dt><dd>{detail.contact || '없음'}</dd></>}
+      <dt>희망 일정</dt><dd>{displayTime(detail.scheduledAt)}</dd><dt>문서</dt><dd>{detail.documentRef || '없음'}</dd>
+      {detail.assignedAt && <><dt>배정 시각</dt><dd>{displayTime(detail.assignedAt)}<small>접수 시간</small></dd></>}
+    </dl><p className="pre">{detail.detail}</p><p>{Object.values(detail.subcategories ?? {}).filter(Boolean).map(value => value === 'PC' ? '컴퓨터' : value === '전화' ? '전화기' : value).join(' · ')}</p>
+    {detail.equipmentId && <p>장비 식별정보: {detail.equipmentId}</p>}{detail.maintenanceTarget && <p>정비대상자: {Object.values(detail.maintenanceTarget).filter(Boolean).join(' · ')}</p>}
+    {detail.attachments.length ? <div><h3>첨부문서</h3>{detail.attachments.map(file => <p key={file.id}><a href={api.attachmentUrl(file.id)} download>{file.fileName}</a> · {Math.ceil(file.size/1024)} KB</p>)}</div> : <p className="muted">첨부 없음</p>}
+    {detail.canEdit && <><button onClick={() => { if (editing && draft && JSON.stringify(draft) !== JSON.stringify(editingInput(detail)) && !window.confirm('저장하지 않은 수정이 있습니다. 입력을 버리고 닫을까요?')) return; if (editing) { setEditing(false); clearFeedback(); } else beginEdit(); }}>{editing ? '수정 닫기' : '내용 수정'}</button>{editing && draft && <form className="section-gap" onSubmit={event => { event.preventDefault(); if (uploading) return; void act('updateRequest', { ...draft, scheduledAt: localInputToUtc(draft.scheduledAt) ?? '' }, undefined, draftRevision, event.currentTarget); }}><fieldset disabled={saving}>
+      {(['detail','location','contact'] as const).map(editField)}
+      <details className="optional-fields"><summary>선택 정보</summary><div className="form-grid">{editField('scheduledAt')}{editField('documentRef')}</div></details>
+      <div aria-invalid={!!editErrors.attachments} tabIndex={editErrors.attachments ? -1 : undefined} aria-describedby={editErrors.attachments ? 'request-edit-attachments-error' : undefined}><AttachmentPicker files={draft.attachments} onChange={attachments => changeDraft({ ...draft, attachments })} upload={upload} onBusyChange={setUploading} label="첨부파일 수정" />{editErrors.attachments && <p id="request-edit-attachments-error" className="field-error">{editErrors.attachments}</p>}</div>
+      <button className="primary" type="submit" disabled={uploading || saving || conflict}>{saving ? '저장 중…' : '수정 저장'}</button></fieldset></form>}</>}
+    {detail.canCancel && <button className="section-gap" disabled={saving} onClick={() => { if (window.confirm('이 신청을 취소할까요? 취소한 신청은 다시 시작할 수 없습니다.')) void act('cancelRequest', {}); }}>신청 취소</button>}
+    </section><section><h2>작업반별 진행</h2>
+      {detail.progress?.currentDepartments ? <p className="progress-summary">{detail.progress.completedDepartments}/{detail.progress.currentDepartments}개 부서 완료 · {detail.progress.totalWorks-detail.progress.completedWorks}개 작업 남음</p> : null}
+      {detail.workItems.length ? detail.workItems.map(work => actor.role === 'team' && actor.teamId === work.teamId
+        ? <WorkExecutionPanel key={work.workNumber} requestNumber={detail.requestNumber} work={work} requestStatus={detail.status} api={api} run={run} onRefresh={result.reload} />
+        : <article className="work-card" key={work.workNumber}><div className="row-head"><h3>{work.teamId} · 작업 {work.workNumber}</h3><span className={`badge status-${work.status.replace(' ','-')}`}>{work.status}</span></div><p>작업 일정: {displayTime(work.schedule)}</p>{work.assignedAt && <small>배정 시각(접수 시간): {displayTime(work.assignedAt)}</small>}{work.resolved && <p className="muted">{work.resolutionKind==='withdrawn'?'반환된 부서 배정 해제 · 해당 부서 작업 불필요':'재배정된 과거 작업'+(work.replacementWorkNumbers?.length?` · 새 작업 ${work.replacementWorkNumbers.join(', ')}`:'')}</p>}{work.previousSchedule && work.status==='반환' && <p className="muted">반환 전 일정: {displayTime(work.previousSchedule)}</p>}{work.assignedPersons?.length && actor.role === 'bnoc' ? <p>담당 인원: {work.assignedPersons.map(person => person.displayName).join(', ')}</p> : null}{actor.role === 'bnoc' && work.returnReason && <p>반환 사유: {work.returnReason}</p>}{work.completion && <p>완료: {displayTime(work.completion.completedAt)}{actor.role === 'bnoc' ? ' · ' + work.completion.completedBy : ''}</p>}</article>) : <p className="empty">배정된 작업이 없습니다.</p>}
+    {actor.role === 'bnoc' && detail.status !== '취소' && <>
+      {detail.workItems.length > 0 && <section className="card section-gap"><h3>일반·긴급 분류</h3><p>현재 분류: <strong>{priorityLabel(detail.priority)}</strong></p>{!editingPriority ? <button onClick={()=>{setPriorityDraft(detail.priority==='urgent'?'urgent':'general');setPriorityRevision(detail.revision);setEditingPriority(true);clearFeedback();}}>분류 변경</button> : <form onSubmit={e => {e.preventDefault();void act('changePriority',{priority:priorityDraft},undefined,priorityRevision ?? detail.revision,e.currentTarget);}}><p className="muted">작업 상태와 일정은 유지됩니다.</p><label className="field"><span>일반·긴급</span><select value={priorityDraft ?? detail.priority ?? 'general'} disabled={saving} aria-label="일반·긴급" aria-invalid={!!priorityErrors.priority} aria-describedby={priorityErrors.priority ? 'classification-priority-error' : undefined} onChange={e=>{setPriorityRevision(value=>value ?? detail.revision);setPriorityDraft(e.target.value);clearFeedback();}}><option value="general">일반</option><option value="urgent">긴급</option></select>{priorityErrors.priority && <small id="classification-priority-error" className="field-error">{priorityErrors.priority}</small>}</label><div className="actions"><button type="submit" className="primary" disabled={saving || conflict || priorityDraft===detail.priority}>분류 저장</button><button type="button" onClick={()=>{setEditingPriority(false);setPriorityDraft(null);clearFeedback();}}>취소</button></div></form>}</section>}
+      {detail.status === '대기' && !detail.workItems.length && <button disabled={saving} onClick={() => void act('moveToDocumentWaiting', {})}>문서 대기</button>}
+      {detail.canAssign && <form className="card section-gap" onSubmit={e => { e.preventDefault(); void act('assignTeams', { teamIds:selected, priority:priorityDraft ?? detail.priority ?? 'general' },undefined,assignmentRevision ?? detail.revision,e.currentTarget); }}><h3>작업반 배정</h3><fieldset disabled={saving}><label className="field"><span>일반·긴급</span><select value={priorityDraft ?? 'general'} aria-label="일반·긴급" aria-invalid={!!assignmentErrors.priority} aria-describedby={assignmentErrors.priority ? 'assignment-priority-error' : undefined} onChange={e=>{setAssignmentRevision(value=>value ?? detail.revision);setPriorityDraft(e.target.value);clearFeedback();}}><option value="general">일반</option><option value="urgent">긴급</option></select>{assignmentErrors.priority && <small id="assignment-priority-error" className="field-error">{assignmentErrors.priority}</small>}</label>{teams.map(team => <label className="check" key={team}><input type="checkbox" checked={selected.includes(team)} aria-invalid={!!assignmentErrors.teamIds} aria-describedby={assignmentErrors.teamIds ? 'assignment-teams-error' : undefined} onChange={() => { setAssignmentRevision(value => value ?? detail.revision);setSelected(toggle(selected, team));clearFeedback(); }} />{team}</label>)}{assignmentErrors.teamIds && <p id="assignment-teams-error" className="field-error">{assignmentErrors.teamIds}</p>}<button className="primary" type="submit" disabled={saving || conflict}>선택 작업반 배정</button></fieldset></form>}
+      {detail.canAddTeams && <form className="card section-gap" onSubmit={e=>{e.preventDefault();void act('addTeams',{teamIds:addingTeams},undefined,assignmentRevision ?? detail.revision,e.currentTarget);}}><h3>작업 부서 추가</h3><p className="muted">기존 분류는 유지하고 새 작업 일정은 미정으로 등록합니다.</p><fieldset disabled={saving}>{teams.filter(team=>!detail.teamIds.includes(team)).map(team=><label className="check" key={team}><input type="checkbox" checked={addingTeams.includes(team)} onChange={()=>{setAssignmentRevision(value=>value ?? detail.revision);setAddingTeams(toggle(addingTeams,team));clearFeedback();}}/>{team}</label>)}<button className="primary" type="submit" disabled={saving || conflict || addingTeams.length===0}>선택 부서 추가</button></fieldset></form>}
+      {detail.workItems.filter(work => (work.status === '반환' || (work.status === '배정' && work.origin !== 'after-action')) && !work.resolved).map(work => {
+        const direct = work.status === '배정';
+        const command = direct ? 'reassignAssignedWork' : 'reassignReturnedWork';
+        const reassignmentErrors: Record<string,string> = errorAction === command + ':' + work.workNumber ? errors : {};
+        const candidates=teams.filter(team=>team!==work.teamId && !detail.teamIds.includes(team));
+        return <form className="card section-gap" key={work.workNumber} onSubmit={e => { e.preventDefault(); void act(command, { teamIds: reassignment[work.workNumber] ?? [] }, work.workNumber, reassignmentRevisions[work.workNumber] ?? work.revision,e.currentTarget); }}><h3>{work.teamId} {direct ? '배정 변경' : '반환 작업'}</h3>{direct ? <p className="muted">반환 없이 다른 부서로 변경합니다. 기존 기록은 보존하고 새 작업 일정은 미정으로 등록합니다. 작업 중·완료 상태에서는 변경할 수 없습니다.</p> : <p>{work.returnReason}</p>}{work.previousSchedule && <p className="muted">기존 일정은 보존됐습니다: {displayTime(work.previousSchedule)}</p>}<small>일반·긴급 분류 유지</small><fieldset disabled={saving}>{candidates.map(team => <label className="check" key={team}><input type="checkbox" checked={(reassignment[work.workNumber] ?? []).includes(team)} aria-invalid={!!reassignmentErrors.teamIds} aria-describedby={reassignmentErrors.teamIds ? `reassign-${work.workNumber}-teams-error` : undefined} onChange={() => { setReassignmentRevisions(values => ({ ...values,[work.workNumber]:values[work.workNumber] ?? work.revision }));setReassignment({ ...reassignment, [work.workNumber]: toggle(reassignment[work.workNumber] ?? [], team) });clearFeedback(); }} />{team}</label>)}{reassignmentErrors.teamIds && <p id={`reassign-${work.workNumber}-teams-error`} className="field-error">{reassignmentErrors.teamIds}</p>}<div className="actions">{candidates.length>0 && <button className="primary" type="submit" disabled={saving || conflict || !(reassignment[work.workNumber]?.length)}>{direct ? '배정 변경 저장' : '재배정'}</button>}{!direct && <button type="button" disabled={saving || conflict} onClick={()=>{if(window.confirm(`${work.teamId}의 반환 배정을 해제할까요?`))void act('withdrawReturnedWork',{},work.workNumber,work.revision);}}>이 부서 배정 해제</button>}</div></fieldset></form>;
+      })}
+    </>}
+    </section></div><HistoryPanel actor={actor} requestId={detail.requestNumber} query={api} revision={detail.revision} /></>}
+  </>;
+}

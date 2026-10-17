@@ -1,0 +1,57 @@
+services:
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: bnoc_team
+      MYSQL_USER: bnoc_team
+      MYSQL_PASSWORD_FILE: /run/secrets/db_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
+    secrets: [db_password, db_root_password]
+    volumes:
+      - database:/var/lib/mysql
+    healthcheck:
+      test: [CMD-SHELL, 'mysqladmin ping -h 127.0.0.1 --silent']
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    restart: unless-stopped
+  app:
+    build:
+      context: .
+      target: ${BNOC_TEAM_TARGET:-runtime}
+    environment:
+      BNOC_PUBLIC_URL: ${BNOC_TEAM_PUBLIC_URL:-http://127.0.0.1:18081}
+      BNOC_MOCK_ALLOWED_ORIGINS: ${BNOC_TEAM_PUBLIC_URL:-http://127.0.0.1:18081}
+      BNOC_DB_URL: jdbc:mysql://db:3306/bnoc_team?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul
+      BNOC_DB_USER: bnoc_team
+      BNOC_GPS_POLL_MS: ${BNOC_TEAM_POLL_MS:-30000}
+      BNOC_CPCON_POLL_MS: ${BNOC_TEAM_POLL_MS:-30000}
+      BNOC_GPS_TIMEOUT_MS: ${BNOC_TEAM_TIMEOUT_MS:-5000}
+      BNOC_CPCON_TIMEOUT_MS: ${BNOC_TEAM_TIMEOUT_MS:-5000}
+    ports:
+      - '127.0.0.1:${BNOC_TEAM_PORT:-18081}:8083'
+    secrets: [db_password, mock_secret]
+    volumes:
+      - attachments:/data/attachments
+      - ${BNOC_TEAM_EVIDENCE_DIR:-./runtime/evidence/team-collaboration-20261017}:/evidence
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, docker/health.mjs]
+      interval: 3s
+      timeout: 4s
+      retries: 60
+      start_period: 15s
+    stop_grace_period: 25s
+    restart: unless-stopped
+secrets:
+  db_password:
+    file: ${BNOC_TEAM_SECRET_DIR:-./.local/team/dev}/db-password
+  db_root_password:
+    file: ${BNOC_TEAM_SECRET_DIR:-./.local/team/dev}/db-root-password
+  mock_secret:
+    file: ${BNOC_TEAM_SECRET_DIR:-./.local/team/dev}/mock-secret
+volumes:
+  database:
+  attachments:
