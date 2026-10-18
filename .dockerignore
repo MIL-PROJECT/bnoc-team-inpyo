@@ -33,3 +33,6 @@ e2e/**
 !design/
 design/**
 !design/tokens.css
+!docker/development.mjs
+!docker/development-backend.mjs
+!docker/development.gradle

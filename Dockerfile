@@ -34,3 +34,15 @@ RUN npm ci && npx playwright install --with-deps chromium firefox && rm -rf /var
 COPY e2e ./e2e
 COPY --from=backend-build /build/backend/build/test-results/test ./backend-unit-results
 COPY docker/verify.mjs docker/persistence.mjs ./docker/
+
+FROM node:22-bookworm-slim AS development
+RUN apt-get update && apt-get install -y --no-install-recommends openjdk-17-jdk-headless && rm -rf /var/lib/apt/lists/* && npm install --global pnpm@12.3.4
+COPY --from=gradle:9.3.0-jdk17 /opt/gradle /opt/gradle
+ENV PATH="/opt/gradle/bin:${PATH}" TZ=Asia/Seoul BNOC_PORT=8084 BNOC_BIND=127.0.0.1 BNOC_PROVIDER_URL=http://127.0.0.1:8082 BNOC_FILE_ROOT=/data/attachments
+WORKDIR /workspace
+COPY docker/development.mjs docker/development-backend.mjs docker/development.gradle docker/supervisor.mjs docker/health.mjs /opt/bnoc/docker/
+ARG BNOC_DEV_FINGERPRINT
+ARG BNOC_DEV_DEPENDENCIES
+ENV BNOC_DEV_DEPENDENCIES=${BNOC_DEV_DEPENDENCIES}
+LABEL bnoc.development.fingerprint=${BNOC_DEV_FINGERPRINT}
+ENTRYPOINT ["node", "/opt/bnoc/docker/development.mjs"]

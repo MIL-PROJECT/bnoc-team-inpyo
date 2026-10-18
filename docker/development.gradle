@@ -1,0 +1,11 @@
+allprojects {
+    layout.buildDirectory.set(file('/workspace/backend/build'))
+    afterEvaluate {
+        tasks.register('bnocDevClasspath') {
+            dependsOn 'classes'
+            doLast {
+                file("${layout.buildDirectory.get()}/bnoc-dev-classpath").text = sourceSets.main.runtimeClasspath.asPath
+            }
+        }
+    }
+}

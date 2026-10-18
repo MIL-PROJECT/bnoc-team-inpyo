@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const rootFiles = new Set([
-  '.gitignore', '.dockerignore', '.gitattributes', 'Dockerfile', 'compose.yaml', 'design/tokens.css',
+  '.gitignore', '.dockerignore', '.gitattributes', 'Dockerfile', 'compose.yaml', 'compose.dev.yaml', 'design/tokens.css',
   'AGENTS.md', 'README.md', 'package.json', 'package-lock.json', 'playwright.config.ts',
 ]);
 const documents = new Set([
@@ -20,11 +20,12 @@ const excludedParts = new Set(['node_modules', '.git', '.gradle', 'build', 'dist
   'coverage', 'playwright-report', 'test-results', '.local', 'runtime']);
 export const requiredFiles = [
   'README.md', 'AGENTS.md', 'package.json', 'package-lock.json', 'Dockerfile',
-  'compose.yaml', '.dockerignore', 'design/tokens.css', 'backend/build.gradle.kts',
+  'compose.yaml', 'compose.dev.yaml', '.dockerignore', 'design/tokens.css', 'backend/build.gradle.kts',
   'backend/src/main/resources/application.properties', 'frontend/package.json',
   'frontend/pnpm-lock.yaml', 'mock-provider/server.mjs',
   '.agents/skills/bnoc-workflow/SKILL.md', '.codex/config.toml',
   '.github/workflows/team-ci.yml', 'scripts/check-team-handoff.mjs',
+  'docker/development.mjs', 'docker/development-backend.mjs', 'docker/development.gradle', 'docker/vite.dev.config.mjs', 'docker/development.test.mjs',
   ...documents,
 ];
 

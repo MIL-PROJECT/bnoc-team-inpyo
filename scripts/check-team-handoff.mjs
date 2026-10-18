@@ -12,7 +12,7 @@ const required = [...sharedFiles, 'Dockerfile', 'compose.yaml', '.dockerignore',
   'design/tokens.css', 'scripts/bnoc-team.mjs', 'docker/supervisor.mjs'];
 for (const path of required) await access(resolve(root, path));
 const commands = JSON.parse(await read('package.json')).scripts;
-for (const action of ['doctor','up','verify','status','down']) assert.equal(commands[`team:${action}`], `node scripts/bnoc-team.mjs ${action}`);
+for (const action of ['doctor','setup','up','verify','status','down']) assert.equal(commands[`team:${action}`], `node scripts/bnoc-team.mjs ${action}`);
 const compose = await read('compose.yaml');
 assert.match(compose, /127\.0\.0\.1:\$\{BNOC_TEAM_PORT/);
 assert.match(compose, /condition: service_healthy/);

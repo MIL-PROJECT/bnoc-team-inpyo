@@ -1,0 +1,45 @@
+services:
+  app:
+    build:
+      target: development
+      args:
+        BNOC_DEV_FINGERPRINT: ${BNOC_DEV_FINGERPRINT:-}
+        BNOC_DEV_DEPENDENCIES: ${BNOC_DEV_DEPENDENCIES:-}
+    environment:
+      BNOC_PORT: 8084
+      BNOC_BIND: 127.0.0.1
+    restart: 'no'
+    healthcheck:
+      test: [CMD, node, /opt/bnoc/docker/health.mjs]
+      start_period: 10m
+    tmpfs:
+      - /workspace/frontend/dist
+      - /workspace/backend/.gradle
+    volumes:
+      - type: bind
+        source: ./frontend
+        target: /workspace/frontend
+        read_only: true
+      - type: bind
+        source: ./design
+        target: /workspace/design
+        read_only: true
+      - type: bind
+        source: ./backend
+        target: /workspace/backend
+        read_only: true
+      - type: bind
+        source: ./mock-provider
+        target: /workspace/mock-provider
+        read_only: true
+      - type: bind
+        source: ./docker
+        target: /opt/bnoc/docker
+        read_only: true
+      - development_modules:/workspace/frontend/node_modules
+      - development_build:/workspace/backend/build
+      - development_cache:/cache
+volumes:
+  development_modules:
+  development_build:
+  development_cache:

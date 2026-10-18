@@ -3,11 +3,12 @@ import { randomBytes, createHash } from 'node:crypto';
 import { access, mkdir, writeFile, chmod, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fingerprint, toolchainFiles, validateMounts } from '../docker/development.mjs';
 
 export const root = resolve(fileURLToPath(new URL('../', import.meta.url)));
-const actions = new Set(['doctor', 'up', 'verify', 'status', 'down']);
+const actions = new Set(['doctor', 'setup', 'up', 'verify', 'status', 'down']);
 export function configuration(action, directory = root, environment = process.env) {
-  if (!actions.has(action)) throw new Error('Use doctor, up, verify, status or down.');
+  if (!actions.has(action)) throw new Error('Use doctor, setup, up, verify, status or down.');
   const mode = action === 'verify' ? 'verify' : 'dev';
   const prefix = environment.BNOC_TEAM_PROJECT ?? `bnoc-${createHash('sha256').update(directory).digest('hex').slice(0, 10)}`;
   if (!/^[a-z][a-z0-9-]{0,39}$/.test(prefix)) throw new Error('BNOC_TEAM_PROJECT must use lowercase letters, numbers or hyphens (maximum 40 characters).');
@@ -16,13 +17,13 @@ export function configuration(action, directory = root, environment = process.en
   const secretDirectory = join(directory, '.local', 'team', mode);
   const evidenceDirectory = join(directory, 'runtime', 'evidence', 'team-collaboration-20261017', mode);
   return { mode, project: `${prefix}-${mode}`, secretDirectory, evidenceDirectory,
-    env: { ...environment, BNOC_TEAM_PORT: String(port), BNOC_TEAM_TARGET: mode === 'verify' ? 'verification' : 'runtime',
+    env: { ...environment, BNOC_TEAM_PORT: String(port), BNOC_TEAM_TARGET: mode === 'verify' ? 'verification' : 'development',
       BNOC_TEAM_SECRET_DIR: secretDirectory, BNOC_TEAM_EVIDENCE_DIR: evidenceDirectory,
       BNOC_TEAM_PUBLIC_URL: `http://127.0.0.1:${mode === 'verify' ? 8083 : port}`,
       BNOC_TEAM_POLL_MS: mode === 'verify' ? '1000' : '30000', BNOC_TEAM_TIMEOUT_MS: mode === 'verify' ? '1000' : '5000' } };
 }
 export function composeArguments(config, args) {
-  return ['compose', '--project-name', config.project, '--file', join(root, 'compose.yaml'), ...args];
+  return ['compose', '--project-name', config.project, '--file', join(root, 'compose.yaml'), ...(config.mode === 'dev' ? ['--file', join(root, 'compose.dev.yaml')] : []), ...args];
 }
 function execute(binary, args, env = process.env, capture = false) {
   const result = spawnSync(binary, args, { cwd: root, env, stdio: capture ? 'pipe' : 'inherit', encoding: 'utf8' });
@@ -64,9 +65,19 @@ export async function main(argv = process.argv.slice(2)) {
     config.env.BNOC_TEAM_EVIDENCE_DIR = config.evidenceDirectory;
   }
   await prepare(config);
-  if (action === 'up') {
-    compose(['up', '--build', '--detach', '--wait', '--wait-timeout', '180']);
-    console.log(`BNOC ready: ${config.env.BNOC_TEAM_PUBLIC_URL}`);
+  if (action === 'up' || action === 'setup') {
+    await validateMounts(root);
+    for (const path of ['frontend/node_modules', 'frontend/dist', 'backend/build', 'backend/.gradle']) await mkdir(join(root, path), { recursive: true });
+    config.env.BNOC_DEV_FINGERPRINT = await fingerprint(root, toolchainFiles);
+    config.env.BNOC_DEV_DEPENDENCIES = await fingerprint(root);
+    const image = spawnSync('docker', ['image', 'inspect', `${config.project}-app`, '--format', '{{ index .Config.Labels "bnoc.development.fingerprint" }}'], { env: config.env, encoding: 'utf8' });
+    const prepareImage = action === 'setup' || image.status !== 0 || image.stdout.trim() !== config.env.BNOC_DEV_FINGERPRINT;
+    if (prepareImage) {
+      console.log('Preparing development tools. Ordinary source edits do not rebuild this image.');
+      execute('docker', ['build', '--target', 'development', '--tag', `${config.project}-app`, '--build-arg', `BNOC_DEV_FINGERPRINT=${config.env.BNOC_DEV_FINGERPRINT}`, '--build-arg', `BNOC_DEV_DEPENDENCIES=${config.env.BNOC_DEV_DEPENDENCIES}`, root], config.env);
+    }
+    compose(['up', '--no-build', '--detach', '--wait', '--wait-timeout', '600']);
+    console.log(`BNOC ready: ${config.env.BNOC_TEAM_PUBLIC_URL}. Source edits apply automatically.`);
     return;
   }
   const lock = join(config.secretDirectory, 'verification.lock');
@@ -78,7 +89,8 @@ export async function main(argv = process.argv.slice(2)) {
   const saveRecord = () => writeFile(join(config.evidenceDirectory, 'run.json'), JSON.stringify(record, null, 2) + '\n');
   try {
     await saveRecord();
-    compose(['up', '--build', '--detach', '--wait', '--wait-timeout', '180']);
+    execute('docker', ['build', '--target', 'verification', '--tag', `${config.project}-app`, root], config.env);
+    compose(['up', '--no-build', '--detach', '--wait', '--wait-timeout', '180']);
     compose(['exec', '-T', 'app', 'node', 'docker/verify.mjs']);
     compose(['exec', '-T', 'app', 'node', 'docker/persistence.mjs', 'seed']);
     compose(['stop', 'app']);

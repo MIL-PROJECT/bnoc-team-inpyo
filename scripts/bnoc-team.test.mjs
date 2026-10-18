@@ -15,7 +15,7 @@ test('development and verification cannot share volumes, secret paths or origin 
   assert.equal(verify.env.BNOC_TEAM_PUBLIC_URL, 'http://127.0.0.1:8083');
   assert.equal(verify.env.BNOC_TEAM_PORT, '18083');
   assert.equal(verify.env.BNOC_TEAM_TARGET, 'verification');
-  assert.equal(dev.env.BNOC_TEAM_TARGET, 'runtime');
+  assert.equal(dev.env.BNOC_TEAM_TARGET, 'development');
   assert.notEqual(configuration('up', '/tmp/other-checkout', {}).project, dev.project);
 });
 test('unsafe values and extra command names are rejected before Docker', () => {

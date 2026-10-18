@@ -27,9 +27,10 @@
     "team:verify": "node scripts/bnoc-team.mjs verify",
     "team:status": "node scripts/bnoc-team.mjs status",
     "team:down": "node scripts/bnoc-team.mjs down",
-    "team:test": "node --test scripts/bnoc-team.test.mjs",
+    "team:test": "node --test scripts/bnoc-team.test.mjs docker/development.test.mjs",
     "team:check": "node scripts/check-team-handoff.mjs",
-    "team:share": "node scripts/prepare-team-share.mjs"
+    "team:share": "node scripts/prepare-team-share.mjs",
+    "team:setup": "node scripts/bnoc-team.mjs setup"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0"
