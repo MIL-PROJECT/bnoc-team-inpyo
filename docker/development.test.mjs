@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { spawn } from 'node:child_process';
 import { dependencyFiles, fingerprint, validateMounts, isServerPath } from './development.mjs';
 import { sourceFingerprint, watchSources, stopChild } from './development-backend.mjs';
@@ -38,7 +38,7 @@ test('development mounts reject nested credentials and symbolic links', async t 
   await writeFile(join(root, 'frontend/src/private.pem'), 'placeholder');
   await assert.rejects(validateMounts(root), /Private local input/);
   await rm(join(root, 'frontend/src/private.pem'));
-  await symlink(join(root, 'frontend/package.json'), join(root, 'frontend/src/linked.json'));
+  await symlink(join(root, 'backend/src'), join(root, 'frontend/src/linked'), 'junction');
   await assert.rejects(validateMounts(root), /symbolic links/);
 });
 test('same-origin server proxy includes encoded provider aliases without exposing source routes', () => {
@@ -64,6 +64,6 @@ test('managed JVM can be terminated before replacement without leaving the old p
 test('editing environment overrides apply to development only', () => {
   const dev = configuration('up', '/tmp/check-out', {}), verify = configuration('verify', '/tmp/check-out', {});
   assert.equal(dev.env.BNOC_TEAM_TARGET, 'development');
-  assert.ok(composeArguments(dev, ['up']).some(path => path.endsWith('/compose.dev.yaml')));
-  assert.ok(!composeArguments(verify, ['up']).some(path => path.endsWith('/compose.dev.yaml')));
+  assert.ok(composeArguments(dev, ['up']).some(path => basename(path) === 'compose.dev.yaml'));
+  assert.ok(!composeArguments(verify, ['up']).some(path => basename(path) === 'compose.dev.yaml'));
 });
