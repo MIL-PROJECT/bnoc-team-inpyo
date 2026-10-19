@@ -27,7 +27,7 @@ runtime/           로컬 실행 자료·검증 증거
 
 이 프로젝트를 받은 에이전트는 `AGENTS.md`와 `.agents/skills/bnoc-workflow/SKILL.md`, 최신 `docs/records/개발진행.md`를 먼저 읽는다. 개인 PC의 대화 이력·스킬 설치를 전제하지 않는다. 팀 기본 작업은 Docker 경로를 사용하며 아래 기존 macOS 명령은 원 개발환경 유지용이다.
 
-1. Git에서 받은 작업 폴더의 브랜치·커밋·기존 변경을 확인한다. 이미 변경이 있으면 보존한다. 기능별 `codex/<기능>` 브랜치를 사용한다.
+1. Git에서 받은 작업 폴더의 브랜치·커밋·기존 변경을 확인한다. 이미 변경이 있으면 보존한다. 새 기능 시작 전 main 최신화·기능별 브랜치 생성, 작업 중 갱신·동시 작업은 [코드를 받는 시점과 여러 기능 작업](#team-git-sync)을 따른다.
 2. Node.js 22 이상과 실행 중인 Docker 엔진·Compose가 필요하다. Mac은 CPU에 맞는 Docker Desktop, Windows는 지원되는 Windows·WSL 2의 Linux 컨테이너 구성을 준비한다. 설치 프로그램·권한·재부팅이 필요하면 사람에게 해당 단계만 요청한다.
 3. 다음 명령을 저장소 루트에서 순서대로 실행한다. 애플리케이션 도구와 의존성은 이미지 안에서 설치·빌드되므로 호스트 Java·Gradle·MySQL·pnpm 설치는 필요 없다.
 
@@ -51,7 +51,7 @@ npm run team:down
 <a id="team-db-environment-updates"></a>
 ### 코드를 받은 뒤 DB·실행환경 반영
 
-- [ ] **화면·업무 코드 변경:** `git pull`로 받는다. 개발 서버가 켜져 있으면 자동 반영·백엔드 재시작을 기다리고, 꺼져 있으면 `npm run team:up`으로 시작한다. 기존 Docker 이미지·DB를 사용한다.
+- [ ] **화면·업무 코드 변경:** [코드를 받는 시점과 여러 기능 작업](#team-git-sync)에 따라 main을 갱신하거나 자기 기능 브랜치에 최신 main을 병합한다. 개발 서버가 켜져 있으면 자동 반영·백엔드 재시작을 기다리고, 꺼져 있으면 `npm run team:up`으로 시작한다. 기존 Docker 이미지·DB를 사용한다.
 - [ ] **DB 테이블·열 변경:** AI가 구조 변경 명령인 마이그레이션도 함께 커밋한다. 받은 코드의 백엔드가 재시작할 때 자기 DB에 변경을 적용한다. 현재 시작 코드는 [Database.kt](backend/src/main/kotlin/bnoc/Database.kt)의 테이블·열 생성과 변경 이력을 사용한다. 기존 테이블의 형식 변경·삭제에는 그에 맞는 명시적 변경 코드가 필요하다. AI는 빈 DB와 기존 자료가 있는 DB에서 적용·자료 보존을 확인한다. GitHub로 공유하는 것은 구조 변경 코드이며 각 PC의 실제 DB 자료는 별도로 유지한다.
 - [ ] **라이브러리·프레임워크·Java·Node.js 등 변경:** 현재 개발환경에서는 `npm run team:up`으로 필요한 도구 이미지·의존성을 갱신한다. 기존 빌드 캐시를 재사용한다.
 - [ ] **MySQL 자체 버전 변경:** AI가 버전 호환성과 기존 자료의 백업·복원 절차를 확인하고 격리 환경에서 검증한 뒤 적용한다. 보통 새 버전의 공식 이미지를 받아 DB 컨테이너를 교체한다. DB 볼륨·비밀을 유지하며, 업데이트 오류를 DB 초기화로 해결하지 않는다. 테이블 변경과 DB 엔진 버전 변경은 구분한다.
@@ -67,7 +67,7 @@ npm run team:down
 
 팀 개발본은 [JunH1004/bnoc-team](https://github.com/JunH1004/bnoc-team) 비공개 저장소로 관리한다. 원본 Git 이력은 포함하지 않는다. 게시 결과·주소·권한 상태는 [협업 작업 기록](docs/records/작업기록.md#team-collaboration-20261017)에 남긴다. 기존 공개 `JunH1004/bnoc`는 별도 과거 스냅샷이며 자동 동기화하지 않는다.
 
-팀원은 기능 하나당 브랜치 하나에서 작업하고 PR을 제출한다. 승인과 병합은 `JunH1004`만 한다. 소유자 본인 작업에는 PR을 만들지 않으며 검토·검증과 사용자 게시 승인을 거쳐 main에 직접 반영한다. Issue는 필요할 때만 사용하며 팀 사전 합의는 시작 조건이 아니다. PR 템플릿에는 변경 근거·실제 검사·사람 사용 결과를 적는다. `Team verification / verify`는 Ubuntu AMD64에서 Docker 전체 빌드·기존 API/PC 시험·보존 검사를 실행한다. GitHub 실행 결과와 각자의 Mac/Windows 설치 성공은 구분한다. 소유자 전용 승인·갱신과 필수 CI·최신 기준 검사·대화 해결·강제 푸시/삭제 금지의 실제 설정은 [최신 협업 기록](docs/records/작업기록.md#owner-main-20261019)에서 확인한다. 자동 배포·자동 병합은 하지 않는다.
+팀원은 독립 기능별 브랜치에서 작업하고 PR을 제출한다. 따로 완성·검증할 수 없는 변경의 묶음과 코드 갱신 시점은 [협업 절차](#team-git-sync)를 따른다. 승인과 병합은 `JunH1004`만 한다. 소유자 본인 작업에는 PR을 만들지 않으며 검토·검증과 사용자 게시 승인을 거쳐 main에 직접 반영한다. Issue는 필요할 때만 사용하며 팀 사전 합의는 시작 조건이 아니다. PR 템플릿에는 변경 근거·실제 검사·사람 사용 결과를 적는다. `Team verification / verify`는 Ubuntu AMD64에서 Docker 전체 빌드·기존 API/PC 시험·보존 검사를 실행한다. GitHub 실행 결과와 각자의 Mac/Windows 설치 성공은 구분한다. 소유자 전용 승인·갱신과 필수 CI·최신 기준 검사·대화 해결·강제 푸시/main 삭제 금지의 실제 설정은 [최신 협업 기록](docs/records/작업기록.md#owner-main-20261019)에서 확인한다. 자동 배포·자동 병합은 하지 않는다.
 
 원본의 승인된 변경을 팀 저장소에 최초 이관하거나 이번 협업 도구 변경을 반영할 때만, 담당자는 모든 포함 변경을 커밋한 뒤 `npm run team:share`로 `.local/team-share/`에 새 스냅샷을 만든다. 이 도구는 원본 PDF·실행 데이터·비밀·빌드 산출물·Git 이력을 제외하고 대회정보의 개인 준비 내용은 출력본에서만 일반화한다. 공유본 이력과 원본 이력을 합치지 않으며 기존 팀 기여를 덮어쓰지 않는다. 최초 게시 뒤부터는 팀 저장소가 협업 기준이며 팀원은 브랜치/PR, 소유자는 검토·검증·게시 승인 후 PR 없는 main 반영을 사용한다. `.github/`·`.agents/`·`.codex/`·Docker·잠금파일도 함께 받아야 한다.
 
@@ -170,9 +170,10 @@ node scripts/verify-design.mjs
 
 2026-10-17 팀 협업 준비 안내에 2026-10-19 소유자 단독 승인 결정을 반영했다. 팀원은 기능 브랜치 PR, 소유자 `JunH1004`는 검토·검증 후 PR 없는 main 반영을 사용한다. 사용성 0.8 구현 이후 기준 제품에 추가할 기능을 함께 개발하기 위한 절차다. 추가 기능 선정·구현·공개 배포를 일괄 승인하는 문서가 아니다. 최신 구현·검증 상태는 [개발 진행](docs/records/개발진행.md)을 확인한다.
 
-### 1단계: 추가할 기능 단 한 가지를 정한다
+### 1단계: 이번 작업 단위를 정한다
 
-- [ ] 만들 기능을 한 문장으로 적는다.
+- [ ] 독립적으로 완성·검증할 기능을 한 문장으로 적는다. 분리할 수 없는 기능은 이유를 남겨 하나의 작업 단위로 묶는다.
+- [ ] [코드 갱신·브랜치 절차](#team-git-sync)에 따라 최신 main에서 시작한다. 여러 기능을 동시에 만들면 작업 단위별 브랜치·폴더를 구분한다.
 
 ### 2단계: AI와 기능을 의논한다
 
@@ -243,7 +244,8 @@ DB 구조 변경이 필요하면 마이그레이션도 포함하고 빈 DB·기�
 ```text
 실제 결과를 docs/records/개발진행.md·docs/records/작업기록.md·docs/records/AI활용기록.md에 반영해줘.
 발견한 문제는 docs/records/업무검증기록.md에 남겨줘.
-이번 변경만 커밋하고 JunH1004가 검토·승인할 PR 초안을 준비해줘. 아직 병합·공유 서버 배포는 하지 마.
+최신 main을 내 기능 브랜치에 병합하고 충돌 해결·관련 검사를 마친 뒤 이번 변경만 커밋해줘.
+JunH1004가 검토·승인할 PR 초안을 준비해줘. 아직 병합·공유 서버 배포는 하지 마.
 ```
 
 소유자 `JunH1004`의 본인 작업은 PR 없이 진행한다. 1~8단계의 검토·검증 뒤 아래처럼 지시한다.
@@ -259,13 +261,60 @@ PR은 만들지 마. main에 올리라는 내 명시적 승인이 있으면 main
 [비공개 팀 저장소](https://github.com/JunH1004/bnoc-team)의 `main`을 공통 기준으로 사용한다. 기존 공개 `JunH1004/bnoc`는 별도 과거 스냅샷이다. 팀원은 GitHub 아이디 확인·초대 수락 뒤 접근한다.
 
 1. 통합 담당자가 최신 검증 결과와 기준 커밋을 공유한다. 진행 중인 미커밋 작업을 ZIP으로 나눠 개발 기준으로 삼지 않는다.
-2. 각자 저장소를 복제하고 기능별 `codex/<기능이름>` 브랜치를 만든다. 같은 브랜치·같은 작업 폴더를 여러 사람이 공유하지 않는다.
+2. 각자 저장소를 복제하고 [코드 갱신·브랜치 절차](#team-git-sync)에 따라 최신 main에서 기능별 `codex/<기능이름>` 브랜치를 만든다. 같은 브랜치·같은 작업 폴더를 여러 사람이 공유하지 않는다.
 3. AI와 기능을 구체화하고 본인이 설계를 확인한 뒤 자기 브랜치에서 구현·검증한다. Issue는 기록이 필요할 때 사용한다. GitHub Desktop으로 복제·브랜치·변경 비교·업로드를 수행할 수 있다.
 4. 팀원은 PR을 만들어 변경 설명·시험 결과·직접 검수 절차를 공유한다. 승인자는 소유자 `JunH1004` 한 명이다. 소유자 본인 작업은 독립 검토·검증 후 PR 없이 main에 반영한다.
 5. `JunH1004`가 팀원 PR을 검토·승인·병합한다. 충돌은 두 기능의 의도를 대조해 해결하고 관련 검사를 다시 실행한다. AI에게 한쪽 변경을 통째로 버리게 하지 않는다.
 6. 통합된 코드에서 관련 회귀 검사를 수행하고, 같은 커밋의 제품을 공동 검수 서버에 반영한다. 담당자가 직접 최종 과제를 확인한다.
 
-`main` 갱신·통합은 `JunH1004`만 수행한다. 팀원 PR은 `.github/CODEOWNERS`의 `* @JunH1004`에 따라 소유자 승인을 받는다. 소유자는 본인 작업의 PR 없이 main에 반영할 수 있으며, 에이전트는 해당 변경의 사용자 게시 승인 후에만 push한다. 필수 `verify`·최신 기준 검사·대화 해결은 유지하고 강제 푸시와 브랜치 삭제는 금지한다. `Team verification`은 PR과 main 갱신 때 자동 실행한다. 실제 보호 설정·PR #1 취소·main 반영·CI 상태는 [2026-10-19 작업 기록](docs/records/작업기록.md#owner-main-20261019)을 따른다. 실제 실행자·커밋·명령·결과를 기존 기록과 팀원 PR에 명시한다. 커밋에는 기존 규칙의 `AI-Tool:`, `AI-Session:`, `AI-Feature:`를 남긴다.
+`main` 갱신·통합은 `JunH1004`만 수행한다. 팀원 PR은 `.github/CODEOWNERS`의 `* @JunH1004`에 따라 소유자 승인을 받는다. 소유자는 본인 작업의 PR 없이 main에 반영할 수 있으며, 에이전트는 해당 변경의 사용자 게시 승인 후에만 push한다. 필수 `verify`·최신 기준 검사·대화 해결은 유지하고 강제 푸시와 main 삭제는 금지한다. 완료 기능·임시 검증 브랜치는 main에 내용 보존을 확인한 뒤 아래 기준으로 정리한다. `Team verification`은 PR과 main 갱신 때 자동 실행한다. 실제 보호 설정·PR #1 취소·main 반영·CI 상태는 [2026-10-19 작업 기록](docs/records/작업기록.md#owner-main-20261019)을 따른다. 실제 실행자·커밋·명령·결과를 기존 기록과 팀원 PR에 명시한다. 커밋에는 기존 규칙의 `AI-Tool:`, `AI-Session:`, `AI-Feature:`를 남긴다.
+
+<a id="team-git-sync"></a>
+#### 코드를 받는 시점과 여러 기능 작업
+
+명령은 팀 저장소의 작업 폴더에서 실행한다. `git status`로 브랜치와 변경을 확인하고, 미커밋 변경은 해당 기능 브랜치에 커밋하거나 임시 보관(stash)한 뒤 전환·갱신한다. 보관할 때는 필요한 새 파일도 포함됐는지 확인하고 원래 기능 브랜치로 돌아와 복원한다. 다른 기능의 변경을 가져가거나 변경을 버려 갱신 오류를 해결하지 않는다.
+
+**새 기능을 시작하기 전:** `main`에서 최신 코드를 받은 뒤 새 기능 브랜치를 만든다. 아래는 공지 검색 기능의 예시다.
+
+```bash
+git status
+git switch main
+git pull --ff-only origin main
+git switch --no-track -c codex/notice-search
+```
+
+`--ff-only`가 거절되면 로컬 main의 별도 커밋과 원격 변경을 확인한다. 강제 초기화·강제 push로 맞추지 않는다. GitHub Desktop에서는 **Current Branch**에서 `main` 선택, **Fetch origin**, 변경이 있으면 **Pull origin**, **New Branch**에서 기능 브랜치 생성 순서다. `Pull origin`은 현재 선택한 브랜치를 갱신하므로 먼저 `main` 선택을 확인한다.
+
+**작업 중 main 변경을 전달받았을 때와 PR 제출 직전:** 자기 기능 브랜치에서 최신 main을 병합한다. 진행 중인 변경을 먼저 보존한 뒤 실행한다.
+
+```bash
+git switch codex/notice-search
+git fetch origin
+git merge origin/main
+```
+
+충돌은 두 변경의 의도를 확인해 해결하고 병합을 마친 뒤 관련 검사·직접 사용 검수를 다시 한다. 팀원 PR에 새 커밋을 push한 뒤 CI 결과도 확인한다. 기능 브랜치의 `git pull`만으로 main 변경을 받았다고 판단하지 않는다. GitHub Desktop에서는 먼저 `main`을 **Fetch origin / Pull origin**으로 갱신하고, **Current Branch**에서 자기 기능 브랜치로 돌아와 **Choose a branch to merge into …**에서 `main`을 선택해 병합한다. 다른 worktree가 main을 사용 중이면 그 폴더에서 main을 갱신하거나 위 CLI의 `origin/main` 병합을 사용한다.
+
+**PR이 main에 병합된 후:** 변경이 모두 저장됐는지 확인하고 `git switch main`, `git pull --ff-only origin main` 순서로 받는다. GitHub Desktop은 `main` 선택 후 **Fetch origin / Pull origin**이다. 다음 기능은 이 최신 main에서 새 브랜치로 시작한다. worktree 때문에 main 전환이 거절되면 `git worktree list`로 main을 사용하는 폴더를 찾아 그 폴더에서 갱신한다. 다른 기능을 계속 개발할 때는 그 기능 브랜치에 위 방식으로 최신 main을 병합한다. 받은 코드의 서버·DB 반영은 [DB·실행환경 반영](#team-db-environment-updates)을 따른다.
+
+**여러 기능을 만들 때:** 공지 검색과 통계처럼 독립적으로 완성·검증할 수 있으면 `codex/notice-search`, `codex/stats`처럼 기능별 브랜치를 만든다. 따로 완성·검증할 수 없는 변경은 하나의 작업 단위·브랜치·PR로 묶고 이유를 남긴다. 각 작업 단위에 위 1~9단계를 적용한다.
+
+한 폴더에서 순차 작업할 때는 변경을 보존한 뒤 브랜치를 전환한다. 여러 AI가 동시에 작업할 때는 worktree로 폴더를 나누고 각 AI에 자기 폴더를 지정한다. 예를 들어 공지 검색 브랜치에서 작업 중 통계를 별도로 시작한다면 아래처럼 최신 `origin/main`에서 새 폴더·브랜치를 만든다. 현재 공지 검색 브랜치에서 통계 브랜치를 파생하지 않는다.
+
+```bash
+git fetch origin
+git worktree add --no-track -b codex/stats ../bnoc-stats origin/main
+```
+
+`--no-track`은 새 기능 브랜치가 원격 main을 자기 업로드/수신 대상으로 추적하지 않게 한다. 처음 게시할 때는 해당 기능 폴더에서 `git push -u origin codex/stats`처럼 같은 이름의 원격 기능 브랜치를 지정한다. 공지 검색은 `git push -u origin codex/notice-search`를 사용한다. GitHub Desktop은 현재 기능 브랜치를 확인한 뒤 **Publish branch**로 게시한다.
+
+각 폴더에서 [최초 준비](#agent-handoff)를 수행한다. 같은 PC에서 동시에 실행할 때 개발 `BNOC_TEAM_PORT`를 각각 다른 값으로 지정한다. 기본 Compose 프로젝트는 체크아웃 경로 해시로 구별되고 DB·첨부·비밀도 각각 유지한다. `.local`을 복제하거나 같은 `BNOC_TEAM_PROJECT`를 여러 폴더에 중복 지정하지 않는다. 검증은 순서대로 실행한다. 포트·프로젝트 지정과 자료 보존은 [DB·실행환경 반영](#team-db-environment-updates)을 따른다.
+
+**완료 브랜치 정리:** 소유자가 main 반영·검증과 내용 보존을 확인한 뒤, 남은 변경·미반영 커밋과 진행 중인 작업이 없는 완료 기능·임시 검증 브랜치만 정리한다. squash 병합은 커밋 해시가 달라 Git이 미병합으로 표시할 수 있으므로 표시만 보고 강제 삭제하지 않고 PR·main 반영 내용을 대조한다. worktree를 정리하기 전에는 서비스를 종료하고 DB·첨부·비밀 보존 여부도 확인한다. 폴더를 지우는 일과 브랜치를 지우는 일을 구분한다. `main` 삭제와 강제 push는 계속 금지한다.
+
+현재 원격 브랜치를 main 하나로 정리하는 기준은 작업 종료 상태다. 이후 개발할 기능 브랜치와 필수 CI를 위한 임시 검증 브랜치는 만들 수 있으며, 완료 뒤 위 기준으로 정리한다. 소유자 본인 작업도 아래 필수 CI·명시적 게시 승인을 지킨다.
+
+명령과 Desktop 조작 근거: [Git pull](https://git-scm.com/docs/git-pull), [Git worktree](https://git-scm.com/docs/git-worktree), [GitHub Desktop 브랜치 동기화](https://docs.github.com/en/desktop/working-with-your-remote-repository-on-github-or-github-enterprise/syncing-your-branch-in-github-desktop).
 
 소유자의 새 커밋도 main 반영 전에 필수 검사를 통과해야 한다. PR 없이 진행할 때는 검증용 기능 브랜치에 커밋을 push하고 GitHub Actions의 `Team verification`에서 `Run workflow`로 해당 브랜치를 실행한다(`gh workflow run team-ci.yml --repo JunH1004/bnoc-team --ref <브랜치>`). 게시할 정확한 커밋의 `verify` 성공을 확인한 뒤 main에 비강제 fast-forward한다. main push 뒤에도 자동 검사는 다시 실행된다.
 
