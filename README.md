@@ -267,7 +267,7 @@ PR은 만들지 마. main에 올리라는 내 명시적 승인이 있으면 main
 5. `JunH1004`가 팀원 PR을 검토·승인·병합한다. 충돌은 두 기능의 의도를 대조해 해결하고 관련 검사를 다시 실행한다. AI에게 한쪽 변경을 통째로 버리게 하지 않는다.
 6. 통합된 코드에서 관련 회귀 검사를 수행하고, 같은 커밋의 제품을 공동 검수 서버에 반영한다. 담당자가 직접 최종 과제를 확인한다.
 
-`main` 갱신·통합은 `JunH1004`만 수행한다. 팀원 PR은 `.github/CODEOWNERS`의 `* @JunH1004`에 따라 소유자 승인을 받는다. 소유자는 본인 작업의 PR 없이 main에 반영할 수 있으며, 에이전트는 해당 변경의 사용자 게시 승인 후에만 push한다. 필수 `verify`·최신 기준 검사·대화 해결은 유지하고 강제 푸시와 main 삭제는 금지한다. 완료 기능·임시 검증 브랜치는 main에 내용 보존을 확인한 뒤 아래 기준으로 정리한다. `Team verification`은 PR과 main 갱신 때 자동 실행한다. 실제 보호 설정·PR #1 취소·main 반영·CI 상태는 [2026-10-19 작업 기록](docs/records/작업기록.md#owner-main-20261019)을 따른다. 실제 실행자·커밋·명령·결과를 기존 기록과 팀원 PR에 명시한다. 커밋에는 기존 규칙의 `AI-Tool:`, `AI-Session:`, `AI-Feature:`를 남긴다.
+`main` 갱신·통합은 `JunH1004`만 수행한다. 팀원 PR은 `.github/CODEOWNERS`의 `* @JunH1004`에 따라 소유자 승인을 받는다. 소유자는 본인 작업의 PR 없이 main에 반영할 수 있으며, 에이전트는 해당 변경의 사용자 게시 승인 후에만 push한다. 필수 `verify`·최신 기준 검사·대화 해결은 유지하고 강제 푸시와 main 삭제는 금지한다. 완료 기능·임시 검증 브랜치는 main에 내용 보존을 확인한 뒤 아래 기준으로 정리한다. `Team verification`은 main·`codex/**` push와 PR에서 자동 실행한다. 실제 보호 설정·PR #1 취소·main 반영·CI 상태는 [2026-10-19 작업 기록](docs/records/작업기록.md#owner-main-20261019)을 따른다. 실제 실행자·커밋·명령·결과를 기존 기록과 팀원 PR에 명시한다. 커밋에는 기존 규칙의 `AI-Tool:`, `AI-Session:`, `AI-Feature:`를 남긴다.
 
 <a id="team-git-sync"></a>
 #### 코드를 받는 시점과 여러 기능 작업
@@ -316,7 +316,7 @@ git worktree add --no-track -b codex/stats ../bnoc-stats origin/main
 
 명령과 Desktop 조작 근거: [Git pull](https://git-scm.com/docs/git-pull), [Git worktree](https://git-scm.com/docs/git-worktree), [GitHub Desktop 브랜치 동기화](https://docs.github.com/en/desktop/working-with-your-remote-repository-on-github-or-github-enterprise/syncing-your-branch-in-github-desktop).
 
-소유자의 새 커밋도 main 반영 전에 필수 검사를 통과해야 한다. PR 없이 진행할 때는 검증용 기능 브랜치에 커밋을 push하고 GitHub Actions의 `Team verification`에서 `Run workflow`로 해당 브랜치를 실행한다(`gh workflow run team-ci.yml --repo JunH1004/bnoc-team --ref <브랜치>`). 게시할 정확한 커밋의 `verify` 성공을 확인한 뒤 main에 비강제 fast-forward한다. main push 뒤에도 자동 검사는 다시 실행된다.
+소유자의 새 커밋도 main 반영 전에 필수 검사를 통과해야 한다. PR 없이 진행할 때는 `codex/<기능이름>` 기능·검증 브랜치에 커밋을 push한다. `Team verification`은 main과 `codex/**` 브랜치의 push, 팀원 PR에서 자동 실행된다. GitHub Actions에서 게시할 정확한 커밋·이벤트 `push`의 `verify` 성공을 확인한 뒤 같은 커밋을 main에 비강제 fast-forward한다. main push 뒤에도 자동 검사는 다시 실행된다. `Run workflow` 수동 실행은 추가 확인용이며 [필수 검사 인정 조건](https://docs.github.com/en/enterprise-cloud@latest/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks#checks-from-some-workflow-jobs-are-not-evaluated)에 따라 push/PR 자동 검사를 대신하지 못한다.
 
 ### 참고: 서버가 있는 프로젝트 인수
 
