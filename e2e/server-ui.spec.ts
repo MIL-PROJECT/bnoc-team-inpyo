@@ -972,10 +972,19 @@ test('SR-BE-026,032,033,035: situation provenance, query failure distinct from e
   await expect(page.getByText('GPS 정보원', { exact: true })).toBeVisible();
   await expect(page.getByText('CPCON 정보원', { exact: true })).toBeVisible();
   await expect(page.getByText(/모의 인증|모의 정보|대회용/)).toHaveCount(0);
-  await expect(page.getByText(/CPCON[ⅠⅡⅢⅣⅤ]급/).first()).toBeVisible();
+  await expect(page.locator('.card').filter({has:page.getByRole('heading',{name:'CPCON',exact:true})}).locator('.situation-stage')).toHaveText(/^(?:I|II|III|IV|V)$/);
   await expect(page.getByRole('button', { name: /단계.*변경|단계.*설정/ })).toHaveCount(0);
   await expect(page.getByText(/원본 기준시각|정보 기준시각/).first()).toBeVisible();
   try {
+    const cpconValue=page.locator('.card').filter({has:page.getByRole('heading',{name:'CPCON',exact:true})}).locator('.situation-stage');
+    for (const [stageCode,letter,canonical] of [['1','I','Ⅰ'],['2','II','Ⅱ'],['3','III','Ⅲ'],['4','IV','Ⅳ'],['5','V','Ⅴ']]) {
+      await providerControl(page,{gps:{scenario:'normal',stageCode:'3'},cpcon:{scenario:'normal',stageCode}});
+      await expect.poll(async()=>{const state=(await apiRead(page,'/api/situation/cpcon')).data;return state.collectionState==='ok'&&state.stageCode===stageCode;}).toBe(true);
+      await page.reload();
+      await expect(cpconValue).toHaveText(letter);
+      await expect(page.getByRole('button',{name:new RegExp(`^CPCON ${letter}, 정상,`)})).toContainText(`CPCON · ${letter}`);
+      expect((await apiRead(page,'/api/situation/cpcon')).data.stageLabel).toBe(`CPCON${canonical}급`);
+    }
     await providerControl(page,{gps:{scenario:'normal',stageCode:'3'},cpcon:{scenario:'normal',stageCode:'4'}});
     await expect.poll(async()=>{const state=(await apiRead(page,'/api/situation/gps')).data;return state.collectionState==='ok'&&Number(state.stageCode)===3;}).toBe(true);
     await providerControl(page,{gps:{scenario:'error'},cpcon:{scenario:'normal',stageCode:'4'}});
@@ -986,6 +995,9 @@ test('SR-BE-026,032,033,035: situation provenance, query failure distinct from e
     await page.reload();
     const gpsCard=page.locator('.card').filter({has:page.getByRole('heading',{name:'GPS',exact:true})});
     const cpconCard=page.locator('.card').filter({has:page.getByRole('heading',{name:'CPCON',exact:true})});
+    await expect(cpconCard.locator('.situation-stage')).toHaveText('IV');
+    await expect(page.getByRole('button',{name:/CPCON IV, 정상/})).toContainText('CPCON · IV');
+    expect((await apiRead(page,'/api/situation/cpcon')).data.stageLabel).toBe('CPCONⅣ급');
     await expect(gpsCard.getByText('갱신 실패',{exact:true})).toBeVisible();
     await expect(cpconCard.getByText('수집 정상',{exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:/GPS.*갱신 실패/})).toBeVisible();

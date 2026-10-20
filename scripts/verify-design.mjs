@@ -230,7 +230,7 @@ for(const [name,engine] of [['chromium',chromium],['firefox',firefox]]) {
    if(width===1440){await page.locator('#sr-select').selectOption('SR-BE-027');await page.screenshot({path:fileURLToPath(new URL('notice-review.png',evidence)),fullPage:true});}
    await page.goto(htmlUrl.href+'#sr=SR-BE-035');await page.reload();
    assert.equal(await page.locator('#sr-select').inputValue(),'SR-BE-035');
-   assert.match(await page.locator('#sr-context').innerText(),/CPCONⅠ급~Ⅴ급/);
+   assert.match(await page.locator('#sr-context').innerText(),/화면의 I~V 단계 결과/);
    assert.match(await page.locator('#sr-context').innerText(),/모든 로그인/);
    assert.match(await page.locator('#sr-context').innerText(),/GPS 5=양호.*CPCON에 복사하지 않는다/);
    await page.locator('#sr-context [data-jump="DemoSituationFeed"]').click();

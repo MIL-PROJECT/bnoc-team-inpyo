@@ -17,6 +17,7 @@ import { NoticeList, NoticeDetail, NoticeEditor } from '../screens/NoticeViews';
 import { AccessManagementView } from '../screens/AccessManagementView';
 import { LoginPanel } from '../screens/LoginPanel';
 import { displayTime } from './dateTime.mjs';
+import { cpconStageValue } from './situationStage';
 const api = new ApiClient();
 type GlobalContext={ gps?:SituationSnapshot;cpcon?:SituationSnapshot;situationError:boolean;unseen?:number;unseenError:boolean;returned?:number;returnedError:boolean };
 const emptyGlobalContext:GlobalContext={situationError:false,unseenError:false,returnedError:false};
@@ -150,7 +151,7 @@ export function App() {
   else content = <section className="card"><h1>페이지를 찾을 수 없습니다</h1><button onClick={() => go('requests')}>신청 목록</button></section>;
   const situationButton=(kind:'gps'|'cpcon',label:string,value?:SituationSnapshot)=>{
     const status=globalContext.situationError?(value?'조회 오류 · 마지막 값':'조회 오류'):value?situationStateLabel[value.collectionState]??'상태 확인':'불러오는 중';
-    const stage=value?.stageLabel ?? (value?.stageCode==null?'자료 없음':`${value.stageCode}단계`);
+    const stage=kind==='cpcon' ? cpconStageValue(value?.stageCode) ?? '자료 없음' : value?.stageLabel ?? (value?.stageCode==null?'자료 없음':`${value.stageCode}단계`);
     const time=value?.observedAt?displayTime(value.observedAt):'기준시각 없음';
     return <button key={kind} onClick={()=>go('situation')} aria-label={`${label} ${stage}, ${status}, ${time}`}><strong>{label} · {stage}</strong><small>{status} · {time}</small></button>;
   };
