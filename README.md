@@ -116,7 +116,7 @@ npm run team:down
 
 React 화면과 API를 하나의 Spring Boot JAR에서 제공한다. 요청·작업·이력·알림·명부·병력·야간 근무·공지는 MySQL에 저장하며 첨부 내용은 비공개 파일 경로에 보관한다. 서버 세션과 현재 권한을 검사한다. 사용자 화면은 역할명으로 로그인하며 명부는 비어 있는 상태에서 부서 담당자가 입력한다. 자체 회원가입·가짜 이름·합성 계급·임시 단계는 사용하지 않는다.
 
-현재 공개 시연 주소: **[BNOC 업무·부대 운영](https://stereo-frog-broadcast-senators.trycloudflare.com)**. 새 JVM/DB 제품이며 공개 HTTPS 로그인·업무 저장·첨부·재시작 보존을 검증했다. 컴퓨터·MySQL·서버·터널이 실행 중일 때 이용하는 임시 주소다. 상시 호스팅 완료는 아니다. 현재 주소와 실행 상태는 `npm run server:public-status`로 확인한다.
+현재 공개 시연 주소: **[BNOC 업무·부대 운영](https://tiffany-publication-traveler-share.trycloudflare.com)**. 새 JVM/DB 제품이며 공개 HTTPS 로그인·업무 저장·첨부·재시작 보존을 검증했다. 컴퓨터·MySQL·서버·터널이 실행 중일 때 이용하는 임시 주소다. 상시 호스팅 완료는 아니다. 현재 주소와 실행 상태는 `npm run server:public-status`로 확인한다.
 
 2026-10-14 로그인·상단·인증 창·GPS/CPCON의 구현 설명을 제거하고 같은 공개 주소에 반영했다. 최신 [실행 결과](docs/records/개발진행.md)는 이번 표시 검사와 이전 전체 업무 검증을 구별한다.
 

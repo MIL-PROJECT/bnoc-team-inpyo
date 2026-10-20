@@ -201,6 +201,19 @@ class OperationsContractTest {
         assertEquals("FORBIDDEN",assertThrows(BusinessFailure::class.java) { workflow.execute(actor("bnoc-secondary"),command("createDirective",mapOf("title" to "지원 안내","body" to "내용","attachmentRefs" to listOf(attachment["id"])))) }.code)
         assertTrue(workflow.operations.notices(actor("requester")).isEmpty())
     }
+    @Test fun `shared overview and schedule ignore legacy work rows without request links`() {
+        val number=create();assign(number)
+        db.jdbc.execute("SET REFERENTIAL_INTEGRITY FALSE")
+        db.jdbc.execute("ALTER TABLE bnoc_works ALTER COLUMN request_number DROP NOT NULL")
+        db.jdbc.update("INSERT INTO bnoc_works(work_number,request_number,team_id,status,schedule,resolved_by,origin,revision,assigned_person_refs,assigned_at) VALUES (?,?,?,?,?,?,?,?,?,?)", "legacy-plan-row", null, "무선반", "배정", "2026-10-21T10:00:00Z", "[]", "assigned", 0, "[]", "2026-10-21T09:00:00Z")
+
+        val shared=queries.shared(actor("requester-secondary"),emptyMap())
+        assertEquals(1,(shared["counts"] as Map<*,*>)["assigned"])
+        assertEquals(listOf("${number}-1"),(shared["items"] as List<Map<*,*>>).map { it["workNumber"] })
+        val schedule=queries.schedule(actor("team-wireless"),mapOf("from" to "2026-10-21","to" to "2026-10-22"))
+        assertTrue((schedule["entries"] as List<*>).isEmpty())
+        assertEquals(1,db.jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_works WHERE request_number IS NULL",Int::class.java))
+    }
     @Test fun `effective shared totals exclude replaced cancelled and after action without leaking detail`() {
         val number=create();assign(number)
         val w=db.works(number).single()
