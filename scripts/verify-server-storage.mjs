@@ -188,8 +188,15 @@ async function rollback() {
 }
 
 async function persistence() {
-  const [requester, bnoc] = await Promise.all(['requester', 'bnoc'].map(async subject => new Client().login(subject)));
+  const [requester, bnoc, wireless] = await Promise.all(['requester', 'bnoc', 'team-wireless'].map(async subject => new Client().login(subject)));
   const manager = await departmentManager();
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const plannedTitle = `서버 재시작 계획 작업 ${randomUUID()}`;
+  const plannedCreate = await wireless.call('POST', '/api/planned-works', { operationId: randomUUID(), title: plannedTitle, firstWorkDate: today });
+  assert.equal(plannedCreate.status, 200, plannedCreate.json?.code);
+  const planned = plannedCreate.json.data.plannedWork;
+  const plannedBefore = (await wireless.get(`/api/planned-works?workDate=${today}`)).inProgress.find(item => item.id === planned.id);
+  assert.ok(plannedBefore, 'PLANNED_WORK_MUST_BE_SAVED_BEFORE_RESTART');
   const content = Buffer.from('첨부 내용 보존 검증', 'utf8');
   const form = new FormData(); form.set('resourceKind', 'request'); form.set('file', new Blob([content], { type: 'text/plain' }), '업무문서.txt');
   const uploaded = await requester.call('POST', '/api/attachments', form); assert.equal(uploaded.status, 200);
@@ -203,15 +210,16 @@ async function persistence() {
   const notice = success(await bnoc.command('createDirective', { title: '업무 안내', body: '서버 재시작 보존 검증', attachmentRefs: [] }));
   const department = manager.session.actor.department;
   const roster = await manager.get('/api/personnel-roster?department=' + encodeURIComponent(department));
-  const before = { request: await bnoc.get('/api/requests/' + saved.requestNumber), history: await bnoc.get(`/api/requests/${saved.requestNumber}/history`), notice: await bnoc.get('/api/notices/' + notice.publicRef), roster };
+  const before = { request: await bnoc.get('/api/requests/' + saved.requestNumber), history: await bnoc.get(`/api/requests/${saved.requestNumber}/history`), notice: await bnoc.get('/api/notices/' + notice.publicRef), roster, planned: plannedBefore };
   await stopService('verification');
   await startApplication(true);
-  await Promise.all([requester.login('requester'), bnoc.login('bnoc'), manager.login('requester-secondary')]);
-  const after = { request: await bnoc.get('/api/requests/' + saved.requestNumber), history: await bnoc.get(`/api/requests/${saved.requestNumber}/history`), notice: await bnoc.get('/api/notices/' + notice.publicRef), roster: await manager.get('/api/personnel-roster?department=' + encodeURIComponent(department)) };
-  assert.deepEqual(after, before, 'REQUEST_WORK_HISTORY_NOTICE_ROSTER_MUST_SURVIVE_SERVER_RESTART');
+  await Promise.all([requester.login('requester'), bnoc.login('bnoc'), wireless.login('team-wireless'), manager.login('requester-secondary')]);
+  const plannedAfter = (await wireless.get(`/api/planned-works?workDate=${today}`)).inProgress.find(item => item.id === planned.plannedWorkId);
+  const after = { request: await bnoc.get('/api/requests/' + saved.requestNumber), history: await bnoc.get(`/api/requests/${saved.requestNumber}/history`), notice: await bnoc.get('/api/notices/' + notice.publicRef), roster: await manager.get('/api/personnel-roster?department=' + encodeURIComponent(department)), planned: plannedAfter };
+  assert.deepEqual(after, before, 'REQUEST_WORK_HISTORY_NOTICE_ROSTER_AND_PLANNED_WORK_MUST_SURVIVE_SERVER_RESTART');
   const downloaded = await requester.call('GET', '/api/attachments/' + file.id);
   assert.equal(downloaded.status, 200); assert.deepEqual(downloaded.bytes, content, 'ATTACHMENT_BYTES_MUST_SURVIVE_SERVER_RESTART');
-  observations.push({ check: 'SERVER_RESTART_PERSISTENCE', requestNumber: saved.requestNumber, requestWorkHistoryNoticeRosterUnchanged: true, attachmentBytesUnchanged: true, attachmentSha256: createHash('sha256').update(downloaded.bytes).digest('hex') });
+  observations.push({ check: 'SERVER_RESTART_PERSISTENCE', requestNumber: saved.requestNumber, plannedWorkId: planned.id, requestWorkHistoryNoticeRosterPlannedWorkUnchanged: true, attachmentBytesUnchanged: true, attachmentSha256: createHash('sha256').update(downloaded.bytes).digest('hex') });
 }
 
 let status = 'failed', error = null;

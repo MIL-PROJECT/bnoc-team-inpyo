@@ -40,6 +40,42 @@ test('query envelope exposes its snapshot and total without returning an empty l
   await assert.rejects(() => malformed.getRequestList({}), error => error.code === 'INVALID_RESPONSE', 'MALFORMED_QUERY_MUST_NOT_BECOME_EMPTY');
 });
 
+test('planned work uses its dedicated API, server session, CSRF and revision preconditions', async () => {
+  const sent = [];
+  const client = new ApiClient(async (url, options) => {
+    sent.push({ url, options });
+    return new Response(JSON.stringify({ data: { inProgress: [], completed: [], plannedWork: { id: 'plan-id' } } }));
+  });
+  client.csrfToken = 'session-csrf';
+  await client.getPlannedWorks('2026-10-21');
+  await client.createPlannedWork({ operationId: 'create-operation', title: '통신실 점검', firstWorkDate: '2026-10-21' });
+  await client.updatePlannedWork('plan-id', { operationId: 'edit-operation', revision: 1, title: '통신실 점검 변경' });
+  await client.completePlannedWork('plan-id', { operationId: 'complete-operation', revision: 2, completedDate: '2026-10-21' });
+  await client.deletePlannedWork('plan-id', 3);
+  assert.match(sent[0].url, /\/api\/planned-works\?workDate=2026-10-21$/);
+  assert.deepEqual(sent.slice(1).map(({ url, options }) => [url, options.method, options.headers['X-CSRF-Token']]), [
+    ['/api/planned-works', 'POST', 'session-csrf'],
+    ['/api/planned-works/plan-id', 'PATCH', 'session-csrf'],
+    ['/api/planned-works/plan-id/complete', 'POST', 'session-csrf'],
+    ['/api/planned-works/plan-id', 'DELETE', 'session-csrf']
+  ]);
+  assert.equal(sent[4].options.headers['If-Match'], '"3"');
+  assert.deepEqual(JSON.parse(sent[1].options.body), { operationId: 'create-operation', title: '통신실 점검', firstWorkDate: '2026-10-21' });
+});
+
+test('an uncertain planned save tells the caller to retry the same operation', async () => {
+  const bodies = [];
+  const client = new ApiClient(async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    if (bodies.length === 1) throw new TypeError('response lost after commit');
+    return new Response(JSON.stringify({ data: { plannedWork: { id: 'plan-id' }, replayed: true } }));
+  });
+  const input = { operationId: 'same-plan-operation', title: '통신실 점검', firstWorkDate: '2026-10-21' };
+  await assert.rejects(() => client.createPlannedWork(input), error => error.code === 'NETWORK' && /같은 제출로 다시 확인/.test(error.message));
+  assert.equal((await client.createPlannedWork(input)).replayed, true);
+  assert.deepEqual(bodies, [input, input]);
+});
+
 test('session and challenge unwrap the server CSRF without putting browser roles in authentication', async () => {
   const sent = [];
   const client = new ApiClient(async (url, options) => {

@@ -49,6 +49,31 @@ const mutations = [
     assertion: 'REASSIGNMENT_MUST_NOT_DUPLICATE_A_CURRENT_DEPARTMENT'
   },
   {
+    name: 'backend-planned-team-role', kind: 'planned', file: 'backend/src/main/kotlin/bnoc/PlannedWorkService.kt',
+    anchor: 'if(actor.role!="team" || actor.teamId.isNullOrBlank()) reject("FORBIDDEN")',
+    injected: '', assertion: 'PLANNED_WORK_TEAM_ROLE_REQUIRED'
+  },
+  {
+    name: 'backend-planned-completion-start-date', kind: 'planned', file: 'backend/src/main/kotlin/bnoc/PlannedWorkService.kt',
+    anchor: 'if(parsed.isBefore(date(first,"firstWorkDate")) || parsed.isAfter(today())) reject("VALIDATION",mapOf("completedDate" to "완료일은 업무 기준일 이후, 오늘 이하로 선택하세요."))',
+    injected: 'if(parsed.isAfter(today())) reject("VALIDATION",mapOf("completedDate" to "완료일은 오늘 이하로 선택하세요."))', assertion: 'PLANNED_COMPLETION_NOT_BEFORE_START'
+  },
+  {
+    name: 'backend-planned-hard-delete', kind: 'planned', file: 'backend/src/main/kotlin/bnoc/PlannedWorkService.kt',
+    anchor: 'val removed=db.jdbc.update("DELETE FROM bnoc_planned_works WHERE planned_work_id=? AND revision=?",work.id,revision)',
+    injected: 'val removed=1', assertion: 'PLANNED_DELETE_MUST_REMOVE_TASK'
+  },
+  {
+    name: 'backend-planned-global-operation-id', kind: 'planned', file: 'backend/src/main/kotlin/bnoc/PlannedWorkService.kt',
+    anchor: 'if(!globallyInserted) reject("OPERATION_NOT_AVAILABLE")',
+    injected: 'if(false) reject("OPERATION_NOT_AVAILABLE")', assertion: 'PLANNED_OPERATION_ID_MUST_BE_GLOBAL'
+  },
+  {
+    name: 'backend-planned-replay-team-ownership', kind: 'planned', file: 'backend/src/main/kotlin/bnoc/PlannedWorkService.kt',
+    anchor: 'if(row["team_id"]!=actor.teamId) reject("OPERATION_NOT_AVAILABLE")',
+    injected: 'if(false) reject("OPERATION_NOT_AVAILABLE")', assertion: 'PLANNED_REPLAY_MUST_MATCH_CURRENT_TEAM'
+  },
+  {
     name: 'backend-public-login-location', kind: 'auth', file: 'backend/src/main/kotlin/bnoc/AuthService.kt',
     anchor: '"providerUrl" to "$origin/identity?loginAttempt=',
     injected: '"providerUrl" to "$providerUrl/identity?loginAttempt=',
@@ -82,7 +107,7 @@ function copy(label) {
 function run(label, kind, directory, assertion = null, suiteOverride = null) {
   const start = performance.now();
   const serverTest = kind !== 'frontend';
-  const suite = suiteOverride ?? { backend: 'bnoc.WorkflowContractTest', auth: 'bnoc.ExternalBoundaryTest', proxy: 'bnoc.PublicIdentityProxyTest' }[kind];
+  const suite = suiteOverride ?? { backend: 'bnoc.WorkflowContractTest', planned: 'bnoc.PlannedWorkContractTest', auth: 'bnoc.ExternalBoundaryTest', proxy: 'bnoc.PublicIdentityProxyTest' }[kind];
   const command = serverTest ? gradle : process.execPath;
   const args = serverTest
     ? ['-p', 'backend', 'test', '--tests', suite, '--offline', '--no-daemon']
@@ -130,6 +155,7 @@ let status = 'failed', failure = null;
 try {
   const normal = copy('normal');
   run('normal-backend', 'backend', normal);
+  run('normal-planned', 'planned', normal);
   run('normal-operations', 'backend', normal, null, 'bnoc.OperationsContractTest');
   run('normal-auth', 'auth', normal);
   run('normal-proxy', 'proxy', normal);

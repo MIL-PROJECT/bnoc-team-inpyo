@@ -15,7 +15,7 @@ import { PersonnelView, NightDutyView, RosterView } from '../screens/PersonnelVi
 import { SituationView } from '../screens/SituationView';
 import { NoticeList, NoticeDetail, NoticeEditor } from '../screens/NoticeViews';
 import { AccessManagementView } from '../screens/AccessManagementView';
-import { PlannedMaintenanceView, type PlannedWorkDemoItem } from '../screens/PlannedMaintenanceView';
+import { PlannedMaintenanceView, clearPendingPlannedCreateRecovery } from '../screens/PlannedMaintenanceView';
 import { LoginPanel } from '../screens/LoginPanel';
 import { displayTime } from './dateTime.mjs';
 import { cpconStageValue } from './situationStage';
@@ -33,16 +33,22 @@ export function App() {
   const [session,setSession] = useState<ServerSession | null>(null), [loading,setLoading] = useState(true), [sessionError,setSessionError] = useState('');
   const [expired,setExpired] = useState(false), [route,setRoute] = useState(routeFromPath), [revision,setRevision] = useState(0), [notice,setNotice] = useState('');
   const [globalContext,setGlobalContext]=useState<GlobalContext>(emptyGlobalContext);
-  const [plannedDemoItems,setPlannedDemoItems]=useState<PlannedWorkDemoItem[]>([]);
   const [routeReceipt,setRouteReceipt] = useState<{path:string;message:string} | null>(null);
-  const sessionRef = useRef<ServerSession | null>(null), expiredRef = useRef(false), dirty = useRef(new Set<string>()), routeRef = useRef(route);
+  const sessionRef = useRef<ServerSession | null>(null), expiredRef = useRef(false), dirty = useRef(new Set<string>()), blocked = useRef(new Set<string>()), routeRef = useRef(route);
   const expiryDialog = useRef<HTMLDialogElement | null>(null);
-  const registerDirty = useCallback((id: string, value: boolean) => { if (value) dirty.current.add(id); else dirty.current.delete(id); }, []);
+  const registerDirty = useCallback((id: string, value: boolean, blockLeaving = false) => {
+    if (value) dirty.current.add(id); else dirty.current.delete(id);
+    if (blockLeaving) blocked.current.add(id); else blocked.current.delete(id);
+  }, []);
   const acceptSession = useCallback(async (next: ServerSession) => {
+    if (sessionRef.current && next.actor.id !== sessionRef.current.actor.id && blocked.current.size > 0) {
+      await api.logout(); setNotice('저장 결과를 계획 화면에서 확인한 뒤 계정을 바꿀 수 있습니다. 다시 로그인하세요.'); expiredRef.current = true; setExpired(true); return;
+    }
     if (sessionRef.current && next.actor.id !== sessionRef.current.actor.id && dirty.current.size > 0 && !window.confirm('다른 사용자로 로그인했습니다. 저장하지 않은 입력을 버리고 해당 사용자로 전환할까요?')) {
       await api.logout(); setNotice('입력을 유지했습니다. 이전 사용자로 다시 로그인하세요.'); expiredRef.current = true; setExpired(true); return;
     }
     const changedUser = sessionRef.current?.actor.id !== next.actor.id;
+    if (sessionRef.current && changedUser) clearPendingPlannedCreateRecovery();
     if (changedUser) setRouteReceipt(null);
     if (changedUser) setGlobalContext(emptyGlobalContext);
     sessionRef.current = next; setSession(next); expiredRef.current = false; setExpired(false); setSessionError(''); setLoading(false); setRevision(value => value + 1);
@@ -62,6 +68,7 @@ export function App() {
   useEffect(() => {
     const pop = () => {
       const next = routeFromPath();
+      if (blocked.current.size > 0) { window.history.pushState({},'', routeUrl(routeRef.current)); setNotice('저장 결과를 계획 화면에서 확인한 뒤 이동할 수 있습니다.'); return; }
       if (dirty.current.size > 0 && !window.confirm('저장하지 않은 입력이 있습니다. 페이지를 이동할까요?')) { window.history.pushState({},'', routeUrl(routeRef.current)); return; }
       routeRef.current = next; setRoute(next); setNotice(''); setRouteReceipt(null);
     };
@@ -72,6 +79,7 @@ export function App() {
   useEffect(() => { if (expired && expiryDialog.current && !expiryDialog.current.open) expiryDialog.current.showModal(); else if (!expired) expiryDialog.current?.close(); }, [expired]);
   const go = useCallback((path: string, saved = false) => {
     if (path === routeRef.current) return;
+    if (!saved && blocked.current.size > 0) { setNotice('저장 결과를 계획 화면에서 확인한 뒤 이동할 수 있습니다.'); return; }
     if (!saved && dirty.current.size > 0 && !window.confirm('저장하지 않은 입력이 있습니다. 페이지를 이동할까요?')) return;
     window.history.pushState({},'', routeUrl(path)); routeRef.current = path; setRoute(path); setNotice(''); setRouteReceipt(null); window.scrollTo(0,0);
   }, []);
@@ -113,8 +121,9 @@ export function App() {
     return()=>{window.clearInterval(timer);document.removeEventListener('visibilitychange',refresh);window.removeEventListener('focus',refresh);};
   },[session?.actor.id,revision,refreshGlobalContext]);
   const logout = async () => {
+    if (blocked.current.size > 0) { setNotice('저장 결과를 계획 화면에서 확인한 뒤 로그아웃할 수 있습니다.'); return; }
     if (dirty.current.size > 0 && !window.confirm('저장하지 않은 입력이 있습니다. 로그아웃할까요?')) return;
-    try { await api.logout(); sessionRef.current = null; setSession(null);setGlobalContext(emptyGlobalContext); expiredRef.current = false; setExpired(false); dirty.current.clear(); setNotice(''); setRouteReceipt(null); setRoute('requests'); routeRef.current = 'requests'; window.history.replaceState({},'', '/requests'); }
+    try { await api.logout(); clearPendingPlannedCreateRecovery(); sessionRef.current = null; setSession(null);setGlobalContext(emptyGlobalContext); expiredRef.current = false; setExpired(false); dirty.current.clear(); setNotice(''); setRouteReceipt(null); setRoute('requests'); routeRef.current = 'requests'; window.history.replaceState({},'', '/requests'); }
     catch (error) { setNotice(errorMessage(error instanceof Error ? error : new Error('로그아웃하지 못했습니다.'))); }
   };
   if (loading && !session) return <main><p role="status">서비스 상태를 확인하는 중…</p></main>;
@@ -142,8 +151,8 @@ export function App() {
   else if (route === 'after-action') content = actor.role === 'team' ? <AfterActionReportForm actor={actor} run={run} upload={upload} onSaved={(number,message) => openSaved('requests/' + encodeURIComponent(number),message)} /> : forbidden;
   else if (route === 'schedule') content = actor.role === 'bnoc' || actor.role === 'team' ? <TeamScheduleView actor={actor} query={api} revision={revision} onOpen={onOpen} /> : forbidden;
   else if (route === 'overview') content = actor.role === 'bnoc' ? <BnocOverviewView query={api} teams={session.teams} revision={revision} onOpen={onOpen} /> : forbidden;
-  else if (route === 'operations') content = <SharedWorkOverview api={api} teams={session.teams} revision={revision} onOpen={onOpen} plannedDemoItems={plannedDemoItems} />;
-  else if (route === 'planned-maintenance') content = actor.role === 'team' ? <PlannedMaintenanceView department={actor.department} teamId={actor.teamId ?? actor.department} items={plannedDemoItems.filter(item => item.teamId === (actor.teamId ?? actor.department))} onChange={items => setPlannedDemoItems(previous => [...previous.filter(item => item.teamId !== (actor.teamId ?? actor.department)), ...items])} onOpenOverview={() => go('operations')} /> : forbidden;
+  else if (route === 'operations') content = <SharedWorkOverview api={api} teams={session.teams} revision={revision} onOpen={onOpen} />;
+  else if (route === 'planned-maintenance') content = actor.role === 'team' ? <PlannedMaintenanceView api={api} revision={revision} department={actor.department} onChanged={() => setRevision(value => value + 1)} onOpenOverview={() => go('operations')} /> : forbidden;
   else if (route === 'personnel') content = departmentAccess ? <PersonnelView actor={actor} api={api} run={run} revision={revision} /> : forbidden;
   else if (route === 'night-duty') content = departmentAccess ? <NightDutyView actor={actor} api={api} run={run} revision={revision} /> : forbidden;
   else if (route === 'roster') content = departmentAccess ? <RosterView actor={actor} api={api} run={run} departments={session.departments} revision={revision} /> : forbidden;

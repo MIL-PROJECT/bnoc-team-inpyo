@@ -102,7 +102,7 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
             val saved=db.request(resultNumber)!!;val savedWork=command.workNumber?.let { db.work(it) }
             CommandResult(requestNumber=resultNumber,workNumber=savedWork?.number,revision=savedWork?.revision ?: saved.revision,state=savedWork?.status ?: saved.status,priority=saved.priority)
         }
-        db.jdbc.update("INSERT INTO bnoc_receipts VALUES (?,?,?,?,?,?)",fresh.id,command.operationId,fp,result.requestNumber ?: result.publicRef,command.type,db.json.writeValueAsString(result))
+        db.jdbc.update("INSERT INTO bnoc_receipts(actor_subject,operation_id,fingerprint,request_number,command_type,result_json) VALUES (?,?,?,?,?,?)",fresh.id,command.operationId,fp,result.requestNumber ?: result.publicRef,command.type,db.json.writeValueAsString(result))
         return result
     }
     private fun authorizeBefore(actor:Actor,command:Command) {

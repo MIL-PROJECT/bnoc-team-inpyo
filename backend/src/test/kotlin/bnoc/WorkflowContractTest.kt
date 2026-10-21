@@ -24,6 +24,17 @@ class WorkflowContractTest {
     private fun op(type:String,number:String?=null,work:String?=null,revision:Long?=null,payload:Map<String,Any?> = emptyMap())=Command(type,UUID.randomUUID().toString(),number,work,revision,payload)
     private fun create():String = service.execute(requester,op("createRequest",payload=mapOf("category" to "장비/체계","subcategories" to mapOf("systemType" to "인터넷","resourceType" to "PC","workType" to "지원"),"detail" to "지원 요청","location" to "신청 위치","contact" to "1234","scheduledAt" to "2026-10-14T00:00:00Z"))).requestNumber!!
     private fun assign(number:String)=service.execute(bnoc,op("assignTeams",number,revision=db.request(number)!!.revision,payload=mapOf("teamIds" to listOf("무선반"),"priority" to "urgent")))
+    @Test fun `command receipts tolerate additive nullable columns from an older schema`() {
+        db.jdbc.execute("ALTER TABLE bnoc_receipts ADD COLUMN target_json TEXT NULL")
+        assertTrue(create().isNotBlank(),"EXISTING_RECEIPT_SCHEMA_EXTENSION_MUST_NOT_BREAK_NEW_COMMANDS")
+        assertEquals(1,db.jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_receipts WHERE target_json IS NULL",Int::class.java))
+    }
+    @Test fun `request inserts tolerate additive nullable columns from an older schema`() {
+        db.jdbc.execute("ALTER TABLE bnoc_requests ADD COLUMN requester_department VARCHAR(100) NULL")
+        db.jdbc.execute("ALTER TABLE bnoc_requests ADD COLUMN equipment_location VARCHAR(200) NULL")
+        assertTrue(create().isNotBlank(),"EXISTING_REQUEST_SCHEMA_EXTENSIONS_MUST_NOT_BREAK_NEW_REQUESTS")
+        assertEquals(1,db.jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_requests WHERE requester_department IS NULL AND equipment_location IS NULL",Int::class.java))
+    }
     @Test fun `BNOC changes an assigned department without return preserving history and optional schedule`() {
         val number=create();assign(number);var old=db.works(number).single()
         val schedule="2026-10-20T01:00:00Z"

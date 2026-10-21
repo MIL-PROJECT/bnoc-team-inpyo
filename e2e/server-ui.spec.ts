@@ -1098,7 +1098,9 @@ test('planned-maintenance UI: completion details do not squeeze the task row', a
   await page.getByRole('button', { name: '작업 추가', exact: true }).click();
   const addedItem = page.locator('.planned-item').filter({ hasText: title });
   await expect(addedItem).toBeVisible();
-  const item = page.locator('.planned-item').last();
+  await page.reload();
+  await expect(page.locator('.planned-item').filter({ hasText: title })).toBeVisible();
+  const item = page.locator('.planned-item').filter({ hasText: title });
   await expect(item.getByRole('heading', { name: title, exact: true })).toBeVisible();
   const main = item.locator('.planned-item-main');
   const actions = item.locator('.planned-item-actions');
@@ -1107,40 +1109,228 @@ test('planned-maintenance UI: completion details do not squeeze the task row', a
   const groupLayout = await actions.evaluate(element => ({ display: getComputedStyle(element).display, alignItems: getComputedStyle(element).alignItems }));
   expect(groupLayout, 'ActionGroup centers its controls').toEqual({ display: 'flex', alignItems: 'center' });
   await item.getByRole('button', { name: '수정', exact: true }).click();
-  const editCancel = item.getByRole('button', { name: '취소', exact: true });
+  const editRow = page.locator('.planned-item').filter({ has: page.locator('.planned-edit') });
+  const editCancel = editRow.getByRole('button', { name: '취소', exact: true });
   await expect(editCancel).toHaveJSProperty('type', 'button');
   await editCancel.click();
   await item.getByRole('button', { name: '완료', exact: true }).click();
   const completion = item.locator('.planned-complete-check');
   const detailsSlot = item.locator('.ui-action-row__details');
   await expect(completion.locator('input[type="date"]')).toHaveCount(1);
-  const mainBox = await main.boundingBox();
-  const actionsBox = await actions.boundingBox();
-  expect(mainBox).not.toBeNull();
-  expect(actionsBox).not.toBeNull();
-  expect(mainBox!.width, 'task title must retain a readable column').toBeGreaterThan(360);
-  const mainCenter = mainBox!.y + mainBox!.height / 2;
-  const actionsCenter = actionsBox!.y + actionsBox!.height / 2;
-  expect(Math.abs(mainCenter - actionsCenter), 'title and action buttons share one vertical center').toBeLessThan(2);
-  const actionButtons = await actions.locator('button').evaluateAll(buttons => buttons.map(button => {
-    const rect = button.getBoundingClientRect();
-    return { y: rect.y, height: rect.height, type: button.type };
-  }));
-  expect(actionButtons.length).toBeGreaterThan(1);
-  expect(actionButtons.map(button => button.type), 'row actions must not submit an enclosing form').toEqual(actionButtons.map(() => 'button'));
-  expect(Math.min(...actionButtons.map(button => button.height)), 'shared controls meet the 44px minimum').toBeGreaterThanOrEqual(44);
-  expect(Math.max(...actionButtons.map(button => button.height)) - Math.min(...actionButtons.map(button => button.height))).toBeLessThan(1);
-  expect(Math.max(...actionButtons.map(button => button.y)) - Math.min(...actionButtons.map(button => button.y))).toBeLessThan(2);
+  for (const width of [1280, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    const mainBox = await main.boundingBox();
+    const actionsBox = await actions.boundingBox();
+    expect(mainBox).not.toBeNull();
+    expect(actionsBox).not.toBeNull();
+    expect(mainBox!.width, 'task title must retain a readable column').toBeGreaterThan(360);
+    const mainCenter = mainBox!.y + mainBox!.height / 2;
+    const actionsCenter = actionsBox!.y + actionsBox!.height / 2;
+    expect(Math.abs(mainCenter - actionsCenter), 'title and action buttons share one vertical center').toBeLessThan(2);
+    const actionButtons = await actions.locator('button').evaluateAll(buttons => buttons.map(button => {
+      const rect = button.getBoundingClientRect();
+      return { y: rect.y, height: rect.height, type: button.type };
+    }));
+    expect(actionButtons.length).toBeGreaterThan(1);
+    expect(actionButtons.map(button => button.type), 'row actions must not submit an enclosing form').toEqual(actionButtons.map(() => 'button'));
+    expect(Math.min(...actionButtons.map(button => button.height)), 'shared controls meet the 44px minimum').toBeGreaterThanOrEqual(44);
+    expect(Math.max(...actionButtons.map(button => button.height)) - Math.min(...actionButtons.map(button => button.height))).toBeLessThan(1);
+    expect(Math.max(...actionButtons.map(button => button.y)) - Math.min(...actionButtons.map(button => button.y))).toBeLessThan(2);
 
-  const completionBox = await completion.boundingBox();
-  expect(completionBox).not.toBeNull();
-  const detailsBox = await detailsSlot.boundingBox();
-  expect(detailsBox).not.toBeNull();
-  expect(await detailsSlot.evaluate(element => getComputedStyle(element).gridColumn), 'ActionRow details slot spans both grid columns').toBe('1 / -1');
-  expect(detailsBox!.y, 'completion controls sit below the task title and actions').toBeGreaterThan(mainBox!.y + mainBox!.height - 1);
-  expect(detailsBox!.x).toBeGreaterThanOrEqual((await item.boundingBox())!.x);
-  expect(detailsBox!.x + detailsBox!.width).toBeLessThanOrEqual((await item.boundingBox())!.x + (await item.boundingBox())!.width + 1);
-  expect(businessWrites, 'the approved demo keeps planned-work changes in memory').toEqual([]);
+    const completionBox = await completion.boundingBox();
+    expect(completionBox).not.toBeNull();
+    const detailsBox = await detailsSlot.boundingBox();
+    expect(detailsBox).not.toBeNull();
+    expect(await detailsSlot.evaluate(element => getComputedStyle(element).gridColumn), 'ActionRow details slot spans both grid columns').toBe('1 / -1');
+    expect(detailsBox!.y, 'completion controls sit below the task title and actions').toBeGreaterThan(mainBox!.y + mainBox!.height - 1);
+    expect(detailsBox!.x).toBeGreaterThanOrEqual((await item.boundingBox())!.x);
+    expect(detailsBox!.x + detailsBox!.width).toBeLessThanOrEqual((await item.boundingBox())!.x + (await item.boundingBox())!.width + 1);
+  }
+  page.once('dialog', dialog => dialog.accept());
+  await completion.getByRole('button', { name: '완료 처리', exact: true }).click();
+  const completedItem = page.locator('.planned-item').filter({ hasText: title });
+  await expect(completedItem.locator('.planned-item-status')).toContainText('완료');
+  page.once('dialog', dialog => dialog.accept());
+  await completedItem.getByRole('button', { name: '삭제', exact: true }).click();
+  await expect(page.locator('.planned-item').filter({ hasText: title })).toHaveCount(0);
+  expect(businessWrites, 'create, completion and hard delete use only the planned-work API').toEqual([
+    'POST /api/planned-works',
+    expect.stringMatching(/^POST \/api\/planned-works\/.+\/complete$/),
+    expect.stringMatching(/^DELETE \/api\/planned-works\/.+$/)
+  ]);
+});
+
+test('planned-maintenance UI: changing the day asks before discarding an edit', async ({ page }) => {
+  await apiLogin(page, 'team-wireless');
+  await page.goto('/requests?view=planned-maintenance');
+  const title = `날짜 이동 초안 검사 ${randomUUID()}`;
+  await page.getByLabel('작업 제목', { exact: true }).fill(title);
+  await page.getByRole('button', { name: '작업 추가', exact: true }).click();
+  const item = page.locator('.planned-item').filter({ hasText: title });
+  await expect(item).toBeVisible();
+  await item.getByRole('button', { name: '수정', exact: true }).click();
+  const editTitle = page.locator('.planned-edit').getByLabel('작업 제목', { exact: true });
+  await editTitle.fill(`${title} 수정 중`);
+  const selectedDate = page.locator('.planned-date-panel input[type="date"]');
+  const originalDate = await selectedDate.inputValue();
+
+  page.once('dialog', dialog => dialog.dismiss());
+  await page.getByRole('button', { name: '다음 날짜', exact: true }).click();
+  await expect(selectedDate).toHaveValue(originalDate);
+  await expect(editTitle).toHaveValue(`${title} 수정 중`);
+
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: '다음 날짜', exact: true }).click();
+  await expect(selectedDate).not.toHaveValue(originalDate);
+  await expect(page.locator('.planned-edit')).toHaveCount(0);
+  const remainingItem = page.locator('.planned-item').filter({ hasText: title });
+  await expect(remainingItem).toBeVisible();
+  page.once('dialog', dialog => dialog.accept());
+  await remainingItem.getByRole('button', { name: '삭제', exact: true }).click();
+  await expect(page.locator('.planned-item').filter({ hasText: title })).toHaveCount(0);
+});
+
+test('planned-maintenance UI: retry after SAVE_FAILED survives reload and another tab', async ({ page, context }) => {
+  const operationIds: string[] = [];
+  const secondOperationIds: string[] = [];
+  let hideFirstResult = true;
+  let hideSecondResult = true;
+  let releaseFirstRequest!: () => void;
+  let markFirstRequestStarted!: () => void;
+  const firstRequestStarted = new Promise<void>(resolve => { markFirstRequestStarted = resolve; });
+  const firstRequestGate = new Promise<void>(resolve => { releaseFirstRequest = resolve; });
+  await apiLogin(page, 'team-wireless');
+  await page.route('**/api/planned-works', async route => {
+    if (route.request().method() === 'POST') {
+      operationIds.push((route.request().postDataJSON() as { operationId: string }).operationId);
+      if (hideFirstResult) {
+        hideFirstResult = false;
+        markFirstRequestStarted();
+        await firstRequestGate;
+        const committed = await route.fetch();
+        expect(committed.ok(), 'the first request must commit before its response is hidden').toBeTruthy();
+        await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ code: 'SAVE_FAILED', message: '처리를 확인하지 못했습니다. 같은 제출 번호로 다시 확인하세요.' }) });
+        return;
+      }
+    }
+    await route.continue();
+  });
+  await page.goto('/requests?view=planned-maintenance');
+  const secondPage = await context.newPage();
+  await secondPage.route('**/api/planned-works', async route => {
+    if (route.request().method() === 'POST') {
+      secondOperationIds.push((route.request().postDataJSON() as { operationId: string }).operationId);
+      if (hideSecondResult) {
+        hideSecondResult = false;
+        const committed = await route.fetch();
+        expect(committed.ok(), 'the second request must commit before its response is hidden').toBeTruthy();
+        await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ code: 'SAVE_FAILED', message: '처리를 확인하지 못했습니다. 같은 제출 번호로 다시 확인하세요.' }) });
+        return;
+      }
+    }
+    await route.continue();
+  });
+  await secondPage.goto('/requests?view=planned-maintenance');
+  await expect(secondPage.getByLabel('작업 제목', { exact: true })).toHaveValue('');
+  const secondTitle = `다중 탭 저장 검사 ${randomUUID()}`;
+  const title = `저장 재시도 검사 ${randomUUID()}`;
+  const titleInput = page.getByLabel('작업 제목', { exact: true });
+  await titleInput.fill(title);
+  await page.getByRole('button', { name: '작업 추가', exact: true }).click();
+  const selectedDate = page.locator('.planned-date-panel input[type="date"]');
+  await firstRequestStarted;
+  try {
+    await expect(titleInput).toBeDisabled();
+    await expect(selectedDate).toBeDisabled();
+    await expect(page.getByRole('button', { name: '다음 날짜', exact: true })).toBeDisabled();
+  } finally {
+    releaseFirstRequest();
+  }
+  await expect(page.getByRole('alert')).toContainText('같은 제출을 다시 확인하세요.');
+  await expect(titleInput).toHaveValue(title);
+  await expect(titleInput).toBeDisabled();
+  await expect(selectedDate).toBeDisabled();
+  await expect(page.getByRole('button', { name: '다음 날짜', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '전체 작업 현황', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '부서별 작업 현황', exact: true }).click();
+  await expect(page).toHaveURL(/view=planned-maintenance/);
+  await expect(page.getByText('저장 결과를 계획 화면에서 확인한 뒤 이동할 수 있습니다.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '같은 제출 재확인', exact: true })).toBeEnabled();
+  await secondPage.getByLabel('작업 제목', { exact: true }).fill(secondTitle);
+  await secondPage.getByRole('button', { name: '작업 추가', exact: true }).click();
+  await expect(secondPage.getByRole('alert')).toContainText('같은 제출을 다시 확인하세요.');
+  await expect(secondPage.getByLabel('작업 제목', { exact: true })).toHaveValue(secondTitle);
+  await expect(secondPage.getByLabel('작업 제목', { exact: true })).toBeDisabled();
+  const firstStoredPending = await page.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith('bnoc:planned-create:')).map(key => sessionStorage.getItem(key) ?? '').join('\n'));
+  const secondStoredPending = await secondPage.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith('bnoc:planned-create:')).map(key => sessionStorage.getItem(key) ?? '').join('\n'));
+  expect(firstStoredPending).not.toContain(title);
+  expect(secondStoredPending).not.toContain(secondTitle);
+  expect(firstStoredPending).not.toContain('team-wireless');
+  expect(secondStoredPending).not.toContain('team-wireless');
+  await expect.poll(() => page.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith('bnoc:planned-create:')))).toHaveLength(1);
+  await expect.poll(() => secondPage.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith('bnoc:planned-create:')))).toHaveLength(1);
+  expect(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('bnoc:planned-create:')))).toEqual([]);
+  await secondPage.getByRole('button', { name: '같은 제출 재확인', exact: true }).click();
+  await expect(secondPage.locator('.planned-item').filter({ hasText: secondTitle })).toBeVisible();
+  expect(secondOperationIds).toHaveLength(2);
+  expect(secondOperationIds[1]).toBe(secondOperationIds[0]);
+  expect(secondOperationIds[0]).not.toBe(operationIds[0]);
+  await expect.poll(() => secondPage.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith('bnoc:planned-create:')))).toEqual([]);
+  const submittedDate = await selectedDate.inputValue();
+  const firstItemInSecondTab = secondPage.locator('.planned-item').filter({ hasText: title });
+  await expect(firstItemInSecondTab).toBeVisible();
+  secondPage.once('dialog', dialog => dialog.accept());
+  await firstItemInSecondTab.getByRole('button', { name: '삭제', exact: true }).click();
+  await expect(secondPage.locator('.planned-item').filter({ hasText: title })).toHaveCount(0);
+  await page.reload();
+  await expect(titleInput).toHaveValue('');
+  await expect(selectedDate).toHaveValue(submittedDate);
+  await expect(page.getByRole('alert')).toContainText('원래 작업 제목을 다시 입력하면');
+  await expect(page.getByRole('button', { name: '같은 제출 재확인', exact: true })).toBeDisabled();
+  await titleInput.fill(title);
+  await expect(page.getByRole('button', { name: '같은 제출 재확인', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '같은 제출 재확인', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('같은 제출 번호를 다시 쓸 수 없습니다.');
+  expect(operationIds).toHaveLength(2);
+  expect(operationIds[1]).toBe(operationIds[0]);
+  await page.getByRole('button', { name: '최신 목록 조회', exact: true }).click();
+  const latestWorkList = page.getByRole('list', { name: '최신 작업 목록' });
+  await expect(latestWorkList).toBeVisible();
+  await expect(latestWorkList.getByText(title, { exact: true })).toHaveCount(0);
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: '목록 확인 후 새 제출 시작', exact: true }).click();
+  await expect(page.getByRole('button', { name: '작업 추가', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '작업 추가', exact: true }).click();
+  await expect(page.locator('.planned-item').filter({ hasText: title })).toBeVisible();
+  expect(operationIds).toHaveLength(3);
+  expect(operationIds[2]).not.toBe(operationIds[0]);
+  await expect.poll(() => page.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith('bnoc:planned-create:')))).toEqual([]);
+  await page.unroute('**/api/planned-works');
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('.planned-item').filter({ hasText: title }).getByRole('button', { name: '삭제', exact: true }).click();
+  await expect(page.locator('.planned-item').filter({ hasText: title })).toHaveCount(0);
+
+  secondPage.once('dialog', dialog => dialog.accept());
+  await secondPage.locator('.planned-item').filter({ hasText: secondTitle }).getByRole('button', { name: '삭제', exact: true }).click();
+  await expect(secondPage.locator('.planned-item').filter({ hasText: secondTitle })).toHaveCount(0);
+  await secondPage.close();
+});
+
+test('planned-maintenance UI: clears a submission rejected after an account or team change', async ({ page }) => {
+  await apiLogin(page, 'team-wireless');
+  await page.route('**/api/planned-works', async route => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ code: 'OPERATION_NOT_AVAILABLE', message: '현재 계정 또는 작업반에서 확인할 수 없는 제출입니다. 작업 목록을 확인하세요.' }) });
+      return;
+    }
+    await route.continue();
+  });
+  await page.goto('/requests?view=planned-maintenance');
+  await page.getByLabel('작업 제목', { exact: true }).fill(`계정 전환 제출 검사 ${randomUUID()}`);
+  await page.getByRole('button', { name: '작업 추가', exact: true }).click();
+  await expect(page.getByLabel('작업 제목', { exact: true })).toHaveValue('');
+  await expect(page.getByText('현재 계정 또는 작업반에서 확인할 수 없는 제출입니다. 작업 목록을 확인하고 새 작업은 제목을 다시 입력하세요.')).toBeVisible();
+  await expect(page.getByRole('button', { name: '다시 조회', exact: true })).toHaveCount(0);
 });
 
 test('shared DateInput: existing screens use the same native date control without extra calendar buttons', async ({ page }) => {

@@ -24,6 +24,9 @@ data class WorkRecord(
     var assignedPersonRefs:List<String> = emptyList(), val assignedAt:String?=null,
     var resolutionKind:String="open", var resolutionReason:String?=null, var resolvedAt:String?=null,
     var resolvedByActor:String?=null, var replacementWorkNumbers:List<String> = emptyList(), var previousSchedule:String?=null)
+data class PlannedWorkRecord(
+    val id:String, val teamId:String, var title:String, var status:String, var firstWorkDate:String,
+    var completedDate:String?=null, var revision:Long=1, val createdAt:String, var updatedAt:String=createdAt)
 data class Command(val type:String, val operationId:String, val requestNumber:String?=null, val workNumber:String?=null, val expectedRevision:Long?=null, val payload:Map<String,Any?> = emptyMap())
 data class CommandResult(val ok:Boolean=true,val requestNumber:String?=null,val workNumber:String?=null,val publicRef:String?=null,val revision:Long?=null,val state:String?=null,val priority:String?=null,val replayed:Boolean=false)
 class BusinessFailure(val code:String,val fields:Map<String,String>?=null):RuntimeException(code)

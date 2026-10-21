@@ -122,16 +122,46 @@ class QueryService(val db:Database,val workflow:WorkflowService) {
         val all=db.allWorks()
         val valid=all.filter { work -> val r=requests[work.requestNumber]!!;r.status!="취소" && work.resolutionKind=="open" && work.origin=="assigned" && match(work,r) }
         fun counts(works:List<WorkRecord>)=mapOf("total" to works.size,"assigned" to works.size,"completed" to works.count { it.status=="완료" },"remaining" to works.count { it.status!="완료" },"returned" to works.count { it.status=="반환" },"inProgress" to works.count { it.status=="작업 중" })
+        val afterActionWorks=all.filter { work -> val r=requests[work.requestNumber]!!;r.status!="취소" && work.origin=="after-action" && match(work,r) }
+        val requestOnlyFilters=listOf("category","systemType","workType","priority","requestNumber").any { !filter[it].isNullOrBlank() }
+        val selectedStatuses=filter["status"].orEmpty().split(',').filter { it.isNotBlank() }
+        val planned=db.plannedWorks().filter { work ->
+            !requestOnlyFilters && (filter["teamId"].isNullOrBlank() || work.teamId==filter["teamId"]) &&
+                (selectedStatuses.isEmpty() || selectedStatuses.any { state ->
+                    state=="완료" && work.status=="completed" || state=="진행 중" && work.status=="in_progress"
+                })
+        }
+        val plannedInProgress=planned.count { it.status=="in_progress" }
+        val plannedCompleted=planned.count { it.status=="completed" }
+        val assignedCounts=counts(valid)
+        val allCount=valid.size+afterActionWorks.size+planned.size
+        val summaryCounts=assignedCounts+mapOf("afterAction" to afterActionWorks.size,"planned" to planned.size,"plannedInProgress" to plannedInProgress,"plannedCompleted" to plannedCompleted,
+            "all" to allCount,"allCompleted" to (valid.count { it.status=="완료" }+afterActionWorks.size+plannedCompleted),"allRemaining" to (valid.count { it.status!="완료" }+plannedInProgress))
         val bucket=filter["bucket"].orEmpty()
-        if(bucket !in listOf("","assigned","completed","remaining","returned","after-action","unassigned")) reject("VALIDATION")
-        val selected=when(bucket) { "completed" -> valid.filter { it.status=="완료" };"remaining" -> valid.filter { it.status!="완료" };"returned" -> valid.filter { it.status=="반환" };"after-action" -> all.filter { work -> val r=requests[work.requestNumber]!!;r.status!="취소" && work.origin=="after-action" && match(work,r) };else -> valid }
-        val workItems=selected.sortedWith(compareByDescending<WorkRecord> { it.assignedAt?.let { at -> Instant.parse(at) } ?: Instant.EPOCH }.thenByDescending { it.requestNumber.toLong() }.thenByDescending { it.number.substringAfterLast('-').toInt() }).map { work ->
+        if(bucket !in listOf("","assigned","completed","remaining","returned","after-action","planned","all","unassigned")) reject("VALIDATION")
+        val selectedAssigned=when(bucket) { "completed" -> valid.filter { it.status=="완료" };"remaining" -> valid.filter { it.status!="완료" };"returned" -> valid.filter { it.status=="반환" };else -> valid }
+        fun workMap(work:WorkRecord,includeSource:Boolean=false):Map<String,Any?> {
             val r=requests[work.requestNumber]!!
-            mapOf("workNumber" to work.number,"requestNumber" to r.number,"department" to work.teamId,"teamId" to work.teamId,"category" to r.category,"workType" to (r.subcategories["workType"] ?: r.subcategories["meetingType"]),"status" to work.status,"priority" to r.priority,"schedule" to work.schedule,"canOpenDetail" to workflow.visible(actor,r))
+            val result=mapOf<String,Any?>("workNumber" to work.number,"requestNumber" to r.number,"department" to work.teamId,"teamId" to work.teamId,"category" to r.category,"workType" to (r.subcategories["workType"] ?: r.subcategories["meetingType"]),"status" to work.status,"priority" to r.priority,"schedule" to work.schedule,"canOpenDetail" to workflow.visible(actor,r))
+            return if(includeSource) result+mapOf("source" to if(work.origin=="after-action") "after-action" else "assigned") else result
+        }
+        val plannedRows=planned.sortedWith(compareByDescending<PlannedWorkRecord> { it.updatedAt }.thenBy { it.id }).map { work ->
+            mapOf<String,Any?>("source" to "planned","plannedWorkId" to work.id,"id" to work.id,"department" to work.teamId,"teamId" to work.teamId,"title" to work.title,"status" to if(work.status=="in_progress") "진행 중" else "완료","firstWorkDate" to work.firstWorkDate,"completedDate" to work.completedDate)
+        }
+        val workRows=when(bucket) {
+            "after-action" -> afterActionWorks.sortedWith(compareByDescending<WorkRecord> { it.assignedAt?.let { at -> Instant.parse(at) } ?: Instant.EPOCH }.thenByDescending { it.number }).map { workMap(it) }
+            "planned" -> plannedRows
+            "all" -> selectedAssigned.sortedWith(compareByDescending<WorkRecord> { it.assignedAt?.let { at -> Instant.parse(at) } ?: Instant.EPOCH }.thenByDescending { it.number }).map { workMap(it,true) }+
+                afterActionWorks.sortedWith(compareByDescending<WorkRecord> { it.assignedAt?.let { at -> Instant.parse(at) } ?: Instant.EPOCH }.thenByDescending { it.number }).map { workMap(it,true) }+plannedRows
+            else -> selectedAssigned.sortedWith(compareByDescending<WorkRecord> { it.assignedAt?.let { at -> Instant.parse(at) } ?: Instant.EPOCH }.thenByDescending { it.requestNumber.toLong() }.thenByDescending { it.number.substringAfterLast('-').toInt() }).map { workMap(it) }
         }
         val unassignedRows=requests.values.filter { r -> r.status in listOf("대기","문서 대기") && all.none { it.requestNumber==r.number && it.origin=="assigned" && it.resolutionKind=="open" } && (filter["category"].isNullOrBlank() || filter["category"]==r.category) && (filter["systemType"].isNullOrBlank() || r.subcategories["systemType"]==filter["systemType"]) && (filter["workType"].isNullOrBlank() || filter["workType"]==(r.subcategories["workType"] ?: r.subcategories["meetingType"])) && (filter["priority"].isNullOrBlank() || if(filter["priority"]=="unclassified") r.priority==null else filter["priority"]==r.priority) && filter["teamId"].isNullOrBlank() && filter["status"].isNullOrBlank() && (filter["requestNumber"].isNullOrBlank() || r.number==filter["requestNumber"]) }
-        val afterAction=all.count { work -> val r=requests[work.requestNumber]!!;r.status!="취소" && work.origin=="after-action" && match(work,r) }
-        val items=if(bucket=="unassigned") unassignedRows.sortedWith(compareByDescending<RequestRecord> { Instant.parse(it.registeredAt) }.thenByDescending { it.number.toLong() }).map { r -> mapOf("requestNumber" to r.number,"category" to r.category,"status" to r.status,"priority" to r.priority,"canOpenDetail" to workflow.visible(actor,r)) } else workItems
-        return mapOf("items" to items,"total" to items.size,"counts" to counts(valid),"byDepartment" to db.teams.map { team -> mapOf("department" to team)+counts(valid.filter { it.teamId==team }) },"unassignedRequests" to unassignedRows.size,"afterActionCompleted" to afterAction,"basis" to "현재 상태 기준")
+        val unassignedItems=unassignedRows.sortedWith(compareByDescending<RequestRecord> { Instant.parse(it.registeredAt) }.thenByDescending { it.number.toLong() }).map { r -> mapOf("requestNumber" to r.number,"category" to r.category,"status" to r.status,"priority" to r.priority,"canOpenDetail" to workflow.visible(actor,r)) }
+        val items=if(bucket=="unassigned") unassignedItems else workRows
+        val byDepartment=db.teams.map { team ->
+            val teamAssigned=valid.filter { it.teamId==team };val teamAfter=afterActionWorks.count { it.teamId==team };val teamPlanned=planned.filter { it.teamId==team }
+            mapOf("department" to team)+counts(teamAssigned)+mapOf("afterAction" to teamAfter,"planned" to teamPlanned.size,"plannedInProgress" to teamPlanned.count { it.status=="in_progress" },"plannedCompleted" to teamPlanned.count { it.status=="completed" },"all" to (teamAssigned.size+teamAfter+teamPlanned.size),"allCompleted" to (teamAssigned.count { it.status=="완료" }+teamAfter+teamPlanned.count { it.status=="completed" }),"allRemaining" to (teamAssigned.count { it.status!="완료" }+teamPlanned.count { it.status=="in_progress" }))
+        }
+        return mapOf("items" to items,"total" to items.size,"counts" to summaryCounts,"byDepartment" to byDepartment,"unassignedRequests" to unassignedRows.size,"afterActionCompleted" to afterActionWorks.size,"basis" to "현재 상태 기준")
     }
 }

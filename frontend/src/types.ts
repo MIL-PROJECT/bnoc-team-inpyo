@@ -1,7 +1,7 @@
 export type Role = 'requester' | 'bnoc' | 'team' | 'admin';
 export type RequestStatus = '대기' | '문서 대기' | '배정' | '작업 중' | '완료' | '취소';
 export type WorkItemStatus = '배정' | '작업 중' | '완료' | '반환';
-export type ErrorCode = 'VALIDATION' | 'FORBIDDEN' | 'INVALID_STATE' | 'NOT_FOUND' | 'CONFLICT' | 'DUPLICATE_ACTION' | 'SAVE_FAILED' | 'UNAUTHENTICATED' | 'NETWORK' | 'INVALID_RESPONSE' | 'PROCESSING';
+export type ErrorCode = 'VALIDATION' | 'FORBIDDEN' | 'INVALID_STATE' | 'NOT_FOUND' | 'CONFLICT' | 'DUPLICATE_ACTION' | 'OPERATION_NOT_AVAILABLE' | 'SAVE_FAILED' | 'UNAUTHENTICATED' | 'NETWORK' | 'INVALID_RESPONSE' | 'PROCESSING';
 export interface Actor { id: string; role: Role; displayName: string; department: string; rank?: string; contactId?: string; teamId?: string; departmentManager?: boolean; accessAdmin?: boolean }
 export interface SessionContext { activeActorId: string }
 export interface MaintenanceTarget { department: string; rank: string; name: string; phone: string }
@@ -54,8 +54,10 @@ export interface OverviewCounts { total: number; byStatus: Record<RequestStatus,
 export interface ServerSession { actor: Actor; teams: string[]; departments: string[]; csrfToken: string; sourceMode?: string; integrationMode?: string }
 export interface RosterPerson { personRef: string; displayName: string; active?: boolean }
 export interface Roster { department: string; revision: number; entries: RosterPerson[] }
-export interface SharedWork { workNumber: string; requestNumber: string; teamId: string; department?: string; category: string; workType?: string; status: WorkItemStatus; priority?: Priority; schedule?: string; scheduledAt?: string; canOpenDetail?: boolean; origin?: string }
-export interface WorkOverview { counts: Record<string, number>; byDepartment: { department: string; assigned: number; completed: number; remaining: number; returned: number; inProgress?: number }[]; items: SharedWork[]; total: number; page?: number; size?: number; queriedAt?: string; unassignedRequests?: number | RequestSummary[]; afterActionCompleted?: number | SharedWork[] }
+export interface PlannedWork { id: string; plannedWorkId?: string; teamId: string; department?: string; title: string; status: '진행 중' | '완료'; firstWorkDate: string; completedDate?: string; revision: number; updatedAt?: string }
+export interface PlannedWorkList { workDate: string; inProgress: PlannedWork[]; completed: PlannedWork[] }
+export interface SharedWork { workNumber?: string; requestNumber?: string; plannedWorkId?: string; id?: string; source?: 'assigned' | 'after-action' | 'planned'; title?: string; firstWorkDate?: string; completedDate?: string; teamId?: string; department?: string; category?: string; workType?: string; status: WorkItemStatus | '진행 중'; priority?: Priority; schedule?: string; scheduledAt?: string; canOpenDetail?: boolean; origin?: string }
+export interface WorkOverview { counts: Record<string, number>; byDepartment: { department: string; assigned: number; completed: number; remaining: number; returned: number; inProgress?: number; afterAction?: number; planned?: number; plannedInProgress?: number; plannedCompleted?: number; all?: number; allCompleted?: number; allRemaining?: number }[]; items: SharedWork[]; total: number; page?: number; size?: number; queriedAt?: string; unassignedRequests?: number | RequestSummary[]; afterActionCompleted?: number | SharedWork[] }
 export interface PersonnelEntry extends RosterPerson { status: 'leave' | 'trip' | 'available' | null }
 export interface PersonnelDay { date: string; departments: { department: string; revision: number; submitted: boolean; entries: PersonnelEntry[] }[] }
 export interface NightDutyDay { date: string; departments: { department: string; revision: number; submitted: boolean; entries: RosterPerson[] }[] }

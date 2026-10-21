@@ -15,7 +15,7 @@ import java.time.ZoneId
 
 @RestController
 @RequestMapping("/api")
-class ApiController(val auth:AuthService,val db:Database,val workflow:WorkflowService,val query:QueryService,val files:AttachmentService,val situation:SituationService) {
+class ApiController(val auth:AuthService,val db:Database,val workflow:WorkflowService,val query:QueryService,val files:AttachmentService,val situation:SituationService,val plannedWorks:PlannedWorkService) {
     private fun actor(request:HttpServletRequest)=auth.actor(request) ?: reject("UNAUTHENTICATED")
     private fun envelope(data:Any?):Map<String,Any?> = mapOf("data" to data,"queriedAt" to Instant.now().toString())
     private fun page(params:Map<String,String>,items:List<Any?>):Map<String,Any?> {
@@ -46,6 +46,39 @@ class ApiController(val auth:AuthService,val db:Database,val workflow:WorkflowSe
         val data=query.shared(actor(request),filters(request,params))
         @Suppress("UNCHECKED_CAST") val pagination=page(params,data["items"] as List<Any?>)
         return pageEnvelope(data+pagination)
+    }
+    @GetMapping("/planned-works") fun plannedWorkList(request:HttpServletRequest,@RequestParam params:Map<String,String>):Map<String,Any?> {
+        if(params.keys.any { it!="workDate" }) reject("VALIDATION")
+        val workDate=params["workDate"] ?: LocalDate.now(ZoneId.of("Asia/Seoul")).toString()
+        return envelope(plannedWorks.list(actor(request),workDate))
+    }
+    private fun plannedBody(input:Map<String,Any?>,allowed:Set<String>) {
+        if(input.keys.any { it !in allowed }) reject("VALIDATION")
+    }
+    private fun plannedText(input:Map<String,Any?>,key:String,max:Int,required:Boolean=true):String=text(input,key,max,required)
+    private fun plannedRevision(input:Map<String,Any?>):Long {
+        val number=input["revision"] as? Number ?: reject("VALIDATION",mapOf("revision" to "버전이 필요합니다."))
+        if(number.toDouble()!=number.toLong().toDouble() || number.toLong()<=0) reject("VALIDATION",mapOf("revision" to "버전을 확인하세요."))
+        return number.toLong()
+    }
+    private fun plannedCommandResult(result:Map<String,Any?>)=mapOf("plannedWork" to result,"replayed" to (result["replayed"]==true))
+    @PostMapping("/planned-works") fun createPlannedWork(request:HttpServletRequest,@RequestBody input:Map<String,Any?>):Map<String,Any?> {
+        plannedBody(input,setOf("operationId","title","firstWorkDate"))
+        return envelope(plannedCommandResult(plannedWorks.create(actor(request),plannedText(input,"title",160),plannedText(input,"firstWorkDate",10),plannedText(input,"operationId",128))))
+    }
+    @PatchMapping("/planned-works/{id}") fun updatePlannedWork(request:HttpServletRequest,@PathVariable id:String,@RequestBody input:Map<String,Any?>):Map<String,Any?> {
+        plannedBody(input,setOf("operationId","revision","title","firstWorkDate"))
+        val title=if(input.containsKey("title")) plannedText(input,"title",160) else null
+        val firstDate=if(input.containsKey("firstWorkDate")) plannedText(input,"firstWorkDate",10) else null
+        return envelope(plannedCommandResult(plannedWorks.update(actor(request),id,plannedRevision(input),title,firstDate,plannedText(input,"operationId",128))))
+    }
+    @PostMapping("/planned-works/{id}/complete") fun completePlannedWork(request:HttpServletRequest,@PathVariable id:String,@RequestBody input:Map<String,Any?>):Map<String,Any?> {
+        plannedBody(input,setOf("operationId","revision","completedDate"))
+        return envelope(plannedCommandResult(plannedWorks.complete(actor(request),id,plannedRevision(input),plannedText(input,"completedDate",10),plannedText(input,"operationId",128))))
+    }
+    @DeleteMapping("/planned-works/{id}") fun deletePlannedWork(request:HttpServletRequest,@PathVariable id:String,@RequestHeader("If-Match",required=false) ifMatch:String?):Map<String,Any?> {
+        val revision=ifMatch?.trim()?.removeSurrounding("\"")?.toLongOrNull()?.takeIf { it>0 } ?: reject("VALIDATION",mapOf("If-Match" to "버전이 필요합니다."))
+        return envelope(plannedWorks.delete(actor(request),id,revision))
     }
     @GetMapping("/personnel-roster","/roster") @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
     fun roster(request:HttpServletRequest,@RequestParam(required=false) department:String?)=envelope(workflow.operations.listRoster(actor(request),department ?: actor(request).department))

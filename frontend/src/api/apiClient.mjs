@@ -8,7 +8,7 @@ export class ApiClient {
   constructor(fetcher = (...args) => globalThis.fetch(...args)) { this.fetcher = fetcher; this.csrfToken = ''; this.onUnauthenticated = null; }
   async send(path, options = {}) {
     const method = options.method ?? 'GET';
-    const command = path === '/commands' && method === 'POST';
+    const command = (path === '/commands' && method === 'POST') || (path.startsWith('/planned-works') && ['POST', 'PATCH'].includes(method));
     const unknownSaveMessage = '저장 결과를 확인하지 못했습니다. 입력은 유지됩니다. 같은 제출로 다시 확인하세요.';
     const headers = { Accept: 'application/json', ...(options.headers ?? {}) };
     if (method !== 'GET' && method !== 'HEAD') headers['X-CSRF-Token'] = this.csrfToken;
@@ -55,6 +55,11 @@ export class ApiClient {
   getTeamSchedule(range = {}, signal) { return this.query('/schedule' + queryString(range), signal, ['entries','unscheduled']); }
   getBnocOverview(criteria = {}, signal) { return this.query('/overview' + queryString(criteria), signal, ['list']); }
   getWorkOverview(criteria = {}, signal) { return this.query('/work-overview' + queryString(criteria), signal, ['items','byDepartment']); }
+  getPlannedWorks(workDate, signal) { return this.query('/planned-works' + queryString({ workDate }), signal, ['inProgress','completed']); }
+  async createPlannedWork(input) { return (await this.send('/planned-works', { method: 'POST', body: JSON.stringify(input) })).data; }
+  async updatePlannedWork(id, input) { return (await this.send('/planned-works/' + encodeURIComponent(id), { method: 'PATCH', body: JSON.stringify(input) })).data; }
+  async completePlannedWork(id, input) { return (await this.send('/planned-works/' + encodeURIComponent(id) + '/complete', { method: 'POST', body: JSON.stringify(input) })).data; }
+  async deletePlannedWork(id, revision) { return (await this.send('/planned-works/' + encodeURIComponent(id), { method: 'DELETE', headers: { 'If-Match': `"${revision}"` } })).data; }
   getRoster(department, signal) { return this.query('/personnel-roster' + queryString({ department }), signal, ['entries']); }
   getPersonnel(criteria = {}, signal) { return this.query('/personnel' + queryString(criteria), signal, ['departments']); }
   getNightDuty(criteria = {}, signal) { return this.query('/night-duty' + queryString(criteria), signal, ['departments']); }

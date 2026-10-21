@@ -567,6 +567,77 @@ contract('request and work overview units differ and support types remain search
   }
 });
 
+contract('planned works persist by team, continue across dates, and count once beside existing work', [3, 23, 28, 30, 36], async () => {
+  const localDate = (offset = 0) => {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(part => [part.type, part.value]));
+    const date = new Date(`${parts.year}-${parts.month}-${parts.day}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + offset);
+    return date.toISOString().slice(0, 10);
+  };
+  const yesterday = localDate(-1), today = localDate(), tomorrow = localDate(1);
+  failure(await clients.requester.raw('GET', `/api/planned-works?workDate=${today}`), 403, 'FORBIDDEN');
+  const before = (await clients.requester.read('/api/work-overview?bucket=all&size=100')).data.counts;
+  const operationId = operation();
+  const createBody = { operationId, title: `장기 점검 ${runId}`, firstWorkDate: yesterday };
+  const createdResponse = await clients.wireless.raw('POST', '/api/planned-works', createBody);
+  assert.equal(createdResponse.status, 200, createdResponse.json?.code);
+  const created = createdResponse.json.data.plannedWork;
+  assert.equal(created.teamId, teams[0]); assert.equal(created.title, createBody.title);
+  assert.equal(created.status, '진행 중'); assert.equal(created.firstWorkDate, yesterday); assert.equal(created.revision, 1);
+  const replay = await clients.wireless.raw('POST', '/api/planned-works', createBody);
+  assert.equal(replay.status, 200); assert.equal(replay.json.data.replayed, true);
+  failure(await clients.wireless.raw('POST', '/api/planned-works', { ...createBody, title: '다른 내용' }), 409, 'DUPLICATE_ACTION');
+  const foreignReplay = await clients.wired.raw('POST', '/api/planned-works', createBody);
+  failure(foreignReplay, 409, 'OPERATION_NOT_AVAILABLE');
+  assert.equal(JSON.stringify(foreignReplay.json).includes(createBody.title), false, 'the error response must not reveal the other account\'s task title');
+  assert.equal((await clients.wired.read(`/api/planned-works?workDate=${today}`)).data.inProgress.some(item => item.title === createBody.title), false, 'another account cannot replay the prior result or see its title');
+  const dayOne = (await clients.wireless.read(`/api/planned-works?workDate=${yesterday}`)).data;
+  const dayTwo = (await clients.wireless.read(`/api/planned-works?workDate=${today}`)).data;
+  const futureDay = (await clients.wireless.read(`/api/planned-works?workDate=${tomorrow}`)).data;
+  for (const day of [dayOne, dayTwo, futureDay]) assert.equal(day.inProgress.filter(item => item.id === created.id).length, 1, 'the same work appears once on each selected date');
+  assert.equal((await clients.wired.read(`/api/planned-works?workDate=${today}`)).data.inProgress.filter(item => item.id === created.id).length, 0);
+  const beforeFuture = (await clients.wireless.read(`/api/planned-works?workDate=${yesterday}`)).data;
+  const updatedBody = { operationId: operation(), revision: created.revision, title: created.title, firstWorkDate: today };
+  const updatedResponse = await clients.wireless.raw('PATCH', `/api/planned-works/${created.id}`, updatedBody);
+  assert.equal(updatedResponse.status, 200, updatedResponse.json?.code);
+  const updated = updatedResponse.json.data.plannedWork;
+  assert.equal(updated.revision, 2); assert.equal(updated.firstWorkDate, today);
+  assert.equal((await clients.wireless.read(`/api/planned-works?workDate=${yesterday}`)).data.inProgress.filter(item => item.id === created.id).length, 0);
+  assert.equal((await clients.wireless.read(`/api/planned-works?workDate=${today}`)).data.inProgress.filter(item => item.id === created.id).length, 1);
+  assert.ok(beforeFuture.inProgress.some(item => item.id === created.id));
+  failure(await clients.wireless.raw('PATCH', `/api/planned-works/${created.id}`, { operationId: operation(), revision: created.revision, title: '오래된 수정' }), 409, 'CONFLICT');
+  failure(await clients.wired.raw('PATCH', `/api/planned-works/${created.id}`, { operationId: operation(), revision: updated.revision, title: '타 작업반 수정' }), 404, 'NOT_FOUND');
+  const otherRole = await clients.requester.raw('POST', '/api/planned-works', { operationId: operation(), title: '권한 없는 생성', firstWorkDate: today });
+  failure(otherRole, 403, 'FORBIDDEN');
+  const allBeforeComplete = (await clients.requester.read('/api/work-overview?bucket=all&size=100')).data;
+  assert.equal(allBeforeComplete.counts.all, before.all + 1);
+  assert.equal(allBeforeComplete.counts.plannedInProgress, before.plannedInProgress + 1);
+  const plannedBeforeComplete = (await clients.requester.read('/api/work-overview?bucket=planned&size=100')).data;
+  assert.equal(plannedBeforeComplete.items.filter(item => item.source === 'planned' && item.plannedWorkId === created.id).length, 1);
+  const completedResponse = await clients.wireless.raw('POST', `/api/planned-works/${created.id}/complete`, { operationId: operation(), revision: updated.revision, completedDate: today });
+  assert.equal(completedResponse.status, 200, completedResponse.json?.code);
+  assert.equal(completedResponse.json.data.plannedWork.status, '완료');
+  failure(await clients.wireless.raw('POST', `/api/planned-works/${created.id}/complete`, { operationId: operation(), revision: completedResponse.json.data.plannedWork.revision, completedDate: tomorrow }), 400, 'VALIDATION');
+  const afterComplete = (await clients.wireless.read(`/api/planned-works?workDate=${yesterday}`)).data;
+  assert.equal(afterComplete.inProgress.filter(item => item.id === created.id).length, 0);
+  assert.ok(afterComplete.completed.some(item => item.id === created.id));
+  const overview = (await clients.requester.read('/api/work-overview?bucket=planned&size=100')).data;
+  const shared = overview.items.find(item => item.plannedWorkId === created.id);
+  assert.ok(shared); assert.equal(shared.title, createBody.title); assert.equal(shared.status, '완료');
+  const allAfterComplete = (await clients.requester.read('/api/work-overview?bucket=all&size=100')).data;
+  assert.equal(allAfterComplete.counts.all, before.all + 1);
+  assert.equal(allAfterComplete.counts.plannedCompleted, before.plannedCompleted + 1);
+  const plannedAfterComplete = (await clients.requester.read('/api/work-overview?bucket=planned&size=100')).data;
+  assert.equal(plannedAfterComplete.items.filter(item => item.plannedWorkId === created.id).length, 1);
+  const deleted = await clients.wireless.raw('DELETE', `/api/planned-works/${created.id}`, undefined, { headers: { 'If-Match': `\"${completedResponse.json.data.plannedWork.revision}\"` } });
+  assert.equal(deleted.status, 200, deleted.json?.code);
+  assert.equal((await clients.wireless.read(`/api/planned-works?workDate=${today}`)).data.completed.filter(item => item.id === created.id).length, 0);
+  failure(await clients.wireless.raw('POST', '/api/planned-works', createBody), 409, 'DUPLICATE_ACTION');
+  const afterDelete = (await clients.requester.read('/api/work-overview?bucket=all&size=100')).data;
+  assert.equal(afterDelete.counts.all, before.all);
+  noPrivateFields(shared);
+});
+
 contract('schedule uses real team schedule, start inclusive/end exclusive, and a separate unscheduled list', [5, 10, 12, 21], async () => {
   failure(await clients.requester.raw('GET', '/api/schedule?from=2026-10-20&to=2026-10-21'), 403, 'FORBIDDEN');
   let request = await assign(await create(clients.requester, { scheduledAt: '2026-10-20T01:00:00Z' }), [teams[0], teams[1]]);
