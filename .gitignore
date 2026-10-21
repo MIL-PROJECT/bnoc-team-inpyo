@@ -6,7 +6,7 @@ dist/server/
 dist/client/
 dist/.openai/
 runtime/*.txt
-runtime/evidence/*-focus-outside.png
+runtime/evidence/
 .codex-log/
 
 frontend/node_modules/
@@ -18,7 +18,6 @@ frontend/test-results/
 backend/.gradle/
 backend/build/
 runtime/data/
-runtime/evidence/**/trace.zip
 
 runtime/logs/*
 runtime/backups/*

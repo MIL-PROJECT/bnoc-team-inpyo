@@ -15,6 +15,7 @@ import { PersonnelView, NightDutyView, RosterView } from '../screens/PersonnelVi
 import { SituationView } from '../screens/SituationView';
 import { NoticeList, NoticeDetail, NoticeEditor } from '../screens/NoticeViews';
 import { AccessManagementView } from '../screens/AccessManagementView';
+import { PlannedMaintenanceView, type PlannedWorkDemoItem } from '../screens/PlannedMaintenanceView';
 import { LoginPanel } from '../screens/LoginPanel';
 import { displayTime } from './dateTime.mjs';
 import { cpconStageValue } from './situationStage';
@@ -22,7 +23,9 @@ const api = new ApiClient();
 type GlobalContext={ gps?:SituationSnapshot;cpcon?:SituationSnapshot;situationError:boolean;unseen?:number;unseenError:boolean;returned?:number;returnedError:boolean };
 const emptyGlobalContext:GlobalContext={situationError:false,unseenError:false,returnedError:false};
 const situationStateLabel:Record<string,string>={not_collected:'미수집',ok:'정상',failed:'갱신 실패',stale:'유효시간 초과',unconfigured:'미설정'};
+const routeUrl = (path: string) => path === 'planned-maintenance' ? '/requests?view=planned-maintenance' : '/' + path;
 const routeFromPath = () => {
+  if (new URLSearchParams(window.location.search).get('view') === 'planned-maintenance') return 'planned-maintenance';
   try { const path = decodeURIComponent(window.location.pathname).replace(/^\//,'').replace(/\/$/,''); return !path || path === 'login' ? 'requests' : path; }
   catch { return 'not-found'; }
 };
@@ -30,6 +33,7 @@ export function App() {
   const [session,setSession] = useState<ServerSession | null>(null), [loading,setLoading] = useState(true), [sessionError,setSessionError] = useState('');
   const [expired,setExpired] = useState(false), [route,setRoute] = useState(routeFromPath), [revision,setRevision] = useState(0), [notice,setNotice] = useState('');
   const [globalContext,setGlobalContext]=useState<GlobalContext>(emptyGlobalContext);
+  const [plannedDemoItems,setPlannedDemoItems]=useState<PlannedWorkDemoItem[]>([]);
   const [routeReceipt,setRouteReceipt] = useState<{path:string;message:string} | null>(null);
   const sessionRef = useRef<ServerSession | null>(null), expiredRef = useRef(false), dirty = useRef(new Set<string>()), routeRef = useRef(route);
   const expiryDialog = useRef<HTMLDialogElement | null>(null);
@@ -58,7 +62,7 @@ export function App() {
   useEffect(() => {
     const pop = () => {
       const next = routeFromPath();
-      if (dirty.current.size > 0 && !window.confirm('저장하지 않은 입력이 있습니다. 페이지를 이동할까요?')) { window.history.pushState({},'', '/' + routeRef.current); return; }
+      if (dirty.current.size > 0 && !window.confirm('저장하지 않은 입력이 있습니다. 페이지를 이동할까요?')) { window.history.pushState({},'', routeUrl(routeRef.current)); return; }
       routeRef.current = next; setRoute(next); setNotice(''); setRouteReceipt(null);
     };
     const leave = (event: BeforeUnloadEvent) => { if (dirty.current.size > 0) { event.preventDefault(); event.returnValue = ''; } };
@@ -69,7 +73,7 @@ export function App() {
   const go = useCallback((path: string, saved = false) => {
     if (path === routeRef.current) return;
     if (!saved && dirty.current.size > 0 && !window.confirm('저장하지 않은 입력이 있습니다. 페이지를 이동할까요?')) return;
-    window.history.pushState({},'', '/' + path); routeRef.current = path; setRoute(path); setNotice(''); setRouteReceipt(null); window.scrollTo(0,0);
+    window.history.pushState({},'', routeUrl(path)); routeRef.current = path; setRoute(path); setNotice(''); setRouteReceipt(null); window.scrollTo(0,0);
   }, []);
   const openSaved = (path:string,message?:string) => { go(path,true); setRouteReceipt(message ? {path,message} : null); };
   const run: RunCommand = useCallback(async (type,payload,target,expectedRevision,operationId) => {
@@ -122,6 +126,7 @@ export function App() {
     ...(actor.role === 'requester' || actor.role === 'bnoc' ? [['new',actor.role === 'bnoc' ? '대리 등록' : '작업 신청']] : []),
     ...(actor.role === 'bnoc' ? [['overview','요청 현황(BNOC)']] : []),
     ...(actor.role === 'team' ? [['after-action','선조치 후보고']] : []),
+    ...(actor.role === 'team' ? [['planned-maintenance','계획 정비']] : []),
     ['operations','부서별 작업 현황'],
     ...(actor.role === 'bnoc' || actor.role === 'team' ? [['schedule',actor.role === 'bnoc' ? '정비 일정' : '우리 반 일정']] : []),
     ...(departmentAccess ? [['personnel','병력 현황'],['night-duty','야간 근무'],['roster','부서 명부']] : []),
@@ -137,7 +142,8 @@ export function App() {
   else if (route === 'after-action') content = actor.role === 'team' ? <AfterActionReportForm actor={actor} run={run} upload={upload} onSaved={(number,message) => openSaved('requests/' + encodeURIComponent(number),message)} /> : forbidden;
   else if (route === 'schedule') content = actor.role === 'bnoc' || actor.role === 'team' ? <TeamScheduleView actor={actor} query={api} revision={revision} onOpen={onOpen} /> : forbidden;
   else if (route === 'overview') content = actor.role === 'bnoc' ? <BnocOverviewView query={api} teams={session.teams} revision={revision} onOpen={onOpen} /> : forbidden;
-  else if (route === 'operations') content = <SharedWorkOverview api={api} teams={session.teams} revision={revision} onOpen={onOpen} />;
+  else if (route === 'operations') content = <SharedWorkOverview api={api} teams={session.teams} revision={revision} onOpen={onOpen} plannedDemoItems={plannedDemoItems} />;
+  else if (route === 'planned-maintenance') content = actor.role === 'team' ? <PlannedMaintenanceView department={actor.department} teamId={actor.teamId ?? actor.department} items={plannedDemoItems.filter(item => item.teamId === (actor.teamId ?? actor.department))} onChange={items => setPlannedDemoItems(previous => [...previous.filter(item => item.teamId !== (actor.teamId ?? actor.department)), ...items])} onOpenOverview={() => go('operations')} /> : forbidden;
   else if (route === 'personnel') content = departmentAccess ? <PersonnelView actor={actor} api={api} run={run} revision={revision} /> : forbidden;
   else if (route === 'night-duty') content = departmentAccess ? <NightDutyView actor={actor} api={api} run={run} revision={revision} /> : forbidden;
   else if (route === 'roster') content = departmentAccess ? <RosterView actor={actor} api={api} run={run} departments={session.departments} revision={revision} /> : forbidden;

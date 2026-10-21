@@ -4,6 +4,7 @@ import { priorityLabel } from '../types';
 import { useResource } from '../app/useResource';
 import { ResourceStatus } from './ResourceStatus';
 import { describeConditions, QueryContext } from './QueryContext';
+import { DateInput } from '../ui/DateInput';
 const emptyCriteria = () => ({ requestNumber: '', status: '', category: '', teamId: '', location: '', requesterDeptOrName: '', from: '', to: '' });
 export function RequestListAndSearch({ actor, query, teams, revision = 0, onOpen, onNew }: {
   actor: Actor; query: any; teams: string[]; revision?: number; onOpen: (id: string) => void; onNew: () => void
@@ -49,8 +50,8 @@ export function RequestListAndSearch({ actor, query, teams, revision = 0, onOpen
       <label className="field"><span>요청 유형</span><select value={criteria.category} onChange={e => set('category',e.target.value)}><option value="">전체</option><option>장비/체계</option><option>회의 지원</option></select></label>
       <label className="field"><span>위치</span><input value={criteria.location} onChange={e => set('location',e.target.value)} /></label>
       {actor.role === 'bnoc' && <label className="field"><span>요청자 소속·이름</span><input value={criteria.requesterDeptOrName} onChange={e => set('requesterDeptOrName',e.target.value)} /></label>}
-      <label className="field"><span>시작일</span><input type="date" value={criteria.from} onChange={e => set('from',e.target.value)} /></label>
-      <label className="field"><span>종료일</span><input type="date" value={criteria.to} onChange={e => set('to',e.target.value)} /></label>
+      <label className="field"><span>시작일</span><DateInput value={criteria.from} onChange={e => set('from',e.target.value)} /></label>
+      <label className="field"><span>종료일</span><DateInput value={criteria.to} onChange={e => set('to',e.target.value)} /></label>
     </div></details><div className="actions"><button className="primary" type="submit">검색</button><button type="button" onClick={reset}>초기화</button></div></form>
     <ResourceStatus loading={result.loading} error={result.error} retry={result.reload} />
     <QueryContext success={result.success} loading={result.loading} error={result.error} draftChanged={JSON.stringify(criteria) !== JSON.stringify(applied)} />

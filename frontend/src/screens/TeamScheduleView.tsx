@@ -3,6 +3,7 @@ import type { Actor, ScheduleEntry } from '../types';
 import { ApiClient } from '../api/apiClient.mjs';
 import { useResource } from '../app/useResource';
 import { calendarRange, displayTime, moveDate, movePeriod, seoulDate } from '../app/dateTime.mjs';
+import { DateInput } from '../ui/DateInput';
 import { ResourceStatus } from './ResourceStatus';
 import { QueryContext } from './QueryContext';
 export function TeamScheduleView({ actor, query, revision = 0, onOpen }: { actor: Actor; query: ApiClient; revision?: number; onOpen: (id:string) => void }) {
@@ -16,7 +17,7 @@ export function TeamScheduleView({ actor, query, revision = 0, onOpen }: { actor
   for (let cursor = displayed.range.firstDate; cursor <= displayed.range.lastDate; cursor = moveDate(cursor, 1)) dates.push(cursor);
   const card = (item: ScheduleEntry) => <article className="calendar-item" key={item.workNumber}><button className="link" onClick={() => onOpen(item.request.requestNumber)}>{item.workNumber}</button><small>{item.teamId} · {item.status}</small>{item.scheduledAt && <small>{displayTime(item.scheduledAt)}</small>}</article>;
   return <><div className="page-head"><h1>{actor.role === 'bnoc' ? '정비 일정' : '우리 반 일정'}</h1><button onClick={result.reload}>새로고침</button></div>
-    <div className="row-head"><div className="tabs" aria-label="일정 보기">{([['day','일'],['week','주'],['month','월']] as const).map(([value,label]) => <button key={value} aria-pressed={mode === value} onClick={() => setMode(value)}>{label}</button>)}</div><div className="actions"><button aria-label="이전 기간" onClick={() => setDate(movePeriod(date, mode, -1))}>이전</button><button onClick={() => setDate(seoulDate())}>오늘</button><button aria-label="다음 기간" onClick={() => setDate(movePeriod(date, mode, 1))}>다음</button><label className="field"><span className="sr-only">기준 날짜</span><input aria-label="기준 날짜" type="date" value={date} onChange={e => { if (e.target.value) setDate(e.target.value); }} /></label></div></div>
+    <div className="row-head"><div className="tabs" aria-label="일정 보기">{([['day','일'],['week','주'],['month','월']] as const).map(([value,label]) => <button key={value} aria-pressed={mode === value} onClick={() => setMode(value)}>{label}</button>)}</div><div className="actions"><button aria-label="이전 기간" onClick={() => setDate(movePeriod(date, mode, -1))}>이전</button><button onClick={() => setDate(seoulDate())}>오늘</button><button aria-label="다음 기간" onClick={() => setDate(movePeriod(date, mode, 1))}>다음</button><label className="field"><span className="sr-only">기준 날짜</span><DateInput aria-label="기준 날짜" value={date} onChange={e => { if (e.target.value) setDate(e.target.value); }} /></label></div></div>
     <p>조회 선택: {range.firstDate}{range.firstDate !== range.lastDate ? ' ~ ' + range.lastDate : ''} · 한국 시간</p><p className="muted">작업반이 정한 작업 일정입니다. 희망 일정은 신청 상세에서 확인합니다.</p>
     <ResourceStatus loading={result.loading} error={result.error} retry={result.reload} />
     <QueryContext success={result.success} loading={result.loading} error={result.error} />

@@ -5,6 +5,7 @@ import { useResource } from '../app/useResource';
 import { useSubmission } from '../app/useSubmission';
 import { useUnsavedChanges } from '../app/useUnsavedChanges';
 import { seoulDate } from '../app/dateTime.mjs';
+import { DateInput } from '../ui/DateInput';
 import { dailyPersonnelEntries, currentOperationalResource } from '../app/operationDrafts.mjs';
 import type { RunCommand } from './RequestRegistrationForm';
 import { ResourceStatus } from './ResourceStatus';
@@ -53,7 +54,7 @@ export function PersonnelView({ actor, api, run, revision }: { actor: Actor; api
     if (!response) return;
     setMessage(saveMessage(response, `${actor.department} · ${date} 병력 현황을 저장했습니다.`)); setFailed(!response.ok); setConflict(!response.ok && response.errorCode === 'CONFLICT'); if (response.ok) { setDraft(null); result.reload(); }
   };
-  return <><div className="page-head"><h1>일일 병력 현황</h1><button onClick={result.reload}>새로고침</button></div><label className="field limited-field"><span>기준 날짜</span><input type="date" value={date} onChange={e => { if (!e.target.value || (draft && !window.confirm('저장하지 않은 현황이 있습니다. 날짜를 바꿀까요?'))) return; setDraft(null); setConflict(false); setDate(e.target.value); setMessage(''); }} /></label><ResourceStatus loading={result.loading} error={result.error} retry={result.reload} />
+  return <><div className="page-head"><h1>일일 병력 현황</h1><button onClick={result.reload}>새로고침</button></div><label className="field limited-field"><span>기준 날짜</span><DateInput value={date} onChange={e => { if (!e.target.value || (draft && !window.confirm('저장하지 않은 현황이 있습니다. 날짜를 바꿀까요?'))) return; setDraft(null); setConflict(false); setDate(e.target.value); setMessage(''); }} /></label><ResourceStatus loading={result.loading} error={result.error} retry={result.reload} />
     {result.data && <p className={current ? 'muted' : 'notice'}>표시 기준일: {result.data.date}{!current ? ' · 마지막 성공 조회 결과입니다. 선택한 날짜의 조회가 성공하기 전에는 수정할 수 없습니다.' : ''}</p>}
     {result.data?.departments.map(department => <section className="card section-gap" key={department.department}>
       <div className="row-head"><h2>{department.department}</h2><span className="badge">{department.submitted ? '입력됨' : '미입력'}</span></div>
@@ -87,7 +88,7 @@ export function NightDutyView({ actor, api, run, revision }: { actor: Actor; api
     if (!response) return;
     setMessage(saveMessage(response, `${actor.department} · ${date} 야간 근무 현황을 저장했습니다.`)); setFailed(!response.ok); setConflict(!response.ok && response.errorCode === 'CONFLICT'); if (response.ok) { setDraft(null); result.reload(); }
   };
-  return <><div className="page-head"><h1>야간 근무자 현황</h1><button onClick={result.reload}>새로고침</button></div><label className="field limited-field"><span>근무 시작일</span><input type="date" value={date} onChange={e => { if (!e.target.value || (draft && !window.confirm('저장하지 않은 근무자 변경이 있습니다. 날짜를 바꿀까요?'))) return; setDraft(null); setConflict(false); setDate(e.target.value); setMessage(''); }} /></label><p className="muted">야간 근무가 없는 부서는 입력을 생략할 수 있습니다. 미입력은 근무 없음 확인과 구별됩니다.</p><ResourceStatus loading={result.loading} error={result.error} retry={result.reload} />
+  return <><div className="page-head"><h1>야간 근무자 현황</h1><button onClick={result.reload}>새로고침</button></div><label className="field limited-field"><span>근무 시작일</span><DateInput value={date} onChange={e => { if (!e.target.value || (draft && !window.confirm('저장하지 않은 근무자 변경이 있습니다. 날짜를 바꿀까요?'))) return; setDraft(null); setConflict(false); setDate(e.target.value); setMessage(''); }} /></label><p className="muted">야간 근무가 없는 부서는 입력을 생략할 수 있습니다. 미입력은 근무 없음 확인과 구별됩니다.</p><ResourceStatus loading={result.loading} error={result.error} retry={result.reload} />
     {result.data && <p className={current ? 'muted' : 'notice'}>표시 기준일: {result.data.date}{!current ? ' · 마지막 성공 조회 결과입니다. 선택한 날짜의 조회가 성공하기 전에는 수정할 수 없습니다.' : ''}</p>}
     {result.data?.departments.map(department => <section className="card section-gap" key={department.department}>
       <div className="row-head"><h2>{department.department}</h2><span className="badge">{department.submitted ? '입력됨' : '미입력'}</span></div>

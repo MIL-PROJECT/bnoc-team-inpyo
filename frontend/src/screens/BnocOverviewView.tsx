@@ -3,6 +3,7 @@ import type { RequestStatus, RequestSummary } from '../types';
 import { useResource } from '../app/useResource';
 import { ResourceStatus } from './ResourceStatus';
 import { describeConditions, QueryContext } from './QueryContext';
+import { DateInput } from '../ui/DateInput';
 export function BnocOverviewView({ query, teams, revision = 0, onOpen }: { query: any; teams: string[]; revision?: number; onOpen: (id:string) => void }) {
   const [status, setStatus] = useState(''), [teamId, setTeamId] = useState(''), [category, setCategory] = useState('');
   const [from, setFrom] = useState(''), [to, setTo] = useState('');
@@ -16,8 +17,8 @@ export function BnocOverviewView({ query, teams, revision = 0, onOpen }: { query
     <label className="field"><span>작업반</span><select value={teamId} onChange={e => setTeamId(e.target.value)}><option value="">전체</option>{teams.map(value => <option key={value}>{value}</option>)}</select></label>
   </div><details className="filter-details"><summary>상세 조회 조건</summary><div className="filter-grid">
     <label className="field"><span>요청 유형</span><select value={category} onChange={e => setCategory(e.target.value)}><option value="">전체</option><option>장비/체계</option><option>회의 지원</option></select></label>
-    <label className="field"><span>시작일</span><input type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
-    <label className="field"><span>종료일</span><input type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
+    <label className="field"><span>시작일</span><DateInput value={from} onChange={e => setFrom(e.target.value)} /></label>
+    <label className="field"><span>종료일</span><DateInput value={to} onChange={e => setTo(e.target.value)} /></label>
   </div></details><ResourceStatus loading={result.loading} error={result.error} retry={result.reload} />
   <QueryContext success={result.success} loading={result.loading} error={result.error} />
   {overview && <><div className="metric-row"><div><strong>{overview.total}건</strong><span>전체 요청</span></div>{Object.entries(overview.byStatus).map(([key,value]) => <div key={key}><strong>{value}건</strong><span>{key} 요청</span></div>)}</div>

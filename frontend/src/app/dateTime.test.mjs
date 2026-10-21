@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { localInputToUtc, utcToLocalInput, calendarRange } from './dateTime.mjs';
+import { localInputToUtc, utcToLocalInput, calendarRange, moveDate } from './dateTime.mjs';
 
 test('datetime inputs preserve Korea time while transmitting UTC instants', () => {
   assert.equal(localInputToUtc('2026-10-13T09:30'), '2026-10-13T00:30:00.000Z', 'SEOUL_INPUT_TO_UTC_REQUIRED');
@@ -16,4 +16,10 @@ test('calendar uses inclusive Seoul start and exclusive end, Monday week and lea
   const month = calendarRange('2028-02-15', 'month');
   assert.equal(month.firstDate, '2028-02-01');
   assert.equal(month.lastDate, '2028-02-29');
+});
+
+test('date navigation crosses month, year, and leap-day boundaries', () => {
+  assert.equal(moveDate('2026-12-31', 1), '2027-01-01');
+  assert.equal(moveDate('2028-03-01', -1), '2028-02-29');
+  assert.equal(moveDate('2028-02-29', 1), '2028-03-01');
 });

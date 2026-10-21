@@ -1,0 +1,17 @@
+button,input,select,textarea { font: inherit; }
+button { min-height: var(--control-height); padding: .5rem .95rem; border: 1px solid var(--color-control-border); border-radius: var(--radius-control); background: white; color: inherit; cursor: pointer; }
+button:hover { border-color: var(--color-primary); color: var(--color-primary); }
+button:disabled,fieldset:disabled button { opacity: .55; cursor: wait; }
+input,select,textarea { color: inherit; background: white; min-width: 0; max-width: 100%; min-height: var(--control-height); border: 1px solid var(--color-control-border); padding: .6rem .7rem; border-radius: var(--radius-control); width: 100%; }
+textarea { resize: vertical; }
+input[type="checkbox"] { width: 1.15rem; min-height: 1.15rem; flex: 0 0 1.15rem; accent-color: var(--color-primary); }
+.ui-button { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; }
+button.primary,.ui-button--primary { color: white; background: var(--color-primary); border-color: var(--color-primary); }
+button.primary:hover,.ui-button--primary:hover { color: white; background: var(--color-primary-hover); }
+.ui-button--danger { color: var(--color-danger); }
+.ui-button--danger:hover { color: var(--color-danger); border-color: var(--color-danger); }
+.ui-action-group { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
+.ui-date-input { max-width: 100%; }
+.ui-action-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: var(--space-3); min-width: 0; }
+.ui-action-row__main,.ui-action-row__actions,.ui-action-row__details { min-width: 0; }
+.ui-action-row[data-has-actions="false"]>.ui-action-row__main,.ui-action-row__details { grid-column: 1 / -1; }

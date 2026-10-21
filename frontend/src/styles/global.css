@@ -1,12 +1,6 @@
 @import '../../../design/tokens.css';
 * { box-sizing: border-box; }
 body { min-width: 1024px; margin: 0; background: var(--color-bg); color: var(--color-text); font: 1rem/1.6 var(--font-family); }
-button,input,select,textarea { font: inherit; }
-button { min-height: 44px; padding: .5rem .95rem; border: 1px solid var(--color-control-border); border-radius: 3px; background: white; color: inherit; cursor: pointer; }
-button:hover { border-color: var(--color-primary); color: var(--color-primary); }
-button:disabled,fieldset:disabled button { opacity: .55; cursor: wait; }
-button.primary { color: white; background: var(--color-primary); border-color: var(--color-primary); }
-button.primary:hover { background: var(--color-primary-hover); }
 :focus-visible { outline: 3px solid var(--color-focus); outline-offset: 3px; }
 header { background: white; border-bottom: 1px solid var(--color-divider); }
 .header-main { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 76px; max-width: 1320px; padding: 1rem 2rem; margin: auto; }
@@ -49,8 +43,6 @@ small { display: inline-block; }
 .badge.in_progress,.badge.document { color: var(--color-warning); background: var(--color-warning-bg); }
 form,.field { display: grid; gap: .5rem; } form { gap: 1.2rem; }
 .field { margin: 0; min-width: 0; } .field>span { font-weight: 650; } .field small { margin-left: .5rem; font-weight: 400; }
-input,select,textarea { color: inherit; background: white; min-width: 0; max-width: 100%; min-height: 44px; border: 1px solid var(--color-control-border); padding: .6rem .7rem; border-radius: 3px; width: 100%; }
-textarea { resize: vertical; } input[type=checkbox] { width: 1.15rem; min-height: 1.15rem; flex: 0 0 1.15rem; accent-color: var(--color-primary); }
 fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 1.15rem; min-width: 0; } legend { font-weight: 650; margin-bottom: .5rem; }
 .check { display: flex; align-items: center; gap: .65rem; padding: .3rem 0; min-height: 44px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .9rem; } .option-row { display: flex; gap: .75rem; }
@@ -123,6 +115,45 @@ dialog::backdrop { background: rgb(15 23 42/.45); } dialog form { gap: 0; } .dia
 .reauth-dialog { width: min(740px,calc(100% - 2rem)); }
 .reauth-dialog .auth-shell { margin: 0; border: 0; box-shadow: none; }
 .reauth-dialog .auth-panel { padding: 2rem; }
+.planned-page { display: grid; gap: 1.35rem; }
+.planned-head { align-items: end; margin-bottom: .15rem; }
+.planned-date-panel { display: grid; gap: .5rem; padding: 1.1rem 1.3rem; border: 1px solid var(--color-divider); border-radius: 4px; background: white; }
+.planned-date-field { width: auto; }
+.planned-date-control { display: flex; align-items: center; gap: .4rem; }
+.planned-date-control input { flex: 1 1 auto; min-width: 0; }
+.planned-date-kind { display: inline-flex; align-items: center; margin-left: .45rem; padding: .08rem .4rem; border-radius: 3px; background: var(--color-info-bg); color: var(--color-muted); font-size: .78rem; font-weight: 600; white-space: nowrap; }
+.planned-date-kind-future { background: var(--color-warning-bg); color: var(--color-warning); }
+.planned-date-kind-today { background: var(--color-info-bg); color: var(--color-info); }
+.planned-date-nav { gap: .35rem; margin-top: .4rem; }
+.planned-date-nav button[aria-current="date"] { border-color: var(--color-primary); color: var(--color-primary); font-weight: 700; }
+.planned-section { padding: 1.2rem 1.3rem; border: 1px solid var(--color-divider); border-radius: 4px; background: white; }
+.planned-section>.row-head { align-items: center; margin-bottom: .9rem; }
+.planned-section h2 { margin: 0; }
+.planned-list { display: grid; gap: .65rem; }
+.planned-item { gap: 1rem; padding: 1rem; border: 1px solid var(--color-divider); border-radius: var(--radius-card); }
+.planned-item-main { min-width: 0; }
+.planned-item-main h3 { overflow-wrap: anywhere; }
+.planned-item-actions { justify-content: flex-end; gap: .4rem; }
+.planned-add { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .75rem; align-items: end; }
+.planned-add button { min-width: 112px; }
+.planned-edit { width: 100%; gap: .9rem; }
+.planned-feedback { position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 20; padding: .7rem 1rem; border-radius: 3px; background: var(--color-text); color: white; box-shadow: var(--shadow-dialog); }
+.planned-empty { margin-bottom: 0; }
+.planned-complete-check { display: grid; grid-template-columns: minmax(260px,360px) auto; align-items: end; gap: .75rem; width: 100%; padding: .85rem; border-left: 3px solid var(--color-primary); background: var(--color-info-bg); }
+.planned-complete-check .planned-date-field { width: 100%; }
+.planned-confirm { display: flex; align-items: center; gap: .4rem; min-height: 44px; }
+.planned-confirm input { width: 1.15rem; min-height: 1.15rem; }
+.planned-overview-demo { display: grid; gap: .9rem; padding: 1.25rem; border: 1px solid var(--color-divider); border-top: 3px solid var(--color-primary); background: white; }
+.planned-overview-demo .row-head { align-items: end; }
+.planned-overview-demo h2 { margin: .15rem 0 0; }
+.planned-overview-demo .row-head>span { color: var(--color-muted); font-size: .875rem; }
+.planned-overview-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); border: 1px solid var(--color-divider); }
+.planned-overview-metrics>div { display: grid; gap: .1rem; padding: .8rem 1rem; border-right: 1px solid var(--color-divider); border-bottom: 1px solid var(--color-divider); }
+.planned-overview-metrics>div:nth-child(3n) { border-right: 0; }
+.planned-overview-metrics strong { font-size: 1.2rem; }
+.planned-overview-tabs { display: flex; flex-wrap: wrap; gap: .45rem; }
+.planned-overview-tabs button[aria-pressed="true"] { border-color: var(--color-primary); background: var(--color-primary); color: white; }
+.planned-overview-demo .notice { margin: 0; }
 .filter-primary { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: .85rem; margin: 1rem 0; }
 .filter-details,.optional-fields,.details-panel { margin: 1rem 0; border: 1px solid var(--color-divider); border-radius: 3px; padding: .1rem 1rem 1rem; background: white; }
 .filter-details:not([open]),.optional-fields:not([open]),.details-panel:not([open]) { padding-bottom: .1rem; }

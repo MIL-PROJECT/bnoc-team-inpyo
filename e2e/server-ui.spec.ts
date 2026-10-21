@@ -1074,3 +1074,101 @@ test('SR-BE-014: direct assigned department change without return and started wo
   await expect(page.getByRole('button',{name:'배정 변경 저장',exact:true})).toHaveCount(0);
   await noOverflow(page);
 });
+
+test('planned-maintenance UI: date control uses only the native calendar', async ({ page }) => {
+  await apiLogin(page, 'team-wireless');
+  await page.goto('/requests?view=planned-maintenance');
+  await expect(page.getByRole('heading', { name: '계획 정비', exact: true })).toBeVisible();
+  await expect(page.locator('.planned-date-control button')).toHaveCount(0);
+  await expect(page.locator('.planned-date-panel input[type="date"]')).toHaveCount(1);
+});
+
+test('planned-maintenance UI: completion details do not squeeze the task row', async ({ page }) => {
+  const businessWrites: string[] = [];
+  page.on('request', request => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.startsWith('/api/') && !pathname.startsWith('/api/auth/') && !['GET', 'HEAD', 'OPTIONS'].includes(request.method())) {
+      businessWrites.push(`${request.method()} ${pathname}`);
+    }
+  });
+  await apiLogin(page, 'team-wireless');
+  await page.goto('/requests?view=planned-maintenance');
+  const title = `공통 UI 정렬 검사 ${randomUUID()}`;
+  await page.getByLabel('작업 제목', { exact: true }).fill(title);
+  await page.getByRole('button', { name: '작업 추가', exact: true }).click();
+  const addedItem = page.locator('.planned-item').filter({ hasText: title });
+  await expect(addedItem).toBeVisible();
+  const item = page.locator('.planned-item').last();
+  await expect(item.getByRole('heading', { name: title, exact: true })).toBeVisible();
+  const main = item.locator('.planned-item-main');
+  const actions = item.locator('.planned-item-actions');
+  const rowDisplay = await item.evaluate(element => getComputedStyle(element).display);
+  expect(rowDisplay, 'ActionRow owns the work item layout').toBe('grid');
+  const groupLayout = await actions.evaluate(element => ({ display: getComputedStyle(element).display, alignItems: getComputedStyle(element).alignItems }));
+  expect(groupLayout, 'ActionGroup centers its controls').toEqual({ display: 'flex', alignItems: 'center' });
+  await item.getByRole('button', { name: '수정', exact: true }).click();
+  const editCancel = item.getByRole('button', { name: '취소', exact: true });
+  await expect(editCancel).toHaveJSProperty('type', 'button');
+  await editCancel.click();
+  await item.getByRole('button', { name: '완료', exact: true }).click();
+  const completion = item.locator('.planned-complete-check');
+  const detailsSlot = item.locator('.ui-action-row__details');
+  await expect(completion.locator('input[type="date"]')).toHaveCount(1);
+  const mainBox = await main.boundingBox();
+  const actionsBox = await actions.boundingBox();
+  expect(mainBox).not.toBeNull();
+  expect(actionsBox).not.toBeNull();
+  expect(mainBox!.width, 'task title must retain a readable column').toBeGreaterThan(360);
+  const mainCenter = mainBox!.y + mainBox!.height / 2;
+  const actionsCenter = actionsBox!.y + actionsBox!.height / 2;
+  expect(Math.abs(mainCenter - actionsCenter), 'title and action buttons share one vertical center').toBeLessThan(2);
+  const actionButtons = await actions.locator('button').evaluateAll(buttons => buttons.map(button => {
+    const rect = button.getBoundingClientRect();
+    return { y: rect.y, height: rect.height, type: button.type };
+  }));
+  expect(actionButtons.length).toBeGreaterThan(1);
+  expect(actionButtons.map(button => button.type), 'row actions must not submit an enclosing form').toEqual(actionButtons.map(() => 'button'));
+  expect(Math.min(...actionButtons.map(button => button.height)), 'shared controls meet the 44px minimum').toBeGreaterThanOrEqual(44);
+  expect(Math.max(...actionButtons.map(button => button.height)) - Math.min(...actionButtons.map(button => button.height))).toBeLessThan(1);
+  expect(Math.max(...actionButtons.map(button => button.y)) - Math.min(...actionButtons.map(button => button.y))).toBeLessThan(2);
+
+  const completionBox = await completion.boundingBox();
+  expect(completionBox).not.toBeNull();
+  const detailsBox = await detailsSlot.boundingBox();
+  expect(detailsBox).not.toBeNull();
+  expect(await detailsSlot.evaluate(element => getComputedStyle(element).gridColumn), 'ActionRow details slot spans both grid columns').toBe('1 / -1');
+  expect(detailsBox!.y, 'completion controls sit below the task title and actions').toBeGreaterThan(mainBox!.y + mainBox!.height - 1);
+  expect(detailsBox!.x).toBeGreaterThanOrEqual((await item.boundingBox())!.x);
+  expect(detailsBox!.x + detailsBox!.width).toBeLessThanOrEqual((await item.boundingBox())!.x + (await item.boundingBox())!.width + 1);
+  expect(businessWrites, 'the approved demo keeps planned-work changes in memory').toEqual([]);
+});
+
+test('shared DateInput: existing screens use the same native date control without extra calendar buttons', async ({ page }) => {
+  const businessWrites: string[] = [];
+  page.on('request', request => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.startsWith('/api/') && !pathname.startsWith('/api/auth/') && !['GET', 'HEAD', 'OPTIONS'].includes(request.method())) {
+      businessWrites.push(`${request.method()} ${pathname}`);
+    }
+  });
+  await apiLogin(page, 'team-wireless');
+  for (const route of ['/schedule', '/personnel', '/night-duty']) {
+    await page.goto(route);
+    const dates = page.locator('input[type="date"]');
+    await expect(dates.first()).toBeVisible();
+    expect(await dates.evaluateAll(inputs => inputs.every(input => input.classList.contains('ui-date-input'))), `${route} must use the shared DateInput`).toBeTruthy();
+    expect(await dates.evaluateAll(inputs => inputs.every(input => parseFloat(getComputedStyle(input).minHeight) >= 44)), `${route} shared date controls must meet the 44px minimum`).toBeTruthy();
+    await expect(page.locator('input[type="date"] + button')).toHaveCount(0);
+  }
+  await apiLogin(page, 'bnoc');
+  for (const route of ['/overview', '/requests']) {
+    await page.goto(route);
+    await page.getByText('상세 조회 조건', { exact: true }).click();
+    const dates = page.locator('input[type="date"]');
+    await expect(dates.first()).toBeVisible();
+    expect(await dates.evaluateAll(inputs => inputs.length > 0 && inputs.every(input => input.classList.contains('ui-date-input'))), `${route} must use the shared DateInput`).toBeTruthy();
+    expect(await dates.evaluateAll(inputs => inputs.length > 0 && inputs.every(input => parseFloat(getComputedStyle(input).minHeight) >= 44)), `${route} shared date controls must meet the 44px minimum`).toBeTruthy();
+    await expect(page.locator('input[type="date"] + button')).toHaveCount(0);
+  }
+  expect(businessWrites, 'date selection does not write business state').toEqual([]);
+});
