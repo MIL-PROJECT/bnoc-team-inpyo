@@ -8,7 +8,10 @@ import org.springframework.beans.factory.annotation.Value
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
+import java.time.Duration
 import java.time.Instant
+import java.time.LocalTime
+import java.time.ZoneId
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -20,14 +23,69 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
     val operations=OperationsService(db)
     private val inflight=ConcurrentHashMap<String,String>()
     private fun now()=Instant.now().toString()
-    private val createFields=setOf("category","subcategories","detail","location","contact","equipmentId","maintenanceTarget","scheduledAt","documentRef","attachments","requesterDisplayText")
+    private val seoul=ZoneId.of("Asia/Seoul")
+    private val createFields=setOf("category","subcategories","detail","location","contact","equipmentId","maintenanceTarget","schedulePreferences","documentRef","attachments","requesterDisplayText")
     private val fields=mapOf(
-        "createRequest" to createFields,"updateRequest" to setOf("detail","location","contact","scheduledAt","documentRef","attachments"),
+        "createRequest" to createFields,"updateRequest" to setOf("detail","location","contact","schedulePreferences","documentRef","attachments"),
         "cancelRequest" to emptySet(),"moveToDocumentWaiting" to emptySet(),"assignTeams" to setOf("teamIds","priority"),"changePriority" to setOf("priority"),
-        "updateWork" to setOf("nextStatus","schedule","memo","returnReason","completionMemo","assignedPersonRefs","reusePreviousSchedule"),"returnWork" to setOf("returnReason","reason","schedule","memo"),
-        "updateWorkDetails" to setOf("schedule","memo"),"reassignReturnedWork" to setOf("teamIds"),"reassignAssignedWork" to setOf("teamIds"),"addTeams" to setOf("teamIds"),"withdrawReturnedWork" to emptySet(),"markNotificationsSeen" to setOf("notificationIds"),
-        "createAfterActionReport" to (createFields-setOf("requesterDisplayText","scheduledAt")+setOf("completedConfirmed","actualRequesterText","actualStartedAt","actualCompletedAt","reason","completionMemo"))
+        "updateWork" to setOf("nextStatus","scheduleIntervals","memo","returnReason","completionMemo","assignedPersonRefs","reusePreviousSchedule"),"returnWork" to setOf("returnReason","reason","scheduleIntervals","memo"),
+        "updateWorkDetails" to setOf("scheduleIntervals","memo"),"reassignReturnedWork" to setOf("teamIds"),"reassignAssignedWork" to setOf("teamIds"),"addTeams" to setOf("teamIds"),"withdrawReturnedWork" to emptySet(),"markNotificationsSeen" to setOf("notificationIds"),
+        "createAfterActionReport" to (createFields-setOf("requesterDisplayText","schedulePreferences")+setOf("completedConfirmed","actualRequesterText","actualStartedAt","actualCompletedAt","reason","completionMemo"))
     )+OperationsService.fields
+
+    private fun schedulePreferences(value:Any?):List<SchedulePreference> {
+        if(value==null) return emptyList()
+        val values=value as? List<*> ?: reject("VALIDATION",mapOf("schedulePreferences" to "희망 일정 선택을 확인하세요."))
+        if(values.size>2) reject("VALIDATION",mapOf("schedulePreferences" to "희망 일정은 1·2지망만 선택할 수 있습니다."))
+        val preferences=values.map { raw ->
+            val item=raw as? Map<*,*> ?: reject("VALIDATION",mapOf("schedulePreferences" to "희망 일정 선택을 확인하세요."))
+            if(item.keys.any { it !in setOf("rank","date","period") }) reject("VALIDATION",mapOf("schedulePreferences" to "희망 일정 선택을 확인하세요."))
+            val number=item["rank"] as? Number ?: reject("VALIDATION",mapOf("schedulePreferences" to "희망 순위를 확인하세요."))
+            val rank=number.toInt()
+            if(number.toDouble()!=rank.toDouble() || rank !in 1..2) reject("VALIDATION",mapOf("schedulePreferences" to "희망 순위를 확인하세요."))
+            val date=(item["date"] as? String)?.let(::dateValue) ?: reject("VALIDATION",mapOf("schedulePreferences" to "희망 날짜를 선택하세요."))
+            val period=item["period"] as? String ?: reject("VALIDATION",mapOf("schedulePreferences" to "오전 또는 오후를 선택하세요."))
+            if(period !in listOf("AM","PM")) reject("VALIDATION",mapOf("schedulePreferences" to "오전 또는 오후를 선택하세요."))
+            SchedulePreference(rank,date,period)
+        }.sortedBy { it.rank }
+        if(preferences.map { it.rank }.distinct().size!=preferences.size || preferences.map { it.rank } !in listOf(emptyList(),listOf(1),listOf(1,2)))
+            reject("VALIDATION",mapOf("schedulePreferences" to "2지망은 1지망과 함께 입력해야 합니다."))
+        return preferences
+    }
+
+    private fun scheduleIntervals(value:Any?,preservedIntervals:List<WorkScheduleInterval> = emptyList()):List<WorkScheduleInterval> {
+        val values=value as? List<*> ?: reject("VALIDATION",mapOf("scheduleIntervals" to "작업 시간대를 확인하세요."))
+        if(values.size>240) reject("VALIDATION",mapOf("scheduleIntervals" to "선택한 시간대가 너무 많습니다."))
+        val intervals=values.map { raw ->
+            val item=raw as? Map<*,*> ?: reject("VALIDATION",mapOf("scheduleIntervals" to "작업 시간대를 확인하세요."))
+            if(item.keys.any { it !in setOf("startsAt","endsAt") }) reject("VALIDATION",mapOf("scheduleIntervals" to "작업 시간대를 확인하세요."))
+            val start=instantValue(item["startsAt"] as? String,"scheduleIntervals") ?: reject("VALIDATION",mapOf("scheduleIntervals" to "시작 시간을 확인하세요."))
+            val end=instantValue(item["endsAt"] as? String,"scheduleIntervals") ?: reject("VALIDATION",mapOf("scheduleIntervals" to "종료 시간을 확인하세요."))
+            val startInstant=Instant.parse(start);val endInstant=Instant.parse(end)
+            val startLocal=startInstant.atZone(seoul);val endLocal=endInstant.atZone(seoul)
+            val preserved=preservedIntervals.any { it.startsAt==start && it.endsAt==end }
+            val endAtMidnight=endLocal.toLocalTime()==LocalTime.MIDNIGHT && endLocal.toLocalDate()==startLocal.toLocalDate().plusDays(1)
+            val endSameDay=endLocal.toLocalDate()==startLocal.toLocalDate() && endLocal.minute==0 && endLocal.second==0 && endLocal.nano==0
+            val duration=Duration.between(startInstant,endInstant)
+            if(!preserved && (startLocal.minute!=0 || startLocal.second!=0 || startLocal.nano!=0 ||
+                (!endAtMidnight && !endSameDay) || duration.isNegative || duration.isZero || duration.seconds%3600L!=0L || duration.seconds>86400L)
+            )
+                reject("VALIDATION",mapOf("scheduleIntervals" to "시간대는 한국 시간 정시부터 1시간 단위로 같은 날짜 안에서 선택하세요."))
+            WorkScheduleInterval(start,end)
+        }.sortedBy { Instant.parse(it.startsAt) }
+        val merged=mutableListOf<WorkScheduleInterval>()
+        intervals.forEach { interval ->
+            val previous=merged.lastOrNull()
+            if(previous==null) merged.add(interval)
+            else {
+                val comparison=Instant.parse(interval.startsAt).compareTo(Instant.parse(previous.endsAt))
+                if(comparison<0) reject("VALIDATION",mapOf("scheduleIntervals" to "겹치는 시간대는 한 번만 선택하세요."))
+                val sameSeoulDay=Instant.parse(previous.startsAt).atZone(seoul).toLocalDate()==Instant.parse(interval.startsAt).atZone(seoul).toLocalDate()
+                if(comparison==0 && sameSeoulDay) merged[merged.lastIndex]=previous.copy(endsAt=interval.endsAt) else merged.add(interval)
+            }
+        }
+        return merged
+    }
     fun visible(actor:Actor,request:RequestRecord):Boolean=actor.role=="bnoc" || (actor.role=="requester" && request.requesterSubject==actor.id) || (actor.role=="team" && db.works(request.number).any { it.teamId==actor.teamId })
     fun canEdit(actor:Actor,request:RequestRecord):Boolean {
         if(request.status=="취소") return false
@@ -173,7 +231,7 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
         validateRequest(payload)
         if(actor.role=="requester" && "requesterDisplayText" in payload) reject("VALIDATION")
         val requester=if(actor.role=="requester") actor.displayName else text(payload,"requesterDisplayText",500,true)
-        val request=RequestRecord(db.nextNumber(),if(actor.role=="requester") actor.id else null,requester,actor.id,text(payload,"category",100),payload["subcategories"] as Map<String,String>,text(payload,"detail",10000),text(payload,"location",200),text(payload,"contact",50),text(payload,"equipmentId",200).ifBlank { null },payload["maintenanceTarget"] as? Map<String,String>,instantValue(text(payload,"scheduledAt",64),"scheduledAt"),text(payload,"documentRef",500).ifBlank { null },registeredAt=now())
+        val request=RequestRecord(db.nextNumber(),if(actor.role=="requester") actor.id else null,requester,actor.id,text(payload,"category",100),payload["subcategories"] as Map<String,String>,text(payload,"detail",10000),text(payload,"location",200),text(payload,"contact",50),text(payload,"equipmentId",200).ifBlank { null },payload["maintenanceTarget"] as? Map<String,String>,documentRef=text(payload,"documentRef",500).ifBlank { null },registeredAt=now(),schedulePreferences=schedulePreferences(payload["schedulePreferences"]))
         db.insertRequest(request);linkAttachments(actor,"request",request.number,payload["attachments"])
         history(actor,request,null,"등록",null,"대기");notify("요청 등록",request);return request.number
     }
@@ -195,13 +253,15 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
             if(field=="attachments") {
                 val before=db.attachmentMetadata("request",request.number);val after=linkAttachments(actor,"request",request.number,payload[field])
                 if(before.map { it["id"] }!=after.map { it["id"] }) { changed=true;history(actor,request,null,field,before,after) }
+            } else if(field=="schedulePreferences") {
+                val next=schedulePreferences(payload[field]);val before=request.schedulePreferences
+                if(before!=next) { changed=true;history(actor,request,null,"schedulePreferences",before,next);request.schedulePreferences=next }
             } else {
-                var next=text(payload,field,when(field) { "detail" ->10000;"location" ->200;"contact" ->50;"scheduledAt" ->64;else ->500 },field in listOf("detail","location","contact")).ifBlank { null }
-                if(field=="scheduledAt") next=instantValue(next,"scheduledAt")
-                val before=when(field) { "detail"->request.detail;"location"->request.location;"contact"->request.contact;"scheduledAt"->request.scheduledAt;"documentRef"->request.documentRef;else->null }
+                val next=text(payload,field,when(field) { "detail" ->10000;"location" ->200;"contact" ->50;else ->500 },field in listOf("detail","location","contact")).ifBlank { null }
+                val before=when(field) { "detail"->request.detail;"location"->request.location;"contact"->request.contact;"documentRef"->request.documentRef;else->null }
                 if(before!=next) {
                     changed=true;history(actor,request,null,field,before,next)
-                    when(field) { "detail"->request.detail=next!!;"location"->request.location=next!!;"contact"->request.contact=next!!;"scheduledAt"->request.scheduledAt=next;"documentRef"->request.documentRef=next }
+                    when(field) { "detail"->request.detail=next!!;"location"->request.location=next!!;"contact"->request.contact=next!!;"documentRef"->request.documentRef=next }
                 }
             }
         }
@@ -247,23 +307,25 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
         if(reason!=work.returnReason) { changed=true;history(actor,request,work,"반환 사유",work.returnReason,reason);work.returnReason=reason }
         if(wasReturned && nextStatus!="반환") {
             val reuse=payload["reusePreviousSchedule"] as? Boolean ?: reject("VALIDATION",mapOf("reusePreviousSchedule" to "이전 일정 재사용 여부를 선택하세요."))
-            val supplied=text(payload,"schedule",64)
+            val supplied=if("scheduleIntervals" in payload) scheduleIntervals(payload["scheduleIntervals"]) else emptyList()
             val chosen=if(reuse) {
-                if(supplied.isNotBlank()) reject("VALIDATION",mapOf("schedule" to "이전 일정 재사용과 새 일정 입력은 함께 할 수 없습니다."))
-                work.previousSchedule
-            } else instantValue(supplied.ifBlank { null },"schedule")
-            if(work.schedule!=chosen) { changed=true;history(actor,request,work,"schedule",work.schedule,chosen);work.schedule=chosen }
+                if(supplied.isNotEmpty()) reject("VALIDATION",mapOf("scheduleIntervals" to "이전 일정 재사용과 새 시간대 입력은 함께 할 수 없습니다."))
+                work.previousScheduleIntervals
+            } else supplied
+            if(work.scheduleIntervals!=chosen) { changed=true;history(actor,request,work,"scheduleIntervals",work.scheduleIntervals,chosen);work.scheduleIntervals=chosen }
         }
-        for(field in listOf("schedule","memo")) if(field in payload && !(field=="schedule" && (wasReturned || isReturning))) {
-            var value=text(payload,field,if(field=="schedule") 64 else 2000).ifBlank { null }
-            if(field=="schedule") value=instantValue(value,"schedule")
-            val before=if(field=="schedule") work.schedule else work.memo
-            if(before!=value) { changed=true;history(actor,request,work,field,before,value);if(field=="schedule") work.schedule=value else work.memo=value }
+        if("scheduleIntervals" in payload && !wasReturned && !isReturning) {
+            val value=scheduleIntervals(payload["scheduleIntervals"],work.scheduleIntervals)
+            if(work.scheduleIntervals!=value) { changed=true;history(actor,request,work,"scheduleIntervals",work.scheduleIntervals,value);work.scheduleIntervals=value }
+        }
+        if("memo" in payload) {
+            val value=text(payload,"memo",2000).ifBlank { null }
+            if(work.memo!=value) { changed=true;history(actor,request,work,"memo",work.memo,value);work.memo=value }
         }
         if(isReturning) {
-            val previous=if("schedule" in payload) instantValue(text(payload,"schedule",64).ifBlank { null },"schedule") else work.schedule
-            if(work.previousSchedule!=previous) { history(actor,request,work,"반환 전 일정",work.previousSchedule,previous);work.previousSchedule=previous;changed=true }
-            if(work.schedule!=null) { history(actor,request,work,"schedule",work.schedule,null);work.schedule=null;changed=true }
+            val previous=if("scheduleIntervals" in payload) scheduleIntervals(payload["scheduleIntervals"],work.scheduleIntervals) else work.scheduleIntervals
+            if(work.previousScheduleIntervals!=previous) { history(actor,request,work,"반환 전 일정",work.previousScheduleIntervals,previous);work.previousScheduleIntervals=previous;changed=true }
+            if(work.scheduleIntervals.isNotEmpty()) { history(actor,request,work,"scheduleIntervals",work.scheduleIntervals,emptyList<WorkScheduleInterval>());work.scheduleIntervals=emptyList();changed=true }
         }
         if("assignedPersonRefs" in payload) {
             val refs=stringRefs(payload["assignedPersonRefs"],"assignedPersonRefs")
@@ -325,7 +387,7 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
         val memo=text(payload,"completionMemo",2000)
         val request=RequestRecord(db.nextNumber(),null,requester,actor.id,text(payload,"category",100),payload["subcategories"] as Map<String,String>,text(payload,"detail",10000),text(payload,"location",200),text(payload,"contact",50),text(payload,"equipmentId",200).ifBlank{null},payload["maintenanceTarget"] as? Map<String,String>,documentRef=text(payload,"documentRef",500).ifBlank{null},status="완료",registeredAt=now(),priority=null)
         db.insertRequest(request);linkAttachments(actor,"request",request.number,payload["attachments"])
-        val work=WorkRecord("${request.number}-1",request.number,actor.teamId!!,status="완료",completion=mapOf("completedBy" to actor.id,"completedAt" to completed)+(if(memo.isNotBlank()) mapOf("memo" to memo) else emptyMap()),origin="after-action")
+        val work=WorkRecord("${request.number}-1",request.number,actor.teamId!!,status="완료",completion=mapOf("completedBy" to actor.id,"completedAt" to completed)+(if(memo.isNotBlank()) mapOf("memo" to memo) else emptyMap()),origin="after-action",actualStartedAt=started)
         db.insertWork(work);history(actor,request,null,"선조치 후보고",null,reason);history(actor,request,work,"실제 시작 시각",null,started);history(actor,request,work,"완료정보",null,work.completion);history(actor,request,work,"상태",null,"완료");notify("선조치 후보고",request,listOf(work));return request.number
     }
     fun linkAttachments(actor:Actor,kind:String,ref:String,value:Any?):List<Map<String,Any?>> {

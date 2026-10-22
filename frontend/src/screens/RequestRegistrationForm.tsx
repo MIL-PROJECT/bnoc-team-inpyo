@@ -4,20 +4,21 @@ import { AttachmentPicker, type UploadAttachment } from './AttachmentPicker';
 import { requestPayload } from '../api/requestPayload.mjs';
 import { useUnsavedChanges } from '../app/useUnsavedChanges';
 import { focusFormError, requestFieldErrors, saveFailureMessage } from '../app/formFeedback.mjs';
+import { requestDetailGuidance, requestLocationGuidance } from '../app/requestGuidance.mjs';
 
 export type CommandTarget = { requestNumber: string; workNumber?: string };
 export type RunCommand = (type: string, payload: Record<string, unknown>, target?: CommandTarget, expectedRevision?: number, operationId?: string) => Promise<ViewCommandResult>;
 type Props = { actor: Actor; run: RunCommand; upload: UploadAttachment; onSaved: (id: string, message?: string) => void; initialDraft?: RequestInput | null; onDraftChange?: (input: RequestInput) => void };
 export type RequestInput = {
   requesterDisplayText: string; category: string; systemType: string; resourceType: string; workType: string; meetingType: string; phoneType: string;
-  detail: string; location: string; contact: string; equipmentId: string; scheduledAt: string; documentRef: string;
+  detail: string; location: string; contact: string; equipmentId: string; preference1Date: string; preference1Period: string; preference2Date: string; preference2Period: string; documentRef: string;
   differentTarget: boolean; targetDepartment: string; targetRank: string; targetName: string; targetPhone: string;
   attachments: { id: string; fileName: string; size: number; type: string }[]
 };
 export const initialInput = (actor: Actor): RequestInput => ({
   requesterDisplayText: '', category: '장비/체계', systemType: '', resourceType: '', workType: '', meetingType: '', phoneType: '',
   detail: '', location: '', contact: '',
-  equipmentId: '', scheduledAt: '', documentRef: '', differentTarget: false,
+  equipmentId: '', preference1Date: '', preference1Period: '', preference2Date: '', preference2Period: '', documentRef: '', differentTarget: false,
   targetDepartment: '', targetRank: '', targetName: '', targetPhone: '', attachments: []
 });
 export const toPayload = (input: RequestInput, actor: Actor) => requestPayload(input, actor.role);
@@ -30,10 +31,12 @@ export function RequestFields({ actor, input, setInput, errors, upload, onUpload
   const field = (label: string, key: keyof RequestInput, type = 'text') => {
     const errorKey = key.startsWith('target') ? 'maintenanceTarget.' + key.slice('target'.length).toLowerCase() : afterAction && key === 'requesterDisplayText' ? 'actualRequesterText' : key;
     const error = errors[errorKey] ?? (key.startsWith('target') ? errors[key.slice('target'.length).toLowerCase()] ?? errors.maintenanceTarget : undefined);
-    const optional = ['equipmentId','scheduledAt','documentRef'].includes(key);
-    const hint=key==='equipmentId'?'예: 장비명이나 알고 있는 식별정보. 모르면 비워도 됩니다.':key==='documentRef'?'예: 관련 공문 제목이나 문서번호. 없으면 비워도 됩니다.':undefined;
-    const describedBy=[error?errorId(key):undefined,hint?`${errorId(key)}-hint`:undefined].filter(Boolean).join(' ') || undefined;
-    return <label className="field"><span>{label}<small className="field-hint" aria-hidden="true">{optional ? '선택' : '필수'}</small></span><input type={type} value={input[key] as string} aria-label={label} aria-required={!optional} aria-invalid={!!error} aria-describedby={describedBy} onChange={event => update(key, event.target.value)} />{hint && <small id={`${errorId(key)}-hint`} className="field-hint">{hint}</small>}{error && <small id={errorId(key)} className="field-error">{error}</small>}</label>;
+    const optional = ['equipmentId','documentRef'].includes(key);
+    const hint=key==='location'?requestLocationGuidance:key==='equipmentId'?'예: 장비명이나 알고 있는 식별정보. 모르면 비워도 됩니다.':key==='documentRef'?'예: 관련 공문 제목이나 문서번호. 없으면 비워도 됩니다.':undefined;
+    const placeholder=key==='location'?requestLocationGuidance:undefined;
+    const showHint=Boolean(hint)&&key!=='location';
+    const describedBy=[error?errorId(key):undefined,showHint?`${errorId(key)}-hint`:undefined].filter(Boolean).join(' ') || undefined;
+    return <label className="field"><span>{label}<small className="field-hint" aria-hidden="true">{optional ? '선택' : '필수'}</small></span><input type={type} value={input[key] as string} placeholder={placeholder} aria-label={label} aria-required={!optional} aria-invalid={!!error} aria-describedby={describedBy} onChange={event => update(key, event.target.value)} />{showHint && <small id={`${errorId(key)}-hint`} className="field-hint">{hint}</small>}{error && <small id={errorId(key)} className="field-error">{error}</small>}</label>;
   };
   const choice = (label: string, key: keyof RequestInput, values: string[]) => (
     <label className="field"><span>{label}<small className="field-hint" aria-hidden="true">{key === 'phoneType' ? '선택' : '필수'}</small></span><select value={input[key] as string} aria-label={label} aria-required={key !== 'phoneType'} aria-invalid={!!errors[key]} aria-describedby={errors[key] ? errorId(key) : undefined} onChange={event => update(key, event.target.value)}><option value="">선택</option>{values.map(value => <option key={value}>{value}</option>)}</select>{errors[key] && <small id={errorId(key)} className="field-error">{errors[key]}</small>}</label>
@@ -47,7 +50,7 @@ export function RequestFields({ actor, input, setInput, errors, upload, onUpload
       {choice('작업 유형', 'workType', ['신설','고장','지원','대여','점검','이전','기타'])}
       {input.resourceType === '전화' && choice('전화기 종류 (선택)', 'phoneType', ['IP','아날로그','인터컴','비상벨'])}
     </div> : choice('회의 유형', 'meetingType', ['화상회의','일반회의','기타'])}
-    <label className="field"><span>요청 내용·증상<small className="field-hint" aria-hidden="true">필수</small></span><textarea rows={4} value={input.detail} aria-label="요청 내용·증상" aria-required="true" aria-invalid={!!errors.detail} aria-describedby={errors.detail ? errorId('detail') : undefined} onChange={event => update('detail', event.target.value)} />{errors.detail && <small id={errorId('detail')} className="field-error">{errors.detail}</small>}</label>
+    <label className="field"><span>요청 내용·증상<small className="field-hint" aria-hidden="true">필수</small></span><textarea rows={4} value={input.detail} placeholder={requestDetailGuidance(input)} aria-label="요청 내용·증상" aria-required="true" aria-invalid={!!errors.detail} aria-describedby={errors.detail ? errorId('detail') : undefined} onChange={event => update('detail', event.target.value)} />{errors.detail && <small id={errorId('detail')} className="field-error">{errors.detail}</small>}</label>
     <div className="form-grid">{field('작업 위치', 'location')}{field('요청자 군내전화번호', 'contact')}</div>
     <label className="check"><input type="checkbox" checked={input.differentTarget} onChange={event => update('differentTarget', event.target.checked)} />정비대상자가 요청자와 다름</label>
     {input.differentTarget && <div className="form-grid">
@@ -55,7 +58,15 @@ export function RequestFields({ actor, input, setInput, errors, upload, onUpload
       {field('정비대상자 이름', 'targetName')}{field('정비대상자 군내전화번호', 'targetPhone')}
     </div>}
     <details className="optional-fields"><summary>선택 정보</summary><div className="form-grid">
-      {!afterAction && field('희망 일정', 'scheduledAt', 'datetime-local')}
+      {!afterAction && <fieldset className="preference-fields form-grid" aria-invalid={!!errors.schedulePreferences} tabIndex={errors.schedulePreferences ? -1 : undefined} aria-describedby={errors.schedulePreferences ? errorId('schedulePreferences') : undefined}>
+        <legend>희망 일정 <small className="field-hint" aria-hidden="true">선택</small></legend>
+        {[1, 2].map(rank => <div className="preference-choice" key={rank}>
+          <strong>{rank}지망</strong>
+          <label className="field"><span>날짜</span><input type="date" value={input[`preference${rank}Date` as keyof RequestInput] as string} aria-label={`${rank}지망 날짜`} aria-invalid={rank===1 && !!errors.schedulePreferences} aria-describedby={rank===1 && errors.schedulePreferences ? errorId('schedulePreferences') : undefined} onChange={event => update(`preference${rank}Date` as keyof RequestInput,event.target.value)} /></label>
+          <label className="field"><span>오전·오후</span><select value={input[`preference${rank}Period` as keyof RequestInput] as string} aria-label={`${rank}지망 오전·오후`} onChange={event => update(`preference${rank}Period` as keyof RequestInput,event.target.value)}><option value="">선택</option><option value="AM">오전</option><option value="PM">오후</option></select></label>
+        </div>)}
+        {errors.schedulePreferences && <small id={errorId('schedulePreferences')} className="field-error">{errors.schedulePreferences}</small>}
+      </fieldset>}
       {input.category === '장비/체계' && field('장비·체계 식별정보', 'equipmentId')}
       {field('문서 참조정보', 'documentRef')}
     </div></details>

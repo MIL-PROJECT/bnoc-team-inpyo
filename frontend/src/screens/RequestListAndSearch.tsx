@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import type { Actor, RequestSummary, RequestStatus } from '../types';
-import { priorityLabel } from '../types';
+import { priorityLabel, workStatusLabel } from '../types';
 import { useResource } from '../app/useResource';
 import { ResourceStatus } from './ResourceStatus';
 import { describeConditions, QueryContext } from './QueryContext';
@@ -29,12 +29,12 @@ export function RequestListAndSearch({ actor, query, teams, revision = 0, onOpen
   const ownRequests = actor.role === 'requester';
   const progressText = (item: RequestSummary) => {
     const progress=item.progress;
-    const departments=progress?.departments.map(entry=>`${entry.department} ${entry.status}`).join(' · ') ?? '';
+    const departments=progress?.departments.map(entry=>`${entry.department} ${workStatusLabel(entry.status)}`).join(' · ') ?? '';
     const overall=!progress ? '진행 정보 없음' : progress.currentDepartments
       ? `${progress.completedDepartments}/${progress.currentDepartments}개 부서 완료${departments ? ` · ${departments}` : ''}`
       : progress.hadAssignment ? '현재 담당 부서 없음' : '미배정';
     if (actor.role !== 'team') return overall;
-    const ownStatus=item.participation==='current' ? `우리 반: ${item.myTeamWorkStatus ?? '상태 확인'}`
+    const ownStatus=item.participation==='current' ? `우리 반: ${item.myTeamWorkStatus ? workStatusLabel(item.myTeamWorkStatus) : '상태 확인'}`
       : item.participation==='past' ? '우리 반: 현재 담당 아님 · 과거 참여' : '우리 반: 관련 작업 없음';
     return `${ownStatus} · ${overall}`;
   };

@@ -52,6 +52,7 @@ class Database(val jdbc:JdbcTemplate,@param:Value("\${bnoc.bootstrap-admin:acces
         ensureColumn("bnoc_works","resolved_by_actor","VARCHAR(128) NULL")
         ensureColumn("bnoc_works","replacement_work_numbers","TEXT NULL")
         ensureColumn("bnoc_works","previous_schedule","VARCHAR(64) NULL")
+        ensureColumn("bnoc_works","actual_started_at","VARCHAR(64) NULL")
         ensureColumn("bnoc_notices","body_document","MEDIUMTEXT NULL")
         if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_schema_migrations WHERE version=8",Int::class.java)==0) {
             // Carry forward the old replacement links and returned schedules without deleting history.
@@ -60,6 +61,38 @@ class Database(val jdbc:JdbcTemplate,@param:Value("\${bnoc.bootstrap-admin:acces
             jdbc.update("UPDATE bnoc_subjects SET department_manager=FALSE WHERE subject_id IN ('bnoc','bnoc-secondary','team-wireless','team-wired','team-display','team-info','team-crypto')")
             jdbc.update("UPDATE bnoc_subjects SET active=FALSE,department_manager=FALSE,display_label='요청자' WHERE subject_id='department-manager'")
             jdbc.update("INSERT INTO bnoc_schema_migrations(version,applied_at) VALUES (8,?)",java.time.Instant.now().toString())
+        }
+        jdbc.execute("CREATE TABLE IF NOT EXISTS bnoc_request_schedule_preferences (request_number VARCHAR(40) NOT NULL,preference_rank INT NOT NULL,preferred_date VARCHAR(10) NOT NULL,period VARCHAR(3) NOT NULL,PRIMARY KEY(request_number,preference_rank),FOREIGN KEY(request_number) REFERENCES bnoc_requests(request_number))")
+        jdbc.execute("CREATE TABLE IF NOT EXISTS bnoc_request_schedule_legacy (request_number VARCHAR(40) PRIMARY KEY,original_schedule VARCHAR(64) NOT NULL,migrated_at VARCHAR(64) NOT NULL,FOREIGN KEY(request_number) REFERENCES bnoc_requests(request_number))")
+        jdbc.execute("CREATE TABLE IF NOT EXISTS bnoc_work_schedule_intervals (work_number VARCHAR(48) NOT NULL,interval_kind VARCHAR(16) NOT NULL,interval_index INT NOT NULL,starts_at VARCHAR(64) NOT NULL,ends_at VARCHAR(64) NOT NULL,PRIMARY KEY(work_number,interval_kind,interval_index),FOREIGN KEY(work_number) REFERENCES bnoc_works(work_number))")
+        if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_schema_migrations WHERE version=9",Int::class.java)==0) {
+            val seoul=java.time.ZoneId.of("Asia/Seoul")
+            rows("SELECT request_number,requested_schedule FROM bnoc_requests WHERE requested_schedule IS NOT NULL").forEach { row ->
+                val number=row["request_number"] as String;val raw=row["requested_schedule"] as String
+                val instant=java.time.Instant.parse(raw);val local=instant.atZone(seoul)
+                if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_request_schedule_legacy WHERE request_number=?",Int::class.java,number)==0)
+                    jdbc.update("INSERT INTO bnoc_request_schedule_legacy(request_number,original_schedule,migrated_at) VALUES (?,?,?)",number,raw,java.time.Instant.now().toString())
+                if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_request_schedule_preferences WHERE request_number=?",Int::class.java,number)==0)
+                    jdbc.update("INSERT INTO bnoc_request_schedule_preferences VALUES (?,?,?,?)",number,1,local.toLocalDate().toString(),if(local.hour<12) "AM" else "PM")
+                jdbc.update("UPDATE bnoc_requests SET requested_schedule=NULL WHERE request_number=?",number)
+            }
+            rows("SELECT work_number,schedule,previous_schedule FROM bnoc_works").forEach { row ->
+                val number=row["work_number"] as String
+                fun migrateInterval(raw:Any?,kind:String) {
+                    val start=raw as? String ?: return
+                    if((jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_work_schedule_intervals WHERE work_number=? AND interval_kind=?",Int::class.java,number,kind) ?: 0)>0) return
+                    val end=java.time.Instant.parse(start).plusSeconds(3600).toString()
+                    jdbc.update("INSERT INTO bnoc_work_schedule_intervals VALUES (?,?,?,?,?)",number,kind,0,start,end)
+                }
+                migrateInterval(row["schedule"],"current");migrateInterval(row["previous_schedule"],"previous")
+            }
+            rows("SELECT work_number,after_value FROM bnoc_history WHERE field_name='실제 시작 시각' AND work_number IS NOT NULL ORDER BY recorded_at,history_id").forEach { row ->
+                val raw=row["after_value"] as? String ?: return@forEach
+                val started=runCatching { json.readValue(raw,String::class.java) }.getOrNull() ?: return@forEach
+                java.time.Instant.parse(started)
+                jdbc.update("UPDATE bnoc_works SET actual_started_at=? WHERE work_number=? AND actual_started_at IS NULL",started,row["work_number"])
+            }
+            jdbc.update("INSERT INTO bnoc_schema_migrations(version,applied_at) VALUES (9,?)",java.time.Instant.now().toString())
         }
         if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_sequences WHERE sequence_key='request'",Int::class.java)==0) jdbc.update("INSERT INTO bnoc_sequences VALUES ('request',100)")
         (listOf("BNOC")+teams+configuredDepartments).distinct().forEachIndexed { index,department -> if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_departments WHERE department=?",Int::class.java,department)==0) jdbc.update("INSERT INTO bnoc_departments VALUES (?,?)",department,index) }
@@ -80,11 +113,14 @@ class Database(val jdbc:JdbcTemplate,@param:Value("\${bnoc.bootstrap-admin:acces
     private fun mapActor(rs:ResultSet)=Actor(rs.getString("subject_id"),rs.getString("role_name"),rs.getString("display_label"),rs.getString("department"),rs.getString("team_id"),rs.getBoolean("active"),rs.getString("subject_ref"),rs.getBoolean("department_manager"),rs.getBoolean("access_admin"),rs.getLong("revision"))
     fun request(number:String,lock:Boolean=false):RequestRecord?=jdbc.query("SELECT * FROM bnoc_requests WHERE request_number=?"+(if(lock) " FOR UPDATE" else ""),{ rs,_ -> mapRequest(rs) },number).firstOrNull()?.also { it.attachments=attachmentMetadata("request",number) }
     fun requests():List<RequestRecord> = jdbc.query("SELECT * FROM bnoc_requests ORDER BY updated_at DESC,request_number DESC",{ rs,_ -> mapRequest(rs) })
-    private fun mapRequest(rs:ResultSet)=RequestRecord(rs.getString("request_number"),rs.getString("requester_subject"),rs.getString("requester_display_text"),rs.getString("registered_by"),rs.getString("category"),json.readValue(rs.getString("subcategories")),rs.getString("detail"),rs.getString("location"),rs.getString("contact"),rs.getString("equipment_id"),rs.getString("maintenance_target")?.let { json.readValue(it) },rs.getString("requested_schedule"),rs.getString("document_ref"),emptyList(),rs.getString("status"),rs.getString("registered_at"),rs.getString("updated_at"),rs.getLong("revision"),rs.getString("priority"),rs.getString("assigned_at"))
+    private fun mapRequest(rs:ResultSet)=RequestRecord(rs.getString("request_number"),rs.getString("requester_subject"),rs.getString("requester_display_text"),rs.getString("registered_by"),rs.getString("category"),json.readValue(rs.getString("subcategories")),rs.getString("detail"),rs.getString("location"),rs.getString("contact"),rs.getString("equipment_id"),rs.getString("maintenance_target")?.let { json.readValue(it) },rs.getString("requested_schedule"),rs.getString("document_ref"),emptyList(),rs.getString("status"),rs.getString("registered_at"),rs.getString("updated_at"),rs.getLong("revision"),rs.getString("priority"),rs.getString("assigned_at"),schedulePreferences(rs.getString("request_number")))
     fun works(number:String):List<WorkRecord> = jdbc.query("SELECT * FROM bnoc_works WHERE request_number=? ORDER BY work_number",{ rs,_ -> mapWork(rs) },number)
     fun work(number:String,lock:Boolean=false):WorkRecord?=jdbc.query("SELECT * FROM bnoc_works WHERE work_number=?"+(if(lock) " FOR UPDATE" else ""),{ rs,_ -> mapWork(rs) },number).firstOrNull()
     fun allWorks():List<WorkRecord> = jdbc.query("SELECT w.* FROM bnoc_works w JOIN bnoc_requests r ON r.request_number=w.request_number ORDER BY w.work_number",{ rs,_ -> mapWork(rs) })
-    private fun mapWork(rs:ResultSet)=WorkRecord(rs.getString("work_number"),rs.getString("request_number"),rs.getString("team_id"),rs.getString("status"),rs.getString("schedule"),rs.getString("memo"),rs.getString("return_reason"),rs.getString("completion")?.let { json.readValue(it) },json.readValue(rs.getString("resolved_by")),rs.getString("replaces_work_number"),rs.getString("origin"),rs.getLong("revision"),json.readValue(rs.getString("assigned_person_refs")),rs.getString("assigned_at"),rs.getString("resolution_kind") ?: "open",rs.getString("resolution_reason"),rs.getString("resolved_at"),rs.getString("resolved_by_actor"),rs.getString("replacement_work_numbers")?.let { json.readValue(it) } ?: emptyList(),rs.getString("previous_schedule"))
+    private fun mapWork(rs:ResultSet):WorkRecord {
+        val number=rs.getString("work_number")
+        return WorkRecord(rs.getString("work_number"),rs.getString("request_number"),rs.getString("team_id"),rs.getString("status"),rs.getString("schedule"),rs.getString("memo"),rs.getString("return_reason"),rs.getString("completion")?.let { json.readValue(it) },json.readValue(rs.getString("resolved_by")),rs.getString("replaces_work_number"),rs.getString("origin"),rs.getLong("revision"),json.readValue(rs.getString("assigned_person_refs")),rs.getString("assigned_at"),rs.getString("resolution_kind") ?: "open",rs.getString("resolution_reason"),rs.getString("resolved_at"),rs.getString("resolved_by_actor"),rs.getString("replacement_work_numbers")?.let { json.readValue(it) } ?: emptyList(),rs.getString("previous_schedule"),workScheduleIntervals(number,"current"),workScheduleIntervals(number,"previous"),rs.getString("actual_started_at"))
+    }
     fun plannedWork(id:String,lock:Boolean=false):PlannedWorkRecord?=jdbc.query("SELECT * FROM bnoc_planned_works WHERE planned_work_id=?"+(if(lock) " FOR UPDATE" else ""),{ rs,_ -> mapPlannedWork(rs) },id).firstOrNull()
     fun plannedWorks():List<PlannedWorkRecord> = jdbc.query("SELECT * FROM bnoc_planned_works ORDER BY first_work_date,created_at,planned_work_id",{ rs,_ -> mapPlannedWork(rs) })
     fun plannedWorks(teamId:String):List<PlannedWorkRecord> = jdbc.query("SELECT * FROM bnoc_planned_works WHERE team_id=? ORDER BY first_work_date,created_at,planned_work_id",{ rs,_ -> mapPlannedWork(rs) },teamId)
@@ -93,10 +129,40 @@ class Database(val jdbc:JdbcTemplate,@param:Value("\${bnoc.bootstrap-admin:acces
         val last=jdbc.queryForObject("SELECT sequence_value FROM bnoc_sequences WHERE sequence_key='request' FOR UPDATE",Long::class.java)!!
         jdbc.update("UPDATE bnoc_sequences SET sequence_value=? WHERE sequence_key='request'",last+1);return (last+1).toString()
     }
-    fun insertRequest(r:RequestRecord)=jdbc.update("INSERT INTO bnoc_requests(request_number,requester_subject,requester_display_text,registered_by,category,subcategories,detail,location,contact,equipment_id,maintenance_target,requested_schedule,document_ref,status,registered_at,updated_at,revision,priority,assigned_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",r.number,r.requesterSubject,r.requesterDisplayText,r.registeredBy,r.category,json.writeValueAsString(r.subcategories),r.detail,r.location,r.contact,r.equipmentId,r.maintenanceTarget?.let { json.writeValueAsString(it) },r.scheduledAt,r.documentRef,r.status,r.registeredAt,r.updatedAt,r.revision,r.priority,r.assignedAt)
-    fun saveRequest(r:RequestRecord)=jdbc.update("UPDATE bnoc_requests SET detail=?,location=?,contact=?,requested_schedule=?,document_ref=?,status=?,updated_at=?,revision=?,priority=?,assigned_at=? WHERE request_number=?",r.detail,r.location,r.contact,r.scheduledAt,r.documentRef,r.status,r.updatedAt,r.revision,r.priority,r.assignedAt,r.number)
-    fun insertWork(w:WorkRecord)=jdbc.update("INSERT INTO bnoc_works(work_number,request_number,team_id,status,schedule,memo,return_reason,completion,resolved_by,replaces_work_number,origin,revision,assigned_person_refs,assigned_at,resolution_kind,resolution_reason,resolved_at,resolved_by_actor,replacement_work_numbers,previous_schedule) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",w.number,w.requestNumber,w.teamId,w.status,w.schedule,w.memo,w.returnReason,w.completion?.let { json.writeValueAsString(it) },json.writeValueAsString(w.resolvedBy),w.replaces,w.origin,w.revision,json.writeValueAsString(w.assignedPersonRefs),w.assignedAt,w.resolutionKind,w.resolutionReason,w.resolvedAt,w.resolvedByActor,json.writeValueAsString(w.replacementWorkNumbers),w.previousSchedule)
-    fun saveWork(w:WorkRecord)=jdbc.update("UPDATE bnoc_works SET status=?,schedule=?,memo=?,return_reason=?,completion=?,resolved_by=?,revision=?,assigned_person_refs=?,resolution_kind=?,resolution_reason=?,resolved_at=?,resolved_by_actor=?,replacement_work_numbers=?,previous_schedule=? WHERE work_number=?",w.status,w.schedule,w.memo,w.returnReason,w.completion?.let { json.writeValueAsString(it) },json.writeValueAsString(w.resolvedBy),w.revision,json.writeValueAsString(w.assignedPersonRefs),w.resolutionKind,w.resolutionReason,w.resolvedAt,w.resolvedByActor,json.writeValueAsString(w.replacementWorkNumbers),w.previousSchedule,w.number)
+    fun schedulePreferences(requestNumber:String):List<SchedulePreference> = jdbc.query("SELECT preference_rank,preferred_date,period FROM bnoc_request_schedule_preferences WHERE request_number=? ORDER BY preference_rank",{ rs,_ -> SchedulePreference(rs.getInt("preference_rank"),rs.getString("preferred_date"),rs.getString("period")) },requestNumber)
+    fun replaceSchedulePreferences(requestNumber:String,preferences:List<SchedulePreference>) {
+        jdbc.update("DELETE FROM bnoc_request_schedule_preferences WHERE request_number=?",requestNumber)
+        preferences.forEach { jdbc.update("INSERT INTO bnoc_request_schedule_preferences VALUES (?,?,?,?)",requestNumber,it.rank,it.date,it.period) }
+    }
+    fun workScheduleIntervals(workNumber:String,kind:String):List<WorkScheduleInterval> = jdbc.query("SELECT starts_at,ends_at FROM bnoc_work_schedule_intervals WHERE work_number=? AND interval_kind=? ORDER BY interval_index",{ rs,_ -> WorkScheduleInterval(rs.getString("starts_at"),rs.getString("ends_at")) },workNumber,kind)
+    private fun replaceWorkScheduleIntervals(workNumber:String,kind:String,intervals:List<WorkScheduleInterval>) {
+        jdbc.update("DELETE FROM bnoc_work_schedule_intervals WHERE work_number=? AND interval_kind=?",workNumber,kind)
+        intervals.forEachIndexed { index,interval -> jdbc.update("INSERT INTO bnoc_work_schedule_intervals VALUES (?,?,?,?,?)",workNumber,kind,index,interval.startsAt,interval.endsAt) }
+    }
+    fun insertRequest(r:RequestRecord):Int {
+        val inserted=jdbc.update("INSERT INTO bnoc_requests(request_number,requester_subject,requester_display_text,registered_by,category,subcategories,detail,location,contact,equipment_id,maintenance_target,requested_schedule,document_ref,status,registered_at,updated_at,revision,priority,assigned_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",r.number,r.requesterSubject,r.requesterDisplayText,r.registeredBy,r.category,json.writeValueAsString(r.subcategories),r.detail,r.location,r.contact,r.equipmentId,r.maintenanceTarget?.let { json.writeValueAsString(it) },r.scheduledAt,r.documentRef,r.status,r.registeredAt,r.updatedAt,r.revision,r.priority,r.assignedAt)
+        replaceSchedulePreferences(r.number,r.schedulePreferences)
+        return inserted
+    }
+    fun saveRequest(r:RequestRecord):Int {
+        val changed=jdbc.update("UPDATE bnoc_requests SET detail=?,location=?,contact=?,requested_schedule=NULL,document_ref=?,status=?,updated_at=?,revision=?,priority=?,assigned_at=? WHERE request_number=?",r.detail,r.location,r.contact,r.documentRef,r.status,r.updatedAt,r.revision,r.priority,r.assignedAt,r.number)
+        replaceSchedulePreferences(r.number,r.schedulePreferences)
+        return changed
+    }
+    fun insertWork(w:WorkRecord):Int {
+        w.schedule=w.scheduleIntervals.firstOrNull()?.startsAt
+        w.previousSchedule=w.previousScheduleIntervals.firstOrNull()?.startsAt
+        val inserted=jdbc.update("INSERT INTO bnoc_works(work_number,request_number,team_id,status,schedule,memo,return_reason,completion,resolved_by,replaces_work_number,origin,revision,assigned_person_refs,assigned_at,resolution_kind,resolution_reason,resolved_at,resolved_by_actor,replacement_work_numbers,previous_schedule,actual_started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",w.number,w.requestNumber,w.teamId,w.status,w.schedule,w.memo,w.returnReason,w.completion?.let { json.writeValueAsString(it) },json.writeValueAsString(w.resolvedBy),w.replaces,w.origin,w.revision,json.writeValueAsString(w.assignedPersonRefs),w.assignedAt,w.resolutionKind,w.resolutionReason,w.resolvedAt,w.resolvedByActor,json.writeValueAsString(w.replacementWorkNumbers),w.previousSchedule,w.actualStartedAt)
+        replaceWorkScheduleIntervals(w.number,"current",w.scheduleIntervals);replaceWorkScheduleIntervals(w.number,"previous",w.previousScheduleIntervals)
+        return inserted
+    }
+    fun saveWork(w:WorkRecord):Int {
+        w.schedule=w.scheduleIntervals.firstOrNull()?.startsAt
+        w.previousSchedule=w.previousScheduleIntervals.firstOrNull()?.startsAt
+        val changed=jdbc.update("UPDATE bnoc_works SET status=?,schedule=?,memo=?,return_reason=?,completion=?,resolved_by=?,revision=?,assigned_person_refs=?,resolution_kind=?,resolution_reason=?,resolved_at=?,resolved_by_actor=?,replacement_work_numbers=?,previous_schedule=?,actual_started_at=? WHERE work_number=?",w.status,w.schedule,w.memo,w.returnReason,w.completion?.let { json.writeValueAsString(it) },json.writeValueAsString(w.resolvedBy),w.revision,json.writeValueAsString(w.assignedPersonRefs),w.resolutionKind,w.resolutionReason,w.resolvedAt,w.resolvedByActor,json.writeValueAsString(w.replacementWorkNumbers),w.previousSchedule,w.actualStartedAt,w.number)
+        replaceWorkScheduleIntervals(w.number,"current",w.scheduleIntervals);replaceWorkScheduleIntervals(w.number,"previous",w.previousScheduleIntervals)
+        return changed
+    }
     fun attachmentMetadata(kind:String,ref:String):List<Map<String,Any?>> = rows("SELECT attachment_ref,file_name,byte_size,content_type FROM bnoc_attachments WHERE resource_kind=? AND resource_ref=? AND current_link=TRUE ORDER BY uploaded_at,attachment_ref",kind,ref).map { mapOf("id" to it["attachment_ref"],"fileName" to it["file_name"],"size" to it["byte_size"],"type" to it["content_type"]) }
     fun lockResource(key:String) {
         jdbc.update("INSERT INTO bnoc_resource_locks(resource_key) VALUES (?) ON DUPLICATE KEY UPDATE resource_key=VALUES(resource_key)",key)

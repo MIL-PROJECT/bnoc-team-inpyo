@@ -15,7 +15,10 @@ data class RequestRecord(
     val equipmentId:String?=null, val maintenanceTarget:Map<String,String>?=null,
     var scheduledAt:String?=null, var documentRef:String?=null, var attachments:List<Map<String,Any?>> = emptyList(),
     var status:String="대기", val registeredAt:String, var updatedAt:String=registeredAt,
-    var revision:Long=1, var priority:String?=null, var assignedAt:String?=null)
+    var revision:Long=1, var priority:String?=null, var assignedAt:String?=null,
+    var schedulePreferences:List<SchedulePreference> = emptyList())
+data class SchedulePreference(val rank:Int,val date:String,val period:String)
+data class WorkScheduleInterval(val startsAt:String,val endsAt:String)
 data class WorkRecord(
     val number:String, val requestNumber:String, val teamId:String, var status:String="배정",
     var schedule:String?=null, var memo:String?=null, var returnReason:String?=null,
@@ -23,7 +26,8 @@ data class WorkRecord(
     val replaces:String?=null, val origin:String="assigned", var revision:Long=1,
     var assignedPersonRefs:List<String> = emptyList(), val assignedAt:String?=null,
     var resolutionKind:String="open", var resolutionReason:String?=null, var resolvedAt:String?=null,
-    var resolvedByActor:String?=null, var replacementWorkNumbers:List<String> = emptyList(), var previousSchedule:String?=null)
+    var resolvedByActor:String?=null, var replacementWorkNumbers:List<String> = emptyList(), var previousSchedule:String?=null,
+    var scheduleIntervals:List<WorkScheduleInterval> = emptyList(), var previousScheduleIntervals:List<WorkScheduleInterval> = emptyList(), var actualStartedAt:String?=null)
 data class PlannedWorkRecord(
     val id:String, val teamId:String, var title:String, var status:String, var firstWorkDate:String,
     var completedDate:String?=null, var revision:Long=1, val createdAt:String, var updatedAt:String=createdAt)

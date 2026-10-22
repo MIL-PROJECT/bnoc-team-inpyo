@@ -15,6 +15,12 @@ export function displayTime(value) {
   if (Number.isNaN(date.getTime())) return '시각 확인 불가';
   return new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'medium', timeStyle: 'short', hour12: false }).format(date);
 }
+export function displayClock(value) {
+  if (!value) return '미정';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '시각 확인 불가';
+  return new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(date);
+}
 /** @param {string | Date} [value] */
 export function seoulDate(value = new Date()) { return new Date(new Date(value).getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10); }
 export function moveDate(value, days) {

@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.jdbc.datasource.DriverManagerDataSource
 import org.springframework.jdbc.datasource.DataSourceTransactionManager
 import org.springframework.transaction.support.TransactionTemplate
+import java.time.Instant
 import java.util.UUID
 
 class WorkflowContractTest {
@@ -22,8 +23,9 @@ class WorkflowContractTest {
         requester=db.actor("requester")!!;bnoc=db.actor("bnoc")!!;team=db.actor("team-wireless")!!
     }
     private fun op(type:String,number:String?=null,work:String?=null,revision:Long?=null,payload:Map<String,Any?> = emptyMap())=Command(type,UUID.randomUUID().toString(),number,work,revision,payload)
-    private fun create():String = service.execute(requester,op("createRequest",payload=mapOf("category" to "장비/체계","subcategories" to mapOf("systemType" to "인터넷","resourceType" to "PC","workType" to "지원"),"detail" to "지원 요청","location" to "신청 위치","contact" to "1234","scheduledAt" to "2026-10-14T00:00:00Z"))).requestNumber!!
+    private fun create():String = service.execute(requester,op("createRequest",payload=mapOf("category" to "장비/체계","subcategories" to mapOf("systemType" to "인터넷","resourceType" to "PC","workType" to "지원"),"detail" to "지원 요청","location" to "신청 위치","contact" to "1234"))).requestNumber!!
     private fun assign(number:String)=service.execute(bnoc,op("assignTeams",number,revision=db.request(number)!!.revision,payload=mapOf("teamIds" to listOf("무선반"),"priority" to "urgent")))
+    private fun scheduleIntervals(start:String)=listOf(mapOf("startsAt" to start,"endsAt" to Instant.parse(start).plusSeconds(3600).toString()))
     @Test fun `command receipts tolerate additive nullable columns from an older schema`() {
         db.jdbc.execute("ALTER TABLE bnoc_receipts ADD COLUMN target_json TEXT NULL")
         assertTrue(create().isNotBlank(),"EXISTING_RECEIPT_SCHEMA_EXTENSION_MUST_NOT_BREAK_NEW_COMMANDS")
@@ -38,7 +40,7 @@ class WorkflowContractTest {
     @Test fun `BNOC changes an assigned department without return preserving history and optional schedule`() {
         val number=create();assign(number);var old=db.works(number).single()
         val schedule="2026-10-20T01:00:00Z"
-        service.execute(team,op("updateWork",number,old.number,old.revision,mapOf("nextStatus" to "배정","schedule" to schedule,"memo" to "기존 계획")))
+        service.execute(team,op("updateWork",number,old.number,old.revision,mapOf("nextStatus" to "배정","scheduleIntervals" to scheduleIntervals(schedule),"memo" to "기존 계획")))
         old=db.work(old.number)!!;val before=db.request(number)!!
         val command=op("reassignAssignedWork",number,old.number,old.revision,mapOf("teamIds" to listOf("유선반")))
         service.execute(bnoc,command)
@@ -111,14 +113,14 @@ class WorkflowContractTest {
         service.execute(team,op("updateWork",number,work.number,work.revision,mapOf("nextStatus" to "반환","returnReason" to "담당 범위 확인")))
         val failure=assertThrows(BusinessFailure::class.java) { service.execute(requester,op("updateRequest",number,revision=db.request(number)!!.revision,payload=mapOf("detail" to "수정 요청"))) }
         assertEquals("INVALID_STATE",failure.code,"UNRESOLVED_RETURN_MUST_BLOCK_REQUESTER_EDIT")
-        service.execute(team,op("updateWork",number,work.number,db.work(work.number)!!.revision,mapOf("nextStatus" to "배정","reusePreviousSchedule" to false,"schedule" to "")))
+        service.execute(team,op("updateWork",number,work.number,db.work(work.number)!!.revision,mapOf("nextStatus" to "배정","reusePreviousSchedule" to false,"scheduleIntervals" to emptyList<Any>())))
         service.execute(requester,op("updateRequest",number,revision=db.request(number)!!.revision,payload=mapOf("detail" to "수정 요청")))
         assertEquals("수정 요청",db.request(number)!!.detail)
     }
     @Test fun `return removes current schedule preserves previous schedule and correction requires explicit choice`() {
         val number=create();assign(number);var work=db.works(number).single()
         val planned="2026-10-15T01:00:00Z"
-        service.execute(team,op("updateWork",number,work.number,work.revision,mapOf("nextStatus" to "배정","schedule" to planned)))
+        service.execute(team,op("updateWork",number,work.number,work.revision,mapOf("nextStatus" to "배정","scheduleIntervals" to scheduleIntervals(planned))))
         work=db.work(work.number)!!
         service.execute(team,op("updateWork",number,work.number,work.revision,mapOf("nextStatus" to "반환","returnReason" to "담당 범위 확인")))
         work=db.work(work.number)!!
@@ -127,16 +129,16 @@ class WorkflowContractTest {
         val queries=QueryService(db,service)
         assertTrue((queries.schedule(bnoc,mapOf("from" to "2026-10-15","to" to "2026-10-16"))["entries"] as List<*>).isEmpty())
         assertEquals("VALIDATION",assertThrows(BusinessFailure::class.java) { service.execute(team,op("updateWork",number,work.number,work.revision,mapOf("nextStatus" to "배정"))) }.code)
-        service.execute(team,op("updateWork",number,work.number,work.revision,mapOf("nextStatus" to "배정","reusePreviousSchedule" to true,"schedule" to "")))
+        service.execute(team,op("updateWork",number,work.number,work.revision,mapOf("nextStatus" to "배정","reusePreviousSchedule" to true,"scheduleIntervals" to emptyList<Any>())))
         assertEquals(planned,db.work(work.number)!!.schedule,"EXPLICIT_REUSE_MUST_RESTORE_PREVIOUS_SCHEDULE")
     }
     @Test fun `a later return clears an obsolete previous schedule after the team chose no schedule`() {
         val number=create();assign(number);var work=db.works(number).single()
-        service.execute(team,op("updateWork",number,work.number,work.revision,mapOf("nextStatus" to "배정","schedule" to "2026-10-15T01:00:00Z")))
+        service.execute(team,op("updateWork",number,work.number,work.revision,mapOf("nextStatus" to "배정","scheduleIntervals" to scheduleIntervals("2026-10-15T01:00:00Z"))))
         work=db.work(work.number)!!
         service.execute(team,op("updateWork",number,work.number,work.revision,mapOf("nextStatus" to "반환","returnReason" to "담당 범위 확인")))
         work=db.work(work.number)!!
-        service.execute(team,op("updateWork",number,work.number,work.revision,mapOf("nextStatus" to "배정","reusePreviousSchedule" to false,"schedule" to "")))
+        service.execute(team,op("updateWork",number,work.number,work.revision,mapOf("nextStatus" to "배정","reusePreviousSchedule" to false,"scheduleIntervals" to emptyList<Any>())))
         work=db.work(work.number)!!
         assertNull(work.schedule)
         service.execute(team,op("updateWork",number,work.number,work.revision,mapOf("nextStatus" to "반환","returnReason" to "다시 확인 필요")))

@@ -35,6 +35,7 @@ class OperationsContractTest {
     @AfterEach fun cleanup() { if(::root.isInitialized) Files.walk(root).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) } } }
     fun actor(subject:String)=db.actor(subject)!!
     fun command(type:String,payload:Map<String,Any?> = emptyMap(),revision:Long?=null,number:String?=null,work:String?=null,id:String=UUID.randomUUID().toString())=Command(type,id,number,work,revision,payload)
+    private fun scheduleIntervals(start:String)=listOf(mapOf("startsAt" to start,"endsAt" to Instant.parse(start).plusSeconds(3600).toString()))
     fun create():String=workflow.execute(actor("requester"),command("createRequest",mapOf("category" to "장비/체계","subcategories" to mapOf("systemType" to "인터넷","resourceType" to "PC","workType" to "대여"),"detail" to "지원 요청","location" to "신청 위치","contact" to "1234"))).requestNumber!!
     fun assign(number:String,teams:List<String> = listOf("무선반"))=workflow.execute(actor("bnoc"),command("assignTeams",mapOf("teamIds" to teams,"priority" to "urgent"),db.request(number)!!.revision,number))
     fun departmentManager(department:String="무선반"):Actor {
@@ -157,10 +158,15 @@ class OperationsContractTest {
         assertEquals("INVALID_STATE",assertThrows(BusinessFailure::class.java) { workflow.execute(actor("requester"),command("updateRequest",mapOf("detail" to "다른 요청"),db.request(number)!!.revision,number)) }.code)
     }
     @Test fun `completed after action starts unclassified cannot be corrected by team`() {
+        val preceding=create();assign(preceding)
         val number=workflow.execute(actor("team-wireless"),command("createAfterActionReport",mapOf("category" to "회의 지원","subcategories" to mapOf("meetingType" to "일반회의"),"detail" to "완료 기록","location" to "신청 위치","contact" to "1234","completedConfirmed" to true,"actualRequesterText" to "직접 요청자","actualStartedAt" to "2026-01-01T00:00:00Z","actualCompletedAt" to "2026-01-01T01:00:00Z","reason" to "선조치 기록"))).requestNumber!!
         assertNull(db.request(number)!!.priority,"AFTER_ACTION_MUST_START_UNCLASSIFIED")
         val w=db.works(number).single()
         assertEquals("INVALID_STATE",assertThrows(BusinessFailure::class.java) { workflow.execute(actor("team-wireless"),command("updateWork",mapOf("nextStatus" to "배정"),w.revision,number,w.number)) }.code)
+        val shared=queries.shared(actor("requester-secondary"),emptyMap())
+        val items=shared["items"] as List<Map<*,*>>
+        assertEquals("$number-1",items.first()["workNumber"],"RECENT_AFTER_ACTION_MUST_BE_VISIBLE_IN_DEFAULT_ASSIGNED_LIST")
+        assertEquals(2,(shared["counts"] as Map<*,*>) ["total"])
         workflow.execute(actor("bnoc"),command("changePriority",mapOf("priority" to "general"),db.request(number)!!.revision,number))
         assertEquals("완료",db.request(number)!!.status)
     }
@@ -271,6 +277,8 @@ class OperationsContractTest {
         workflow.history(actor("bnoc"),request,work,"배정 시각(접수 시간)",null,"2026-01-01T15:20:00Z")
         workflow.history(actor("bnoc"),request,null,"scheduledAt",null,"2026-01-01T15:00:00Z")
         workflow.history(actor("team-wireless"),request,work,"schedule","2026-01-01T15:00:00Z",null)
+        workflow.history(actor("bnoc"),request,null,"schedulePreferences",null,listOf(mapOf("rank" to 1,"date" to "2026-01-02","period" to "AM")))
+        workflow.history(actor("team-wireless"),request,work,"scheduleIntervals",null,listOf(mapOf("startsAt" to "2026-01-01T15:00:00Z","endsAt" to "2026-01-01T16:00:00Z")))
         workflow.history(actor("team-wireless"),request,work,"실제 시작 시각",null,"2026-01-01T14:00:00Z")
         workflow.history(actor("team-wireless"),request,work,"완료정보",null,mapOf("completedBy" to "team-wireless","completedAt" to "2026-01-01T15:30:00Z"))
         val before=db.rows("SELECT * FROM bnoc_history WHERE request_number=? ORDER BY history_id",number)
@@ -278,6 +286,8 @@ class OperationsContractTest {
         assertTrue(history.any { it["summary"]=="배정 시각(접수 시간): 2026. 1. 2. 00:20" },"HISTORY_TIME_MUST_USE_SEOUL_DISPLAY")
         assertTrue(history.any { it["field"]=="scheduledAt" && it["summary"]=="희망 일정: 2026. 1. 2. 00:00" })
         assertTrue(history.any { it["field"]=="schedule" && it["summary"]=="작업 일정: 2026. 1. 2. 00:00 → 미정" })
+        assertTrue(history.any { it["field"]=="schedulePreferences" && it["summary"]=="희망 일정: 1지망 2026-01-02 오전" })
+        assertTrue(history.any { it["field"]=="scheduleIntervals" && it["summary"]=="작업 일정: 2026. 1. 2. 00:00–2026. 1. 2. 01:00" })
         assertTrue(history.any { it["summary"]=="실제 시작 시각: 2026. 1. 1. 23:00" })
         assertTrue(history.any { it["summary"]=="완료정보: 무선반 · 2026. 1. 2. 00:30" })
         assertTrue(history.none { it["summary"].toString().contains("team-wireless") })
@@ -322,10 +332,10 @@ class OperationsContractTest {
     }
     @Test fun `BNOC schedule includes team dates with exclusive end and completed unscheduled excluded`() {
         val number=create();assign(number);val w=db.works(number).single()
-        workflow.execute(actor("team-wireless"),command("updateWork",mapOf("nextStatus" to "배정","schedule" to "2026-10-14T15:00:00Z"),w.revision,number,w.number))
+        workflow.execute(actor("team-wireless"),command("updateWork",mapOf("nextStatus" to "배정","scheduleIntervals" to scheduleIntervals("2026-10-14T15:00:00Z")),w.revision,number,w.number))
         assertEquals(0,(queries.schedule(actor("bnoc"),mapOf("from" to "2026-10-14","to" to "2026-10-15"))["entries"] as List<*>).size)
         assertEquals(1,(queries.schedule(actor("bnoc"),mapOf("from" to "2026-10-15","to" to "2026-10-16"))["entries"] as List<*>).size)
-        workflow.execute(actor("team-wireless"),command("updateWork",mapOf("nextStatus" to "완료","schedule" to ""),db.work(w.number)!!.revision,number,w.number))
+        workflow.execute(actor("team-wireless"),command("updateWork",mapOf("nextStatus" to "완료","scheduleIntervals" to emptyList<Any>()),db.work(w.number)!!.revision,number,w.number))
         assertEquals(0,(queries.schedule(actor("bnoc"),emptyMap())["unscheduled"] as List<*>).size)
     }
 }

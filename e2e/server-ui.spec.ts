@@ -1,4 +1,4 @@
-import { test, expect, type Page, type TestInfo } from '@playwright/test';
+import { request as apiRequest, test, expect, type Page, type TestInfo } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -122,8 +122,21 @@ async function fields(page: Page, text: string) {
   await page.getByRole('combobox', { name: '체계 종류', exact: true }).selectOption('인트라넷');
   await page.getByRole('combobox', { name: '자원 유형', exact: true }).selectOption('PC');
   await page.getByRole('combobox', { name: '작업 유형', exact: true }).selectOption('지원');
-  await page.getByRole('textbox', { name: /^요청 내용·증상(?:\s|$)/ }).fill(text);
-  await page.getByLabel('작업 위치', { exact: true }).fill('요청 위치');
+  const detail = page.getByRole('textbox', { name: /^요청 내용·증상(?:\s|$)/ });
+  const example = '예: 인트라넷 PC 지원 작업이라면 필요한 지원 내용과 희망 시점을 적어주세요.';
+  await expect(detail).toHaveAttribute('placeholder', example);
+  const location = page.getByLabel('작업 위치', { exact: true });
+  await expect(location).toHaveAttribute('placeholder', '예: 건물 층 부서명 등 작업 위치를 적어주세요.');
+  await expect(detail).toBeVisible();
+  await detail.fill(text);
+  expect(await detail.evaluate(element => element.matches(':placeholder-shown'))).toBe(false);
+  await page.getByRole('combobox', { name: '작업 유형', exact: true }).selectOption('고장');
+  await expect(detail).toHaveValue(text);
+  await expect(detail).toHaveAttribute('placeholder', '예: 인트라넷 PC 고장 작업이라면 발생 증상과 처음 확인한 시점을 적어주세요.');
+  await page.getByRole('combobox', { name: '작업 유형', exact: true }).selectOption('지원');
+  await expect(detail).toHaveValue(text);
+  await location.fill('요청 위치');
+  expect(await location.evaluate(element => element.matches(':placeholder-shown'))).toBe(false);
   await page.getByLabel('요청자 군내전화번호', { exact: true }).fill('000-0000');
 }
 async function noOverflow(page: Page) {
@@ -205,9 +218,67 @@ test('PC completeness: missing type choices show server group errors and focus t
   expect((await apiRead(page, `/api/requests/${number}`)).data.detail).toBe('유형 선택 오류 안내 확인');
   await expect(page.getByRole('status').filter({ hasText: `요청 ${number}을 등록했습니다.` })).toBeVisible();
   await page.getByRole('button', { name: '내용 수정', exact: true }).click();
-  await page.getByRole('textbox', { name: '내용', exact: true }).fill('유형 선택 후 수정 중');
+  const editedDetail = page.getByRole('textbox', { name: '내용', exact: true });
+  await editedDetail.fill('');
+  const editExample = '예: 인트라넷 PC 지원 작업이라면 필요한 지원 내용과 희망 시점을 적어주세요.';
+  await expect(editedDetail).toHaveAttribute('placeholder', editExample);
+  expect(await editedDetail.evaluate(element => element.matches(':placeholder-shown'))).toBe(true);
+  await editedDetail.fill('유형 선택 후 수정 중');
+  expect(await editedDetail.evaluate(element => element.matches(':placeholder-shown'))).toBe(false);
+  await expect(editedDetail).toHaveValue('유형 선택 후 수정 중');
+  const editedLocation = page.getByRole('textbox', { name: '위치', exact: true });
+  await editedLocation.fill('');
+  await expect(editedLocation).toHaveAttribute('placeholder', '예: 건물 층 부서명 등 작업 위치를 적어주세요.');
+  expect(await editedLocation.evaluate(element => element.matches(':placeholder-shown'))).toBe(true);
+  await editedLocation.fill('수정 위치');
+  expect(await editedLocation.evaluate(element => element.matches(':placeholder-shown'))).toBe(false);
+  await expect(editedLocation).toHaveValue('수정 위치');
   await expect(page.getByRole('status').filter({ hasText: `요청 ${number}을 등록했습니다.` })).toHaveCount(0);
   await expect(page.getByRole('status').filter({ hasText: '저장하지 않은 변경' })).toBeVisible();
+});
+
+test('request form provides meeting-specific placeholders and hides them after input', async ({ page }) => {
+  await apiLogin(page, 'requester');
+  await page.goto('/new');
+  await page.getByRole('combobox', { name: '요청 유형', exact: true }).selectOption('회의 지원');
+  await page.getByRole('combobox', { name: '회의 유형', exact: true }).selectOption('화상회의');
+  const detail = page.getByRole('textbox', { name: /^요청 내용·증상(?:\s|$)/ });
+  await expect(detail).toHaveAttribute('placeholder', '예: 화상회의 지원이 필요합니다. 회의 일시, 접속 방식, 필요한 장비나 연결 지원을 적어주세요.');
+  await detail.fill('화상회의 접속 지원 요청');
+  expect(await detail.evaluate(element => element.matches(':placeholder-shown'))).toBe(false);
+  const location = page.getByLabel('작업 위치', { exact: true });
+  await expect(location).toHaveAttribute('placeholder', '예: 건물 층 부서명 등 작업 위치를 적어주세요.');
+  await location.fill('본관 회의실');
+  expect(await location.evaluate(element => element.matches(':placeholder-shown'))).toBe(false);
+  await expect(detail).toHaveValue('화상회의 접속 지원 요청');
+});
+
+test('BNOC unassigned requests distinguish query errors and paginate', async ({ page }) => {
+  await apiLogin(page, 'bnoc');
+  let failFirstQuery = true;
+  await page.route('**/api/work-overview?**', async route => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('bucket') !== 'unassigned') return route.continue();
+    if (failFirstQuery) {
+      failFirstQuery = false;
+      return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'SAVE_FAILED', message: '미배정 요청 조회에 실패했습니다.' }) });
+    }
+    const pageNumber = Number(url.searchParams.get('page') ?? 0);
+    const items = pageNumber === 0
+      ? Array.from({ length: 20 }, (_, index) => ({ requestNumber: `8800000${String(index + 1).padStart(2, '0')}`, category: '장비/체계', status: '대기' }))
+      : [{ requestNumber: '880000021', category: '회의 지원', status: '대기' }];
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ queriedAt: new Date().toISOString(), data: { items, total: 21, page: pageNumber, size: 20, counts: {}, byDepartment: [] } }) });
+  });
+  await page.goto('/overview');
+  const section = page.getByRole('region', { name: '미배정 요청', exact: true });
+  await expect(section.getByRole('alert')).toContainText('미배정 요청 조회에 실패했습니다.');
+  await expect(section.getByText('조건에 맞는 미배정 요청이 없습니다.', { exact: true })).toHaveCount(0);
+  await section.getByRole('button', { name: '다시 조회', exact: true }).click();
+  await expect(section.getByRole('button', { name: /^880000001 ·/ })).toBeVisible();
+  await expect(section.getByRole('button', { name: '다음 페이지', exact: true })).toBeEnabled();
+  await section.getByRole('button', { name: '다음 페이지', exact: true }).click();
+  await expect(section.getByRole('button', { name: /^880000021 ·/ })).toBeVisible();
+  await expect(section.getByText('2페이지', { exact: true })).toBeVisible();
 });
 
 test('PC completeness: edited and failed searches preserve the actual successful conditions and result', async ({ page }, info) => {
@@ -265,6 +336,10 @@ test('PC completeness: edited and failed searches preserve the actual successful
 });
 
 test('SR-BE-001,004,005,006,010,011,012,013,015,019,028,031,033,034: real login, registration, classification, work save, refresh and file download', async ({ page }, info) => {
+  const isolatedApi = await apiRequest.newContext({ baseURL: base });
+  await apiLogin({ request: isolatedApi }, 'requester');
+  const pending = await command({ request: isolatedApi }, 'createRequest', requestPayload(`다음 미배정 요청 ${info.project.name}`));
+  await isolatedApi.dispose();
   await page.goto('/requests');
   await expect(page.getByText(/모의 인증|모의 정보|대회용/)).toHaveCount(0);
   await expect(page.getByRole('button', { name: /회원가입|계정 생성/ })).toHaveCount(0);
@@ -275,7 +350,8 @@ test('SR-BE-001,004,005,006,010,011,012,013,015,019,028,031,033,034: real login,
   await expect(page.getByText('예: 장비명이나 알고 있는 식별정보. 모르면 비워도 됩니다.', { exact: true })).toBeVisible();
   await expect(page.getByText('예: 관련 공문 제목이나 문서번호. 없으면 비워도 됩니다.', { exact: true })).toBeVisible();
   await fields(page, `브라우저 지원 ${info.project.name}`);
-  await page.getByLabel('희망 일정', { exact: true }).fill('2026-10-20T10:00');
+  await page.getByLabel('1지망 날짜', { exact: true }).fill('2026-10-20');
+  await page.getByLabel('1지망 오전·오후', { exact: true }).selectOption('AM');
   await page.getByLabel('첨부파일', { exact: true }).setInputFiles({ name: '저장자료.txt', mimeType: 'text/plain', buffer: Buffer.from('브라우저 파일 저장 확인') });
   await page.getByRole('button', { name: '신청 등록', exact: true }).click();
   await expect(page.getByRole('heading', { name: '신청 상세', exact: true })).toBeVisible();
@@ -289,11 +365,26 @@ test('SR-BE-001,004,005,006,010,011,012,013,015,019,028,031,033,034: real login,
   await page.goto(`/requests/${number}`);
   await expect(page.getByRole('heading', { name: '신청 상세' })).toBeVisible();
   await expect(page.getByLabel(/반장|작업 예정일/)).toHaveCount(0);
+  const initialAssignmentCard = page.locator('form.card.section-gap').filter({ has: page.getByRole('heading', { name: '작업반 배정', exact: true }) });
+  await expect(initialAssignmentCard).toBeVisible();
+  await expect(page.locator('.department-management')).toHaveCount(0);
   await page.getByLabel(wire, { exact: true }).check();
   const classification=page.getByRole('combobox',{name:'일반·긴급',exact:true});
   await expect(classification).toHaveValue('general');
   await classification.selectOption('urgent');
   await page.getByRole('button', { name: '선택 작업반 배정', exact: true }).click();
+  await expect(page).toHaveURL(/\/overview$/);
+  await expect(page.getByRole('heading', { name: '요청 현황(BNOC)', exact: true })).toBeVisible();
+  await expect(page.locator('p.notice[role="status"]')).toContainText(`요청 ${number}을 ${wire}에 배정했습니다.`);
+  const unassignedSection = page.getByRole('region', { name: '미배정 요청', exact: true });
+  await expect(unassignedSection.getByRole('button', { name: new RegExp(`^${pending.requestNumber} ·`) })).toBeVisible();
+  await expect(unassignedSection.getByRole('button', { name: new RegExp(`^${number} ·`) })).toHaveCount(0);
+  await page.getByRole('button', { name: new RegExp(`^${number} ·`) }).click();
+  const addTeamsCard = page.locator('form.card.section-gap').filter({ has: page.getByRole('heading', { name: '작업 부서 추가', exact: true }) });
+  const reassignmentCard = page.locator('form.card.section-gap').filter({ has: page.getByRole('heading', { name: `${wire} 배정 변경`, exact: true }) });
+  await expect(addTeamsCard).toBeVisible();
+  await expect(reassignmentCard).toBeVisible();
+  await expect(page.locator('.department-management')).toHaveCount(0);
   await expect.poll(async () => (await apiRead(page, `/api/requests/${number}`)).data.workItems.length).toBe(1);
   const assigned = (await apiRead(page, `/api/requests/${number}`)).data;
   expect(assigned.priority).toBe('urgent');
@@ -314,8 +405,14 @@ test('SR-BE-001,004,005,006,010,011,012,013,015,019,028,031,033,034: real login,
   await screenshot(page, info, 'assignment');
   await switchWithPopup(page, 'team-wireless');
   await page.goto(`/requests/${number}`);
+  const workStatus = page.getByRole('combobox', { name: '작업 상태', exact: true });
+  await expect(workStatus.locator('option[value="작업 중"]')).toHaveText('작업 준비');
+  await workStatus.selectOption('작업 중');
+  await page.getByRole('button', { name: '상태 저장', exact: true }).click();
+  await expect.poll(async () => (await apiRead(page, `/api/requests/${number}`)).data.workItems[0].status).toBe('작업 중');
+  await expect(page.locator('.work-card .badge')).toHaveText('작업 준비');
   await page.getByRole('combobox', { name: '작업 상태', exact: true }).selectOption('완료');
-  expect((await apiRead(page, `/api/requests/${number}`)).data.workItems[0].status).toBe('배정');
+  expect((await apiRead(page, `/api/requests/${number}`)).data.workItems[0].status).toBe('작업 중');
   await page.getByRole('button', { name: '상태 저장', exact: true }).click();
   await expect.poll(async () => (await apiRead(page, `/api/requests/${number}`)).data.status).toBe('완료');
   await page.getByRole('combobox', { name: '작업 상태', exact: true }).selectOption('배정');
@@ -328,6 +425,11 @@ test('SR-BE-001,004,005,006,010,011,012,013,015,019,028,031,033,034: real login,
   await page.goto(`/requests/${number}`);
   await page.reload();
   await expect(page.getByText('완료', { exact: true }).first()).toBeVisible();
+  await page.goto('/operations');
+  const sharedRow = page.getByRole('row').filter({ hasText: number });
+  await expect(sharedRow).toContainText('000-0000');
+  await page.goto(`/requests/${number}`);
+  await page.reload();
   const savedDownload = page.waitForEvent('download');
   await page.getByRole('link', { name: /저장자료\.txt/ }).click();
   const download = await savedDownload;
@@ -363,6 +465,12 @@ test('SR-BE-017,018,022,023,031,032,033: explicit search, safe shared list and d
   await apiLogin(page, 'bnoc');
   const request = (await apiRead(page, `/api/requests/${number}`)).data;
   await command(page, 'assignTeams', { teamIds: [wire], priority: 'general' }, { requestNumber: number, expectedRevision: request.revision });
+  await apiLogin(page, 'team-wireless');
+  const assigned = (await apiRead(page, `/api/requests/${number}`)).data.workItems[0];
+  await command(page, 'updateWork', { nextStatus: '작업 중', scheduleIntervals: [
+    { startsAt: '2026-10-20T01:00:00Z', endsAt: '2026-10-20T03:00:00Z' },
+    { startsAt: '2026-10-20T04:00:00Z', endsAt: '2026-10-20T05:00:00Z' }
+  ] }, { requestNumber: number, workNumber: assigned.workNumber, expectedRevision: assigned.revision });
   await apiLogin(page, 'requester-secondary');
   await page.goto('/operations');
   await expect(page.getByRole('heading', { name: '부서별 작업 현황', exact: true })).toBeVisible();
@@ -394,8 +502,11 @@ test('SR-BE-017,018,022,023,031,032,033: explicit search, safe shared list and d
     await renderedPage(next);
   }
   await expect(targetRow).toBeVisible();
+  await expect(targetRow).toContainText('BNOC 배정');
+  await expect(targetRow).toContainText('작업 준비');
+  await expect(targetRow).toContainText('2026-10-20 10:00–12:00 · 2026-10-20 13:00–14:00');
   await expect(page.getByText(`검색 입력 ${info.project.name}`, { exact: true })).toHaveCount(0);
-  await expect(page.getByText('000-0000', { exact: true })).toHaveCount(0);
+  await expect(targetRow).toContainText('000-0000', 'the approved shared projection includes the requester phone without exposing request text');
   await page.goto(`/requests/${number}`);
   await expect(page.getByRole('heading', { name: '신청 상세', exact: true })).toHaveCount(0);
   await expect(page.getByText(/접근.*없|찾을 수 없/).first()).toBeVisible();
@@ -431,10 +542,61 @@ test('SR-BE-015: request list shows per-department progress when one department 
 });
 
 test('SR-BE-012,014,015,021,030: real day/week/month calendar and returned-work reassignment', async ({ page }, info) => {
-  const number = await seed(page, `일정 확인 ${info.project.name}`, [wire,'유선반']);
+  const longDetail = `일정 확인 ${info.project.name} ${'확인할 작업 항목 '.repeat(20)}`;
+  const number = await seed(page, longDetail, [wire,'유선반']);
   await apiLogin(page, 'team-wireless');
   let current = (await apiRead(page, `/api/requests/${number}`)).data;
-  await command(page, 'updateWork', { nextStatus: '배정', schedule: '2026-10-20T01:00:00Z' }, { requestNumber: number, workNumber: current.workItems[0].workNumber, expectedRevision: current.workItems[0].revision });
+  await page.goto(`/requests/${number}`);
+  await page.getByRole('combobox', { name: '작업 상태', exact: true }).selectOption('작업 중');
+  await page.getByLabel('작업 일정 날짜').fill('2026-10-20');
+  await expect(page.locator('.hour-grid')).toHaveCount(0, 'the editor should use ranges instead of a wall of hour checkboxes');
+  await expect(page.getByRole('button', { name: '시간대 추가', exact: true })).toBeDisabled();
+  await page.getByLabel('시간대 종료 시각').selectOption('12');
+  await expect(page.getByRole('button', { name: '시간대 추가', exact: true })).toBeDisabled();
+  await expect(page.locator('.schedule-range-chip')).toHaveCount(0);
+  await page.getByLabel('시간대 종료 시각').selectOption('');
+  await page.getByLabel('시간대 시작 시각').selectOption('23');
+  await expect(page.getByRole('button', { name: '시간대 추가', exact: true })).toBeDisabled();
+  await page.getByLabel('시간대 종료 시각').selectOption('24');
+  await page.getByRole('button', { name: '시간대 추가', exact: true }).click();
+  await expect(page.getByText('2026-10-20 · 23:00–24:00', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '2026-10-20 · 23:00–24:00 구간 삭제', exact: true }).click();
+  await page.getByLabel('시간대 시작 시각').selectOption('10');
+  await page.getByLabel('시간대 종료 시각').selectOption('12');
+  await page.getByRole('button', { name: '시간대 추가', exact: true }).click();
+  await page.getByLabel('시간대 시작 시각').selectOption('11');
+  await page.getByLabel('시간대 종료 시각').selectOption('13');
+  await expect(page.getByRole('button', { name: '시간대 추가', exact: true })).toBeDisabled();
+  await expect(page.getByText(/이미 선택한 구간과 겹칩니다/)).toBeVisible();
+  await page.getByLabel('시간대 시작 시각').selectOption('14');
+  await page.getByLabel('시간대 종료 시각').selectOption('15');
+  await page.getByRole('button', { name: '시간대 추가', exact: true }).click();
+  await page.getByRole('button', { name: '2026-10-20 · 14:00–15:00 구간 삭제', exact: true }).click();
+  await expect(page.getByText('2026-10-20 · 10:00–12:00', { exact: true })).toBeVisible();
+  await expect(page.getByText('2026-10-20 · 14:00–15:00', { exact: true })).toHaveCount(0);
+  await page.getByLabel('시간대 시작 시각').selectOption('14');
+  await page.getByLabel('시간대 종료 시각').selectOption('15');
+  await page.getByRole('button', { name: '시간대 추가', exact: true }).click();
+  await page.getByLabel('작업 일정 날짜').fill('2026-10-21');
+  await page.getByLabel('시간대 시작 시각').selectOption('0');
+  await page.getByLabel('시간대 종료 시각').selectOption('1');
+  await page.getByRole('button', { name: '시간대 추가', exact: true }).click();
+  await expect(page.getByText('2026-10-21 · 00:00–01:00', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '2026-10-21 · 00:00–01:00 구간 삭제', exact: true }).click();
+  await page.getByLabel('작업 일정 날짜').fill('2026-10-20');
+  await noOverflow(page);
+  await screenshot(page, info, 'schedule-range-editor');
+  await page.getByRole('textbox', { name: '작업 메모', exact: true }).fill('일정 준비물 확인');
+  await page.getByRole('button', { name: '상태 저장', exact: true }).click();
+  await expect.poll(async () => (await apiRead(page, `/api/requests/${number}`)).data.workItems[0].status).toBe('작업 중');
+  current = (await apiRead(page, `/api/requests/${number}`)).data;
+  expect(current.workItems[0].scheduleIntervals.map(({ startsAt, endsAt }) => ({
+    startsAt: new Date(startsAt).toISOString(),
+    endsAt: new Date(endsAt).toISOString()
+  }))).toEqual([
+    { startsAt: '2026-10-20T01:00:00.000Z', endsAt: '2026-10-20T03:00:00.000Z' },
+    { startsAt: '2026-10-20T05:00:00.000Z', endsAt: '2026-10-20T06:00:00.000Z' }
+  ]);
   await page.goto('/schedule');
   await expect(page.getByRole('heading', { name: '우리 반 일정', exact: true })).toBeVisible();
   for (const view of ['일', '주', '월']) {
@@ -442,11 +604,92 @@ test('SR-BE-012,014,015,021,030: real day/week/month calendar and returned-work 
     await expect(page.getByRole('button', { name: view, exact: true })).toHaveAttribute('aria-pressed', 'true');
     await noOverflow(page);
   }
+  await page.getByRole('button', { name: '주', exact: true }).click();
   await page.getByLabel(/기준 날짜|조회 날짜/).fill('2026-10-20');
-  await expect(page.getByRole('button', { name: new RegExp(`${number}-1`) }).first()).toBeVisible();
+  const scheduledCards = page.locator('.calendar-item').filter({ hasText: `작업번호: ${number}-1` });
+  await expect(scheduledCards).toHaveCount(1, 'all of the work intervals share one calendar card');
+  const scheduledCard = scheduledCards.first();
+  await expect(scheduledCard).toBeVisible();
+  await expect(scheduledCard).toHaveClass(/calendar-item--scheduled/);
+  const scheduledColors = await scheduledCard.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, border: style.borderLeftColor };
+  });
+  await expect(scheduledCard.locator('.calendar-time')).toHaveText('10:00–12:00 · 14:00–15:00');
+  const hourWithCard = (label: string) => page.locator('.calendar-hour').filter({ has: page.getByRole('heading', { name: label, exact: true }) });
+  await expect(hourWithCard('10:00–11:00').locator('.calendar-item').filter({ hasText: `작업번호: ${number}-1` })).toHaveCount(1);
+  await expect(hourWithCard('11:00–12:00').locator('.calendar-item').filter({ hasText: `작업번호: ${number}-1` })).toHaveCount(0);
+  await expect(hourWithCard('14:00–15:00').locator('.calendar-item').filter({ hasText: `작업번호: ${number}-1` })).toHaveCount(0);
+  await expect(scheduledCard).toContainText('작업 준비');
+  await expect(scheduledCard).not.toContainText(longDetail);
+  await expect(scheduledCard.locator('.calendar-detail')).toHaveCount(0);
+  await expect(scheduledCard.getByText('작업 메모: 일정 준비물 확인', { exact: true })).toBeVisible();
+  await expect(scheduledCard).not.toContainText('전화번호');
+  const cardTypography = await scheduledCard.locator(':scope > *').evaluateAll(elements => elements.map(element => {
+    const style = getComputedStyle(element);
+    return { className: element.className, fontSize: style.fontSize, fontWeight: style.fontWeight, fontFamily: style.fontFamily, color: style.color };
+  }));
+  expect(new Set(cardTypography.map(style => style.fontSize)).size).toBe(1);
+  expect(new Set(cardTypography.map(style => style.fontFamily)).size).toBe(1);
+  const timeTypography = cardTypography.find(style => style.className === 'calendar-time');
+  expect(timeTypography?.fontWeight).toBe('700');
+  expect(cardTypography.filter(style => style.className !== 'calendar-time').every(style => style.fontWeight === '400')).toBe(true);
+  expect(new Set(cardTypography.filter(style => style.className !== 'calendar-time').map(style => style.color)).size).toBe(1);
+  expect(timeTypography?.color).not.toBe(cardTypography.find(style => style.className !== 'calendar-time')?.color);
   await screenshot(page, info, 'calendar');
-  await page.getByRole('button', { name: new RegExp(`${number}-1`) }).first().click();
+  await scheduledCard.click();
   await expect(page.getByRole('heading', { name: '신청 상세' })).toBeVisible();
+  await page.getByRole('combobox', { name: '작업 상태', exact: true }).selectOption('완료');
+  await page.getByRole('textbox', { name: '완료 메모', exact: true }).fill('실제 완료 기록');
+  await page.getByRole('button', { name: '상태 저장', exact: true }).click();
+  await expect.poll(async () => (await apiRead(page, `/api/requests/${number}`)).data.workItems[0].status).toBe('완료');
+  await page.goto('/schedule');
+  await page.getByLabel(/기준 날짜|조회 날짜/).fill('2026-10-20');
+  const completedScheduleCards = page.locator('.calendar-item').filter({ hasText: `작업번호: ${number}-1` });
+  await expect(completedScheduleCards).toHaveCount(1, 'the planned intervals and actual completion share one card');
+  await expect(completedScheduleCards.first()).toHaveClass(/calendar-item--completed/);
+  await expect(completedScheduleCards.first()).toContainText(`작업번호: ${number}-1 (완료)`);
+  await expect(completedScheduleCards.locator('.calendar-time')).toHaveText('10:00–12:00 · 14:00–15:00');
+  const completedColors = await completedScheduleCards.first().evaluate(element => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, border: style.borderLeftColor };
+  });
+  expect(completedColors.background).not.toBe(scheduledColors.background);
+  expect(completedColors.border).not.toBe(scheduledColors.border);
+  await expect(completedScheduleCards.first()).not.toContainText(/완료\s+\d{4}\.\s*\d{1,2}\./);
+  await expect(completedScheduleCards.first()).toContainText('작업 메모: 일정 준비물 확인');
+
+  const unscheduledNumber = await seed(page, `일정 미정 완료 ${info.project.name}`, [wire]);
+  await apiLogin(page, 'team-wireless');
+  const unscheduledRequest = (await apiRead(page, `/api/requests/${unscheduledNumber}`)).data;
+  const unscheduledWork = unscheduledRequest.workItems.find((work: { teamId: string }) => work.teamId === wire);
+  await command(page, 'updateWork', { nextStatus: '완료' }, { requestNumber: unscheduledNumber, workNumber: unscheduledWork.workNumber, expectedRevision: unscheduledWork.revision });
+  const completedWithoutPlan = (await apiRead(page, `/api/requests/${unscheduledNumber}`)).data.workItems.find((work: { teamId: string }) => work.teamId === wire);
+  const completionParts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date(completedWithoutPlan.completion.completedAt));
+  const completionPart = (type: string) => completionParts.find(part => part.type === type)?.value;
+  const completionDate = `${completionPart('year')}-${completionPart('month')}-${completionPart('day')}`;
+  const completionHour = Number(completionPart('hour'));
+  await page.goto('/schedule');
+  await page.getByLabel(/기준 날짜|조회 날짜/).fill(completionDate);
+  const noPlanCompletedCard = page.locator('.calendar-item').filter({ hasText: `작업번호: ${unscheduledWork.workNumber}` });
+  await expect(noPlanCompletedCard).toHaveCount(1, 'a completed work without planned intervals is placed at its completion hour');
+  await expect(noPlanCompletedCard).toHaveClass(/calendar-item--completed/);
+  await expect(noPlanCompletedCard).toContainText(`작업번호: ${unscheduledWork.workNumber} (완료)`);
+  await expect(noPlanCompletedCard.locator('.calendar-time')).toHaveCount(0, 'the time slot heading already supplies the completion time');
+  await expect(noPlanCompletedCard).not.toContainText(/완료\s+\d{4}\.\s*\d{1,2}\./);
+  const nextHour = String((completionHour + 1) % 24).padStart(2, '0');
+  const completionHourLabel = `${String(completionHour).padStart(2, '0')}:00–${nextHour}:00`;
+  const completionHourSection = page.locator('.calendar-hour').filter({ has: page.getByRole('heading', { name: completionHourLabel, exact: true }) });
+  await expect(completionHourSection.locator('.calendar-item').filter({ hasText: `작업번호: ${unscheduledWork.workNumber}` })).toHaveCount(1);
+  const noPlanColors = await noPlanCompletedCard.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, border: style.borderLeftColor };
+  });
+  expect(noPlanColors.background).not.toBe(scheduledColors.background);
+  expect(noPlanColors.border).not.toBe(scheduledColors.border);
+
+  await page.goto(`/requests/${number}`);
   await page.getByRole('combobox', { name: '작업 상태', exact: true }).selectOption('반환');
   await page.getByRole('button', { name: '상태 저장', exact: true }).click();
   await expect(page.getByText(/반환 사유.*입력/).first()).toBeVisible();
@@ -454,8 +697,11 @@ test('SR-BE-012,014,015,021,030: real day/week/month calendar and returned-work 
   await page.getByRole('button', { name: '상태 저장', exact: true }).click();
   await expect.poll(async () => (await apiRead(page, `/api/requests/${number}`)).data.workItems[0].status).toBe('반환');
   const returnedRequest=(await apiRead(page,`/api/requests/${number}`)).data;
-  expect(returnedRequest.workItems[0].schedule).toBeNull();
-  expect(returnedRequest.workItems[0].previousSchedule).toBe('2026-10-20T01:00:00Z');
+  expect(returnedRequest.workItems[0].scheduleIntervals).toEqual([]);
+  expect(returnedRequest.workItems[0].previousScheduleIntervals).toEqual([
+    { startsAt: '2026-10-20T01:00:00Z', endsAt: '2026-10-20T03:00:00Z' },
+    { startsAt: '2026-10-20T05:00:00Z', endsAt: '2026-10-20T06:00:00Z' }
+  ]);
   await expect(page.getByText(/반환 전 일정/).first()).toBeVisible();
   await apiLogin(page, 'bnoc');
   await page.goto(`/requests/${number}`);
@@ -475,7 +721,7 @@ test('SR-BE-012,014,015,021,030: real day/week/month calendar and returned-work 
   expect(current.priority).toBe('general');
   expect(current.workItems.find((item: { teamId: string }) => item.teamId === wire).editable).toBe(false);
   expect(current.workItems.find((item: { teamId: string;resolutionKind:string }) => item.teamId === wire && item.resolutionKind==='open')).toBeUndefined();
-  expect(current.workItems.find((item: { teamId: string;schedule:string|null }) => item.teamId === '전장반(전산장비)')?.schedule).toBeNull();
+  expect(current.workItems.find((item: { teamId: string;scheduleIntervals:unknown[] }) => item.teamId === '전장반(전산장비)')?.scheduleIntervals).toEqual([]);
 
   const reassignmentNumber=await seed(page,`반환 재배정 화면 ${info.project.name}`,[wire,'유선반']);
   await apiLogin(page,'team-wireless');
@@ -484,7 +730,7 @@ test('SR-BE-012,014,015,021,030: real day/week/month calendar and returned-work 
   await command(page,'updateWork',{nextStatus:'반환',returnReason:'담당 범위 확인'},{requestNumber:reassignmentNumber,workNumber:returnedWork.workNumber,expectedRevision:returnedWork.revision});
   await apiLogin(page,'bnoc');
   await page.goto(`/requests/${reassignmentNumber}`);
-  const returnedCard=page.locator('form.card').filter({has:page.getByRole('heading',{name:`${wire} 반환 작업`,exact:true})});
+  const returnedCard=page.locator('form.card.section-gap').filter({has:page.getByRole('heading',{name:`${wire} 반환 작업`,exact:true})});
   await returnedCard.getByLabel('전장반(전산장비)',{exact:true}).check();
   await returnedCard.getByRole('button',{name:'재배정',exact:true}).click();
   await expect.poll(async()=> (await apiRead(page,`/api/requests/${reassignmentNumber}`)).data.workItems.find((item:{teamId:string;resolutionKind:string})=>item.teamId===wire&&item.resolutionKind==='reassigned')?.resolutionKind).toBe('reassigned');
@@ -515,6 +761,25 @@ test('SR-BE-016,024,025,027,033: completed after-action report, department recor
   await expect(page.getByText('미분류', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('완료', { exact: true }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: '상태 저장' })).toHaveCount(0);
+  const reportedNumber = new URL(page.url()).pathname.split('/').at(-1);
+  expect(reportedNumber).toBeTruthy();
+  const reportedWork = (await apiRead(page, `/api/requests/${reportedNumber}`)).data.workItems[0];
+  await page.goto('/schedule');
+  await page.getByLabel(/기준 날짜|조회 날짜/).fill('2026-10-12');
+  const completedCard = page.locator('.calendar-item').filter({ hasText: `작업번호: ${reportedWork.workNumber}` });
+  await expect(completedCard).toHaveCount(1, 'an after-action completion is shown once at its actual start');
+  await expect(completedCard).toBeVisible();
+  await expect(completedCard).toHaveClass(/calendar-item--completed/);
+  await expect(completedCard.locator('.calendar-time')).toHaveText('10:00');
+  await expect(completedCard).toContainText(`작업번호: ${reportedWork.workNumber} (완료)`);
+  await expect(completedCard).not.toContainText('전화번호');
+  await completedCard.click();
+  await expect(page.getByRole('heading', { name: '신청 상세' })).toBeVisible();
+  await page.goto('/operations');
+  const afterActionRow = page.getByRole('row').filter({ hasText: reportedWork.workNumber });
+  await expect(afterActionRow).toBeVisible();
+  await expect(afterActionRow).toContainText('선조치 후보고');
+  await expect(afterActionRow).toContainText('완료');
   const manager = await departmentManagerLogin(page);
   const department = manager.actor.department;
   const recordDate = '2026-10-01';

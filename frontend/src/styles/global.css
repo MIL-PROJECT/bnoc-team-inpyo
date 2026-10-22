@@ -108,8 +108,36 @@ dialog::backdrop { background: rgb(15 23 42/.45); } dialog form { gap: 0; } .dia
 .calendar-week,.calendar-month { grid-template-columns: repeat(7,minmax(0,1fr)); }
 .calendar-day { min-width: 0; padding: .75rem; min-height: 130px; background: white; border: 1px solid var(--color-divider); }
 .calendar-day h2 { font-size: .9rem; margin: 0 0 .75rem; }
-.calendar-item { display: grid; gap: .25rem; padding: .5rem; border-left: 3px solid var(--color-primary); background: var(--color-info-bg); margin-bottom: .5rem; min-width: 0; overflow-wrap: anywhere; }
-.calendar-item small { font-size: .8rem; }
+.calendar-hour { margin: .45rem 0; padding-top: .35rem; border-top: 1px solid var(--color-divider); }
+.calendar-hour h3 { margin: 0 0 .35rem; color: var(--color-muted); font-size: .78rem; font-weight: 500; }
+.calendar-hour-items { display: grid; gap: .35rem; }
+.calendar-item { display: grid; gap: .25rem; padding: .5rem; border-left: 3px solid var(--color-primary); background: var(--color-info-bg); margin-bottom: .5rem; min-width: 0; overflow-wrap: anywhere; font-size: .875rem; }
+.calendar-item { width: 100%; border-radius: 0 3px 3px 0; text-align: left; }
+.calendar-item--scheduled { border-left-color: var(--color-primary); background: var(--color-info-bg); }
+.calendar-item--completed { border-left-color: var(--color-success); background: var(--color-success-bg); }
+.calendar-item--completed:hover { border-color: var(--color-success); }
+.calendar-item > * { color: inherit; font-size: inherit; font-weight: 400; }
+.calendar-time { color: var(--color-primary); font-weight: 700; }
+.calendar-item--completed .calendar-time { color: var(--color-success); }
+.calendar-item .calendar-work-number { justify-self: start; color: inherit; font-weight: 400; }
+.calendar-item .calendar-work-number:hover { color: inherit; }
+.calendar-memo, .calendar-contact { overflow-wrap: anywhere; }
+.preference-choice { display: grid; grid-template-columns: auto minmax(0,1fr) minmax(0,1fr); align-items: end; gap: .75rem; padding: .65rem; border: 1px solid var(--color-divider); }
+.preference-choice>strong { padding-bottom: .6rem; white-space: nowrap; }
+.schedule-slot-picker { border: 1px solid var(--color-divider); padding: .9rem; }
+.schedule-slot-picker legend { padding: 0 .35rem; }
+.schedule-range-builder { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)) auto; align-items: end; gap: .75rem; margin-top: .75rem; padding: .8rem; border: 1px solid var(--color-divider); border-radius: 4px; background: var(--color-bg); }
+.schedule-range-builder .field { margin: 0; }
+.schedule-range-add { white-space: nowrap; }
+.schedule-selection { margin-top: .9rem; overflow-wrap: anywhere; }
+.schedule-selection-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .5rem; }
+.schedule-selection-head button { min-height: 40px; padding: .35rem .7rem; }
+.schedule-range-list { display: flex; flex-wrap: wrap; gap: .5rem; margin: .25rem 0 .75rem; padding: 0; list-style: none; }
+.schedule-range-chip { display: inline-flex; align-items: center; gap: .5rem; padding: .2rem .3rem .2rem .75rem; border: 1px solid var(--color-divider); border-radius: 999px; background: var(--color-info-bg); font-variant-numeric: tabular-nums; }
+.schedule-range-remove { display: inline-grid; place-items: center; width: 40px; min-height: 40px; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--color-muted); font-size: 1.25rem; line-height: 1; }
+.schedule-range-remove:hover { background: white; color: var(--color-primary); }
+.schedule-selection-empty { margin: .25rem 0 .75rem; }
+@media (max-width: 900px) { .preference-choice { grid-template-columns: 1fr 1fr; } .preference-choice>strong { grid-column: 1 / -1; padding: 0; } .schedule-range-builder { grid-template-columns: repeat(2,minmax(0,1fr)); } .schedule-range-add { grid-column: 1 / -1; width: 100%; } }
 .situation-stage { font-size: 1.7rem; font-weight: 750; margin: 1.5rem 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; white-space: nowrap; }
 .reauth-dialog { width: min(740px,calc(100% - 2rem)); }

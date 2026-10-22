@@ -92,6 +92,7 @@ async function issue(subject, challenge) {
 function input(overrides = {}) {
   return { category: '장비/체계', subcategories: { systemType: '인트라넷', resourceType: 'PC', workType: '지원' }, detail: `지원 업무 검사 ${runId}`, location: '요청 위치', contact: '000-0000', attachments: [], ...overrides };
 }
+function scheduleInterval(startsAt, hours = 1) { return { startsAt, endsAt: new Date(Date.parse(startsAt) + hours * 60 * 60 * 1000).toISOString() }; }
 function success(result) {
   assert.equal(result.status, 200, result.json?.code ?? 'command must commit');
   assert.equal(result.json.ok, true);
@@ -304,12 +305,12 @@ contract('direct and proxy requests keep mandatory, optional, and conditional in
   failure(await clients.requester.command('createRequest', input({ maintenanceTarget: { department: '요청 부서' } })), 400, 'VALIDATION');
   failure(await clients.requester.command('createRequest', input({ requesterDisplayText: 'BNOC' })), 400, 'VALIDATION');
   failure(await clients.requester.command('createRequest', input({ priority: 'urgent' })), 400, 'VALIDATION');
-  failure(await clients.requester.command('createRequest', input({ scheduledAt: 'not-a-date' })), 400, 'VALIDATION');
+  failure(await clients.requester.command('createRequest', input({ schedulePreferences: [{ rank: 1, date: 'not-a-date', period: 'AM' }] })), 400, 'VALIDATION');
   failure(await clients.requester.command('createRequest', input({ detail: 'a'.repeat(10001) })), 400, 'VALIDATION');
   for (const resourceType of ['PC', '프린터', '회선', '전화']) {
     const saved = await create(clients.requester, { subcategories: { systemType: '인트라넷', resourceType, workType: '지원' } });
     assert.equal(saved.subcategories.resourceType, resourceType);
-    assert.equal(saved.scheduledAt ?? null, null);
+    assert.deepEqual(saved.schedulePreferences, []);
     assert.equal(saved.priority ?? null, null);
     assert.equal(saved.status, '대기');
     failure(await clients.requesterOther.raw('GET', `/api/requests/${saved.requestNumber}`), 404, 'NOT_FOUND');
@@ -342,7 +343,7 @@ contract('files are real, private, type checked, and cannot be stolen from anoth
 });
 
 contract('only BNOC assigns with an explicit classification and no schedule or chief input', [9, 10, 11, 20, 28, 31], async () => {
-  let request = await create(clients.requester, { scheduledAt: '2026-10-20T01:00:00Z' });
+  let request = await create(clients.requester, { schedulePreferences: [{ rank: 1, date: '2026-10-20', period: 'AM' }] });
   const target = () => ({ requestNumber: request.requestNumber, expectedRevision: request.revision });
   failure(await clients.requester.command('moveToDocumentWaiting', {}, target()), 403, 'FORBIDDEN');
   success(await clients.bnoc.command('moveToDocumentWaiting', {}, target()));
@@ -376,7 +377,7 @@ contract('only BNOC assigns with an explicit classification and no schedule or c
 
 contract('BNOC classification corrections leave work state, schedule, and completion unchanged', [10, 11, 19], async () => {
   let request = await assign(await create());
-  request = await updateWork(request, clients.wireless, teams[0], { nextStatus: '완료', schedule: '2026-10-21T03:00:00Z' });
+  request = await updateWork(request, clients.wireless, teams[0], { nextStatus: '완료', scheduleIntervals: [scheduleInterval('2026-10-21T03:00:00Z')] });
   const before = request.workItems;
   const target = { requestNumber: request.requestNumber, expectedRevision: request.revision };
   failure(await clients.requester.command('changePriority', { priority: 'urgent' }, target), 403, 'FORBIDDEN');
@@ -398,7 +399,7 @@ contract('work saves enforce ownership and transaction integrity on rejected par
   failure(await clients.wired.command('updateWork', { nextStatus: '완료' }, target), 403, 'FORBIDDEN');
   failure(await clients.bnoc.command('updateWork', { nextStatus: '완료' }, target), 403, 'FORBIDDEN');
   failure(await clients.wireless.command('updateWork', { nextStatus: '반환', returnReason: '' }, target), 400, 'VALIDATION');
-  failure(await clients.wireless.command('updateWork', { nextStatus: '완료', schedule: 'bad-date' }, target), 400, 'VALIDATION');
+  failure(await clients.wireless.command('updateWork', { nextStatus: '완료', scheduleIntervals: [{ startsAt: 'bad-date', endsAt: 'bad-date' }] }, target), 400, 'VALIDATION');
   failure(await clients.wireless.command('updateWork', { nextStatus: '작업 중', assignedPersonRefs: ['unknown-person-ref'] }, target), 400, 'VALIDATION');
   const after = await detail(request.requestNumber);
   assert.deepEqual(after.workItems, request.workItems, 'failed command must not leave a partly modified work item');
@@ -417,7 +418,7 @@ contract('all four work states correct both ways, completion is automatic, and c
   assert.equal(completed.assignedPersons?.length ?? 0, 0, 'personnel assignment remains optional on completion');
   request = await updateWork(request, clients.wireless, teams[0], { nextStatus: '반환', returnReason: '다른 담당 부서 필요' });
   assert.equal(request.workItems[0].completion ?? null, null);
-  request = await updateWork(request, clients.wireless, teams[0], { nextStatus: '배정', reusePreviousSchedule:false, schedule:'' });
+  request = await updateWork(request, clients.wireless, teams[0], { nextStatus: '배정', reusePreviousSchedule:false, scheduleIntervals:[] });
   assert.equal(request.status, '배정');
   assert.equal(request.workItems[0].returnReason ?? null, null);
   success(await clients.requester.command('updateRequest', { detail: '현재 배정 상태에서 수정' }, { requestNumber: request.requestNumber, expectedRevision: request.revision }));
@@ -491,8 +492,11 @@ contract('completed after-action reports start unclassified without approval and
   assert.equal(request.priority, 'general');
   assert.equal(request.status, '완료');
   const shared = (await clients.requester.read(`/api/work-overview?requestNumber=${request.requestNumber}`)).data;
-  assert.equal(shared.counts.assigned, 0);
+  assert.equal(shared.counts.assigned, 1, 'AFTER_ACTION_COUNTS_AS_ONE_COMPLETED_ASSIGNED_WORK');
+  assert.equal(shared.counts.completed, 1);
+  assert.equal(shared.counts.remaining, 0);
   assert.equal(shared.afterActionCompleted, 1);
+  assert.equal(shared.items[0].origin, 'after-action');
 });
 
 contract('same submission replay and concurrent duplicate registration create one request', [28, 29, 31], async () => {
@@ -547,9 +551,27 @@ contract('public lists paginate without duplicates and share no private request 
   assert.equal(shared.data.counts.assigned, shared.data.counts.completed + shared.data.counts.remaining);
   const other = shared.data.items.find(item => requests.some(request => request.requestNumber === item.requestNumber));
   assert.ok(other && other.canOpenDetail === false);
-  for (const row of shared.data.items) for (const privateField of ['detail', 'contact', 'location', 'attachments', 'memo', 'returnReason', 'assignedPersonRefs', 'assignedPersons', 'completion', 'registeredBy']) {
+  assert.equal(other.requesterContact, '000-0000', 'the shared work list includes only the requester phone needed by the agreed view');
+  for (const row of shared.data.items) for (const privateField of ['detail', 'location', 'contact', 'attachments', 'memo', 'returnReason', 'assignedPersonRefs', 'assignedPersons', 'completion', 'registeredBy']) {
     assert.ok(!Object.hasOwn(row, privateField), `SHARED_WORK_PRIVATE_FIELD: ${privateField}`);
   }
+  for (const actor of [clients.requester, clients.bnoc, clients.wireless, clients.admin]) {
+    const rows = (await actor.read(`/api/work-overview?requestNumber=${requests[0].requestNumber}&size=100`)).data.items;
+    const visible = rows.find(item => item.workNumber === `${requests[0].requestNumber}-1`);
+    assert.ok(visible, `${actor.session.actor.role} receives the assigned work row`);
+    assert.equal(visible?.requesterContact, '000-0000', `${actor.session.actor.role} sees the approved requester phone in the shared list`);
+    for (const privateField of ['detail', 'location', 'contact']) assert.ok(!Object.hasOwn(visible, privateField), `${actor.session.actor.role} shared list omits ${privateField}`);
+  }
+  const pending = await Promise.all([
+    create(clients.requesterOther, { category: '회의 지원', subcategories: { meetingType: '일반회의' } }),
+    create(clients.requesterOther, { category: '회의 지원', subcategories: { meetingType: '화상회의' } })
+  ]);
+  const unassignedOne = await clients.requesterOther.read(`/api/work-overview?bucket=unassigned&category=${encodeURIComponent('회의 지원')}&page=0&size=1`);
+  const unassignedTwo = await clients.requesterOther.read(`/api/work-overview?bucket=unassigned&category=${encodeURIComponent('회의 지원')}&page=1&size=1`);
+  assert.equal(unassignedOne.page, 0); assert.equal(unassignedTwo.page, 1);
+  assert.equal(unassignedOne.size, 1); assert.equal(unassignedOne.total, unassignedTwo.total);
+  assert.ok(unassignedOne.total >= 2);
+  assert.deepEqual(new Set([unassignedOne.data.items[0].requestNumber, unassignedTwo.data.items[0].requestNumber]), new Set(pending.map(item => item.requestNumber)), 'unassigned work-overview pages include both newest pending requests without duplicates');
   failure(await clients.requester.raw('GET', `/api/requests/${other.requestNumber}`), 404, 'NOT_FOUND');
 });
 
@@ -640,17 +662,48 @@ contract('planned works persist by team, continue across dates, and count once b
 
 contract('schedule uses real team schedule, start inclusive/end exclusive, and a separate unscheduled list', [5, 10, 12, 21], async () => {
   failure(await clients.requester.raw('GET', '/api/schedule?from=2026-10-20&to=2026-10-21'), 403, 'FORBIDDEN');
-  let request = await assign(await create(clients.requester, { scheduledAt: '2026-10-20T01:00:00Z' }), [teams[0], teams[1]]);
+  failure(await clients.admin.raw('GET', '/api/schedule?from=2026-10-20&to=2026-10-21'), 403, 'FORBIDDEN');
+  let request = await assign(await create(clients.requester, { detail: 'PC가 시작되지 않습니다.', location: '요청 위치', contact: '031-1234', schedulePreferences: [{ rank: 1, date: '2026-10-20', period: 'AM' }] }), [teams[0], teams[1]]);
   const empty = (await clients.wireless.read('/api/schedule?from=2026-10-20&to=2026-10-21')).data;
   assert.ok(empty.unscheduled.some(item => item.workNumber === request.workItems.find(work => work.teamId === teams[0]).workNumber));
-  request = await updateWork(request, clients.wireless, teams[0], { nextStatus: '배정', schedule: '2026-10-19T15:00:00Z' });
+  request = await updateWork(request, clients.wireless, teams[0], { nextStatus: '배정', scheduleIntervals: [scheduleInterval('2026-10-20T01:00:00Z')], memo: '교체 부품 확인' });
   const ownWork = request.workItems.find(item => item.teamId === teams[0]);
   const day = (await clients.wireless.read('/api/schedule?from=2026-10-20&to=2026-10-21')).data;
+  assert.deepEqual(Object.keys(day).sort(), ['completedRecords', 'entries', 'from', 'to', 'unscheduled'], 'schedule exposes only the documented response envelope');
   assert.ok(day.entries.some(item => item.workNumber === ownWork.workNumber));
+  const scheduled = day.entries.find(item => item.workNumber === ownWork.workNumber);
+  assert.deepEqual(Object.keys(scheduled).sort(), ['location', 'memo', 'origin', 'request', 'scheduleIntervals', 'status', 'teamId', 'workNumber'].sort(), 'schedule entries expose only the documented fields');
+  assert.deepEqual(Object.keys(scheduled.request), ['requestNumber'], 'schedule carries only the request number needed to open authorized detail');
+  assert.equal(scheduled.request.requestNumber, request.requestNumber);
+  assert.ok(!Object.hasOwn(scheduled, 'detail'), 'schedule projection does not expose request details');
+  assert.equal(scheduled.memo, '교체 부품 확인');
+  assert.equal(scheduled.location, '요청 위치');
+  assert.equal(scheduled.origin, 'assigned');
+  assert.equal(scheduled.scheduleIntervals[0].startsAt, '2026-10-20T01:00:00Z');
+  assert.ok(!Object.hasOwn(scheduled, 'requesterContact'), 'schedule projection excludes the phone number');
+  const reported = success(await clients.wireless.command('createAfterActionReport', {
+    ...input({ detail: '후보고 요청 상세 비공개 검사', location: '선조치 위치', contact: '031-9876' }), actualRequesterText: '선조치 요청자',
+    actualStartedAt: '2026-10-20T04:13:00Z', actualCompletedAt: '2026-10-20T04:29:00Z', completedConfirmed: true, reason: '선조치 처리', completionMemo: '현장 확인'
+  }));
+  const ownSchedule = (await clients.wireless.read('/api/schedule?from=2026-10-20&to=2026-10-21')).data;
+  const completedRecord = ownSchedule.completedRecords.find(item => item.request.requestNumber === reported.requestNumber);
+  assert.ok(completedRecord, 'after-action record appears in its actual start date');
+  assert.deepEqual(Object.keys(completedRecord).sort(), ['actualStartedAt', 'location', 'memo', 'origin', 'request', 'status', 'teamId', 'workNumber'].sort());
+  assert.equal(completedRecord.actualStartedAt, '2026-10-20T04:13:00Z');
+  assert.equal(completedRecord.origin, 'after-action');
+  assert.equal(completedRecord.location, '선조치 위치');
+  assert.equal(completedRecord.memo, '현장 확인');
+  assert.ok(!Object.hasOwn(completedRecord, 'requesterContact') && !Object.hasOwn(completedRecord, 'detail'));
+  const bnoc = (await clients.bnoc.read('/api/schedule?from=2026-10-20&to=2026-10-21')).data;
+  assert.deepEqual(Object.keys(bnoc).sort(), ['completedRecords', 'entries', 'from', 'to', 'unscheduled'], 'BNOC schedule exposes only the documented response envelope');
+  const unscheduled = bnoc.unscheduled.find(item => item.request.requestNumber === request.requestNumber && item.teamId === teams[1]);
+  assert.ok(unscheduled, 'BNOC can see another assigned department in the unscheduled schedule list');
+  assert.deepEqual(Object.keys(unscheduled).sort(), ['location', 'memo', 'origin', 'request', 'scheduleIntervals', 'status', 'teamId', 'workNumber'].sort(), 'unscheduled schedule entries expose only the documented fields');
+  assert.deepEqual(Object.keys(unscheduled.request), ['requestNumber'], 'unscheduled schedule carries only the request number needed to open authorized detail');
+  assert.ok(bnoc.unscheduled.every(item => !Object.hasOwn(item, 'detail') && !Object.hasOwn(item, 'requesterContact')), 'unscheduled projection excludes request details and phone numbers');
   assert.ok(day.entries.every(item => item.teamId === teams[0]));
   const before = (await clients.wireless.read('/api/schedule?from=2026-10-19&to=2026-10-20')).data;
   assert.ok(!before.entries.some(item => item.workNumber === ownWork.workNumber));
-  const bnoc = (await clients.bnoc.read('/api/schedule?from=2026-10-20&to=2026-10-21')).data;
   assert.ok(bnoc.entries.some(item => item.workNumber === ownWork.workNumber));
   failure(await clients.bnoc.raw('GET', '/api/schedule?from=2026-10-21&to=2026-10-20'), 400, 'VALIDATION');
 });
@@ -856,7 +909,7 @@ contract('reauthentication reloads committed requests and real attachment bytes 
 
 contract('direct assigned department change preserves history and blocks started work', [3,12,14,15,19,20,29,30,31], async () => {
   let request=await assign(await create(),[teams[0]],'urgent');
-  request=await updateWork(request,clients.wireless,teams[0],{nextStatus:'배정',schedule:'2026-10-20T01:00:00Z',memo:'기존 계획'});
+  request=await updateWork(request,clients.wireless,teams[0],{nextStatus:'배정',scheduleIntervals:[scheduleInterval('2026-10-20T01:00:00Z')],memo:'기존 계획'});
   const old=request.workItems[0];const target={requestNumber:request.requestNumber,workNumber:old.workNumber,expectedRevision:old.revision};
   const payload={teamIds:[teams[1]]};
   failure(await clients.requester.command('reassignAssignedWork',payload,target),403,'FORBIDDEN');

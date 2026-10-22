@@ -146,11 +146,11 @@ export function App() {
   const onOpen = (number: string) => go('requests/' + encodeURIComponent(number));
   const forbidden = <section className="card"><h1>접근 권한이 없습니다</h1><p>현재 사용자의 허용 범위를 확인하세요.</p><button onClick={() => go('operations')}>부서별 작업 현황</button></section>;
   let content;
-  if (route.startsWith('requests/')) content = <RequestDetailWorkspace key={route} actor={actor} requestNumber={route.slice('requests/'.length)} api={api} teams={session.teams} run={run} upload={upload} revision={revision} onBack={() => go('requests')} initialMessage={routeReceipt?.path === route ? routeReceipt.message : undefined} />;
+  if (route.startsWith('requests/')) content = <RequestDetailWorkspace key={route} actor={actor} requestNumber={route.slice('requests/'.length)} api={api} teams={session.teams} run={run} upload={upload} revision={revision} onBack={() => go('requests')} onAssigned={message => openSaved('overview',message)} initialMessage={routeReceipt?.path === route ? routeReceipt.message : undefined} />;
   else if (route === 'new') content = actor.role === 'requester' || actor.role === 'bnoc' ? <RequestRegistrationForm actor={actor} run={run} upload={upload} onSaved={(number,message) => openSaved('requests/' + encodeURIComponent(number),message)} /> : forbidden;
   else if (route === 'after-action') content = actor.role === 'team' ? <AfterActionReportForm actor={actor} run={run} upload={upload} onSaved={(number,message) => openSaved('requests/' + encodeURIComponent(number),message)} /> : forbidden;
   else if (route === 'schedule') content = actor.role === 'bnoc' || actor.role === 'team' ? <TeamScheduleView actor={actor} query={api} revision={revision} onOpen={onOpen} /> : forbidden;
-  else if (route === 'overview') content = actor.role === 'bnoc' ? <BnocOverviewView query={api} teams={session.teams} revision={revision} onOpen={onOpen} /> : forbidden;
+  else if (route === 'overview') content = actor.role === 'bnoc' ? <BnocOverviewView query={api} teams={session.teams} revision={revision} onOpen={onOpen} initialMessage={routeReceipt?.path === route ? routeReceipt.message : undefined} /> : forbidden;
   else if (route === 'operations') content = <SharedWorkOverview api={api} teams={session.teams} revision={revision} onOpen={onOpen} />;
   else if (route === 'planned-maintenance') content = actor.role === 'team' ? <PlannedMaintenanceView api={api} revision={revision} department={actor.department} onChanged={() => setRevision(value => value + 1)} onOpenOverview={() => go('operations')} /> : forbidden;
   else if (route === 'personnel') content = departmentAccess ? <PersonnelView actor={actor} api={api} run={run} revision={revision} /> : forbidden;
