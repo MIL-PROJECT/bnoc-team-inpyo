@@ -15,6 +15,7 @@ USER root
 WORKDIR /build
 COPY backend/build.gradle.kts backend/settings.gradle.kts backend/
 COPY backend/src backend/src
+COPY frontend/src/preview/fixtures/support.hwp frontend/src/preview/fixtures/support.hwp
 COPY --from=frontend-build /build/frontend/dist frontend/dist
 RUN gradle -p backend test bootJar --no-daemon
 
