@@ -7,6 +7,7 @@ RUN pnpm install --frozen-lockfile
 COPY frontend/index.html frontend/tsconfig.json frontend/vite.config.ts ./
 COPY frontend/src ./src
 COPY design/tokens.css /build/design/tokens.css
+COPY mock-provider/server.mjs /build/mock-provider/server.mjs
 RUN pnpm test && pnpm build
 
 FROM gradle:9.3.0-jdk17 AS backend-build
