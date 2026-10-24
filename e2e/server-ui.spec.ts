@@ -176,6 +176,170 @@ test.afterEach(async ({ page }, info) => {
   expect(errors, 'browser scripts must not throw unhandled errors').toEqual([]);
 });
 
+test('an ordinary HWP attachment opens as original pages and keeps extraction as a secondary view', async ({ page }, info) => {
+  await apiLogin(page, 'requester');
+  const bytes = await readFile('frontend/src/preview/fixtures/support.hwp');
+  const name = `원본 페이지-${randomUUID().slice(0, 8)}.hwp`;
+  const uploaded = await page.request.post('/api/attachments?resourceKind=request', {
+    headers: { Origin: new URL(base).origin, 'X-CSRF-Token': (await apiRead(page, '/api/session')).data.csrfToken },
+    multipart: { file: { name, mimeType: 'application/octet-stream', buffer: bytes } },
+  });
+  expect(uploaded.status()).toBe(200);
+  const attachment = (await uploaded.json()).data;
+  const unlinkedSource = await page.request.get(`/api/attachments/${attachment.id}/render-source`);
+  expect(unlinkedSource.status()).toBe(404, 'UNLINKED_HWP_RENDER_SOURCE_MUST_BE_HIDDEN');
+  const created = await command(page, 'createRequest', { ...requestPayload('HWP 원본 페이지 보기'), attachments: [{ id: attachment.id }] });
+  await expect.poll(async () => (await (await page.request.get(`/api/attachments/${attachment.id}/document`)).json()).data.status, { timeout: 30000 }).toBe('ready');
+  const source = await page.request.get(`/api/attachments/${attachment.id}/render-source`);
+  expect(source.status()).toBe(200, 'AUTHORIZED_HWP_RENDER_SOURCE_REQUIRED');
+  expect((await source.body()).equals(bytes), 'RENDER_SOURCE_MUST_PRESERVE_HWP_BYTES').toBeTruthy();
+
+  await page.goto(`/requests/${created.requestNumber}`);
+  await page.getByRole('link', { name, exact: true }).locator('xpath=..').getByRole('button', { name: '문서 보기', exact: true }).click();
+  const viewer = page.getByRole('dialog');
+  const pageImage = viewer.locator('.hwp-page-view__image');
+  await expect(pageImage).toHaveAttribute('alt', `${name} 1쪽`);
+  await expect.poll(() => pageImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBeTruthy();
+  await expect(viewer.getByRole('button', { name: '원본 보기', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await screenshot(page, info, 'hwp-original-page-view');
+  await viewer.getByRole('button', { name: '추출 본문', exact: true }).click();
+  await expect(viewer.locator('.document-dialog__body')).toContainText('마이크 점검');
+  await viewer.getByRole('button', { name: '원본 보기', exact: true }).click();
+  await expect(pageImage).toBeVisible();
+});
+
+test('an HWP search result opens the matching document directly', async ({ page }, info) => {
+  const session = await apiLogin(page, 'requester');
+  const bytes = await readFile('frontend/src/preview/fixtures/support.hwp');
+  const name = `검색 문서-${randomUUID().slice(0, 8)}.hwp`;
+  const uploaded = await page.request.post('/api/attachments?resourceKind=request', {
+    headers: { Origin: new URL(base).origin, 'X-CSRF-Token': session.csrfToken },
+    multipart: { file: { name, mimeType: 'application/octet-stream', buffer: bytes } },
+  });
+  expect(uploaded.status()).toBe(200);
+  const attachment = (await uploaded.json()).data;
+  const created = await command(page, 'createRequest', { ...requestPayload('HWP 문서 검색 흐름 확인'), attachments: [{ id: attachment.id }] });
+  const number = created.requestNumber as string;
+  await expect.poll(async () => (await (await page.request.get(`/api/attachments/${attachment.id}/document`)).json()).data.status, { timeout: 30000 }).toBe('ready');
+
+  await page.goto('/requests');
+  await page.getByRole('textbox', { name: '내용·문서 검색' }).fill('마이크');
+  await page.getByRole('button', { name: '검색', exact: true }).click();
+  const row = page.getByRole('row').filter({ hasText: number });
+  const openDocument = row.getByRole('button', { name: /문서 보기/ });
+  await expect(openDocument).toBeVisible();
+  await openDocument.click();
+  const viewer = page.getByRole('dialog');
+  await expect(viewer.getByRole('heading', { name, exact: true })).toBeVisible();
+  await expect(viewer.locator('.document-dialog__body')).toContainText('마이크 점검');
+  const matchHighlight=viewer.locator('.document-dialog__body .document-search-hit');
+  await expect(matchHighlight).toContainText('마이크');
+  await expect(matchHighlight.locator('xpath=..')).toHaveAttribute('data-document-search-target','true');
+  await expect(viewer.getByText('분석 완료')).toBeVisible();
+  await screenshot(page, info, 'hwp-search-viewer');
+
+  await viewer.getByRole('button', { name: '닫기', exact: true }).click();
+  await page.route(url => new URL(url).pathname === '/api/requests', async route => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    if (new URL(route.request().url()).searchParams.get('q') === '메타검색') {
+      payload.data.items = [{ requestNumber: number, requesterDisplayText: '요청자', category: '장비/체계', status: '대기', teamIds: [], updatedAt: new Date().toISOString(), priority: 'general', matches: [{ source: 'document', attachmentRef: attachment.id, text: '회의 정보: 메타검색 확인', metadataIndex: 15 }] }];
+      payload.data.total = 1;
+      payload.total = 1;
+    }
+    await route.fulfill({ response, body: JSON.stringify(payload) });
+  });
+  await page.route(url => new URL(url).pathname === `/api/attachments/${attachment.id}/document`, async route => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    payload.data.metadata = Array.from({ length: 16 }, (_, index) => ({ label: `문서 정보 ${index + 1}`, rawValue: index === 15 ? '메타검색 확인' : '다른 값', blockId: `b${index}`, source: 'test', evidence: `문서 정보 ${index + 1}: ${index === 15 ? '메타검색 확인' : '다른 값'}` }));
+    await route.fulfill({ response, body: JSON.stringify(payload) });
+  });
+  await page.goto('/requests');
+  await page.getByRole('textbox', { name: '내용·문서 검색' }).fill('메타검색');
+  await page.getByRole('button', { name: '검색', exact: true }).click();
+  const metadataRow = page.getByRole('row').filter({ hasText: number });
+  await metadataRow.getByRole('button', { name: /문서 보기/ }).click();
+  const metadataViewer = page.getByRole('dialog');
+  const metadataTarget = metadataViewer.locator('[data-document-metadata-target="true"]');
+  await expect(metadataTarget).toContainText('메타검색 확인');
+  await expect(metadataTarget.locator('p').first().locator('.document-search-hit')).toContainText('메타검색');
+  await expect.poll(() => metadataViewer.locator('.document-dialog__metadata').evaluate(element => {
+    const panel = element.getBoundingClientRect();
+    const target = element.querySelector('[data-document-metadata-target="true"]')?.getBoundingClientRect();
+    return Boolean(target && target.top >= panel.top && target.bottom <= panel.bottom);
+  })).toBe(true);
+  await metadataViewer.getByRole('button', { name: '닫기', exact: true }).click();
+  await page.unrouteAll();
+  await page.route(url => new URL(url).pathname === '/api/requests', async route => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    payload.data.documentSearchIncomplete = true;
+    payload.data.documentSearchStatuses = { items: [{ requestNumber: number, attachmentRef: attachment.id, fileName: name, status: 'partial' }], total: 1, truncated: false };
+    await route.fulfill({ response, body: JSON.stringify(payload) });
+  });
+  await page.goto('/requests');
+  await expect(page.getByText('문서 1개는 검색에서 빠지거나 추출된 일부만 검색됐을 수 있습니다.')).toBeVisible();
+  await page.getByText('문서 1개는 검색에서 빠지거나 추출된 일부만 검색됐을 수 있습니다.').click();
+  await expect(page.getByText('일부 추출 문서는 추출된 본문만 검색합니다. 원문 전체의 일치 여부는 확인할 수 없습니다.')).toBeVisible();
+  await expect(page.getByRole('button', { name: `${name} · 일부 추출 · 추출 본문만 검색` })).toBeVisible();
+  await page.unrouteAll();
+  const current = (await apiRead(page, `/api/requests/${number}`)).data;
+  const replacement = await page.request.post('/api/attachments?resourceKind=request', {
+    headers: { Origin: new URL(base).origin, 'X-CSRF-Token': session.csrfToken },
+    multipart: { file: { name: `교체-${randomUUID().slice(0, 8)}.txt`, mimeType: 'text/plain', buffer: Buffer.from('교체 첨부') } },
+  });
+  expect(replacement.status()).toBe(200);
+  const replacementId = (await replacement.json()).data.id as string;
+  await command(page, 'updateRequest', { attachments: [{ id: replacementId }] }, { requestNumber: number, expectedRevision: current.revision });
+  await page.goto(`/requests/${number}`);
+  const oldFile = page.getByRole('link', { name, exact: true });
+  await expect(oldFile).toBeVisible();
+  await oldFile.locator('xpath=..').getByRole('button', { name: '문서 보기', exact: true }).click();
+  const historyViewer = page.getByRole('dialog');
+  await expect(historyViewer.getByRole('heading', { name, exact: true })).toBeVisible();
+  await historyViewer.getByRole('button', { name: '추출 본문', exact: true }).click();
+  await expect(historyViewer.locator('.document-dialog__body')).toContainText('마이크 점검');
+});
+
+test('meeting support forms stay downloadable without exposing extracted content', async ({ page }) => {
+  const session = await apiLogin(page, 'requester');
+  const bytes = await readFile('frontend/src/preview/fixtures/support.hwp');
+  const name = `회의 의뢰서-${randomUUID().slice(0, 8)}.hwp`;
+  const uploaded = await page.request.post('/api/attachments?resourceKind=request', {
+    headers: { Origin: new URL(base).origin, 'X-CSRF-Token': session.csrfToken },
+    multipart: { file: { name, mimeType: 'application/octet-stream', buffer: bytes } },
+  });
+  expect(uploaded.status()).toBe(200);
+  const attachment = (await uploaded.json()).data;
+  const created = await command(page, 'createRequest', {
+    category: '회의 지원', subcategories: { meetingType: '일반회의' }, detail: '회의 지원 요청',
+    location: '회의실', contact: '000-0000', attachments: [{ id: attachment.id }],
+  });
+  const number = created.requestNumber as string;
+  const document = (await apiRead(page, `/api/attachments/${attachment.id}/document`)).data;
+  expect(document.status).toBe('excluded');
+  expect(document.blocks).toEqual([]);
+  expect(document.metadata).toEqual([]);
+  const renderSource = await page.request.get(`/api/attachments/${attachment.id}/render-source`);
+  expect(renderSource.status()).toBe(400, 'MEETING_SUPPORT_MUST_NOT_EXPOSE_RENDER_SOURCE');
+
+  await page.goto(`/requests/${number}`);
+  const file = page.getByRole('link', { name, exact: true });
+  await expect(file).toBeVisible();
+  await file.locator('xpath=..').getByRole('button', { name: '문서 보기', exact: true }).click();
+  const viewer = page.getByRole('dialog');
+  await expect(viewer.getByText(/본문 분석 제외.*보안 양식 첨부는 본문을 추출·검색하지 않습니다/)).toBeVisible();
+  await expect(viewer.getByText('표시할 본문이 없습니다.')).toBeVisible();
+  await expect(viewer.getByRole('button', { name: '원본 보기', exact: true })).toHaveCount(0);
+  await expect(viewer.getByRole('link', { name: '원본 다운로드', exact: true })).toBeVisible();
+  await expect(viewer.locator('.document-dialog__body')).not.toContainText('마이크 점검');
+  const downloadReady = page.waitForEvent('download');
+  await viewer.getByRole('link', { name: '원본 다운로드', exact: true }).click();
+  const download = await downloadReady;
+  expect((await readFile(await download.path())).equals(bytes)).toBeTruthy();
+});
+
 test('PC completeness: missing type choices show server group errors and focus the first invalid choice', async ({ page }, info) => {
   await apiLogin(page, 'requester');
   await page.goto('/new');
@@ -242,6 +406,12 @@ test('request form provides meeting-specific placeholders and hides them after i
   await page.goto('/new');
   await page.getByRole('combobox', { name: '요청 유형', exact: true }).selectOption('회의 지원');
   await page.getByRole('combobox', { name: '회의 유형', exact: true }).selectOption('화상회의');
+  const videoPlatform = page.getByRole('combobox', { name: '화상회의 방식', exact: true });
+  await expect(videoPlatform).toHaveAttribute('aria-required', 'true');
+  await expect(videoPlatform.locator('option')).toHaveText(['선택', 'KJCCS', 'AFCCS', '웹미팅']);
+  await videoPlatform.selectOption('KJCCS');
+  const meetingForm = page.getByLabel('화상회의 지원 의뢰서', { exact: true });
+  await expect(meetingForm).toHaveAttribute('aria-required', 'true');
   const detail = page.getByRole('textbox', { name: /^요청 내용·증상(?:\s|$)/ });
   await expect(detail).toHaveAttribute('placeholder', '예: 화상회의 지원이 필요합니다. 회의 일시, 접속 방식, 필요한 장비나 연결 지원을 적어주세요.');
   await detail.fill('화상회의 접속 지원 요청');
@@ -251,6 +421,14 @@ test('request form provides meeting-specific placeholders and hides them after i
   await location.fill('본관 회의실');
   expect(await location.evaluate(element => element.matches(':placeholder-shown'))).toBe(false);
   await expect(detail).toHaveValue('화상회의 접속 지원 요청');
+  await page.getByRole('button', { name: '신청 등록', exact: true }).click();
+  await expect(page.getByText('회의 지원 의뢰서를 1개 이상 첨부하세요.', { exact: true })).toBeVisible();
+  await page.getByLabel('요청자 군내전화번호', { exact: true }).fill('1234');
+  await meetingForm.setInputFiles({ name:'support-form.txt', mimeType:'text/plain', buffer:Buffer.from('synthetic meeting support form') });
+  await page.getByRole('button', { name: '신청 등록', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '신청 상세', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '내용 수정', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'support-form.txt 첨부 제외', exact: true })).toBeDisabled();
 });
 
 test('BNOC unassigned requests distinguish query errors and paginate', async ({ page }) => {
@@ -293,7 +471,7 @@ test('PC completeness: edited and failed searches preserve the actual successful
   const context = page.locator('.query-context');
   await expect(context).toContainText(`요청 번호: ${number}`);
   await expect(context).toContainText('위치: 요청 위치');
-  await expect(context).toContainText('확인 시각:');
+  await expect(context).not.toContainText('확인 시각:');
   await expect(page.getByRole('button', { name: number, exact: true })).toBeVisible();
   const successful = await context.innerText();
   const requests: string[] = [];
@@ -513,6 +691,249 @@ test('SR-BE-017,018,022,023,031,032,033: explicit search, safe shared list and d
   await page.goto('/operations');
   await noOverflow(page);
   await screenshot(page, info, 'shared-work');
+});
+
+test('SR-BE-020: unseen count sits on the notifications tab and identical account labels show once', async ({ page }) => {
+  const session = await apiLogin(page, 'team-wireless');
+  expect(session.actor.displayName).toBe(session.actor.department);
+  await page.route('**/api/notifications/unseen', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ queriedAt: new Date().toISOString(), data: { unseen: 4 } }) }));
+  await page.goto('/requests');
+  const nav = page.getByRole('navigation', { name: '주 메뉴' });
+  const tab = nav.getByRole('button', { name: /^알림함/ });
+  await expect(tab.locator('.nav-badge')).toHaveText('4');
+  await expect(page.getByRole('button', { name: /새 알림/ })).toHaveCount(0);
+  await expect(page.locator('header .identity strong')).toHaveText(session.actor.displayName);
+  await expect(page.locator('header .identity small')).toHaveCount(0);
+});
+
+test('SR-BE-023,036: shared work report shows aggregate and per-department completion bars without query times', async ({ page }, info) => {
+  await apiLogin(page, 'requester-secondary');
+  const counts = { assigned: 10, completed: 6, remaining: 4, returned: 1, afterAction: 2, planned: 3, plannedInProgress: 1, plannedCompleted: 2, all: 13, allCompleted: 8, allRemaining: 5 };
+  const assignedItems = Array.from({ length: 10 }, (_, index) => ({
+    source: index < 2 ? 'after-action' as const : 'assigned' as const,
+    origin: index < 2 ? 'after-action' : undefined,
+    requestNumber: `TEST-${String(index + 1).padStart(3, '0')}`,
+    workNumber: `TEST-${String(index + 1).padStart(3, '0')}-1`,
+    teamId: wire,
+    category: '장비/체계',
+    workType: '점검',
+    status: index < 6 ? '완료' as const : index === 6 ? '반환' as const : '배정' as const,
+    priority: 'general' as const,
+    canOpenDetail: false
+  }));
+  const plannedItems = Array.from({ length: 3 }, (_, index) => ({
+    source: 'planned' as const,
+    plannedWorkId: `planned-test-${index + 1}`,
+    title: `계획 정비 ${index + 1}`,
+    teamId: wire,
+    firstWorkDate: '2026-10-24',
+    completedDate: index < 2 ? '2026-10-24' : undefined,
+    status: index < 2 ? '완료' as const : '진행 중' as const
+  }));
+  const overview = {
+    counts, byDepartment: [{ department: wire, ...counts }], items: assignedItems, total: assignedItems.length, page: 0, size: 20,
+    unassignedRequests: 3, afterActionCompleted: 2
+  };
+  await page.route('**/api/work-overview?**', async route => {
+    const url = new URL(route.request().url());
+    const bucket = url.searchParams.get('bucket');
+    const data = bucket === 'returned'
+      ? { counts: { returned: 1 }, byDepartment: [], items: [assignedItems[6]], total: 1, page: 0, size: 1 }
+      : bucket === 'remaining'
+        ? { ...overview, items: assignedItems.filter(item => item.status !== '완료'), total: counts.remaining }
+        : bucket === 'planned'
+          ? { ...overview, items: plannedItems, total: counts.planned }
+          : bucket === 'all'
+            ? { ...overview, items: [...assignedItems, ...plannedItems], total: counts.all }
+            : overview;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ queriedAt: new Date().toISOString(), data }) });
+  });
+  await page.goto('/operations');
+  const summary = page.getByRole('region', { name: '전체 작업 현황' });
+  await expect(summary).toContainText('13건');
+  await expect(summary).toContainText('완료');
+  await expect(summary).toContainText('남음');
+  const totalBar = page.getByRole('progressbar', { name: '전체 작업 완료율' });
+  await expect(totalBar).toHaveAttribute('aria-valuenow', '8');
+  await expect(totalBar).toHaveAttribute('aria-valuemax', '13');
+  const department = page.locator('.department-overview').filter({ hasText: wire });
+  const assignedBar = department.getByRole('progressbar', { name: `${wire} 배정 작업 완료율` });
+  await expect(assignedBar).toHaveAttribute('aria-valuenow', '6');
+  await expect(assignedBar).toHaveAttribute('aria-valuemax', '10');
+  const plannedBar = department.getByRole('progressbar', { name: `${wire} 계획 정비 완료율` });
+  await expect(plannedBar).toHaveAttribute('aria-valuenow', '2');
+  await expect(plannedBar).toHaveAttribute('aria-valuemax', '3');
+  await expect(department).toContainText('후보고 2건 포함');
+  await expect(department).toContainText('반환 1건 포함');
+  await expect(page.getByText(/확인 시각|집계 기준 시각/)).toHaveCount(0);
+  await expect(page.getByText('작업 10건', { exact: true })).toBeVisible();
+  await expect(page.locator('.table-wrap tbody tr')).toHaveCount(10);
+  await noOverflow(page);
+  await screenshot(page, info, 'shared-work-overview');
+  const remainingResponse = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.pathname === '/api/work-overview' && url.searchParams.get('bucket') === 'remaining' && response.status() === 200;
+  });
+  await page.getByRole('combobox', { name: '목록 종류' }).selectOption('remaining');
+  await remainingResponse;
+  await expect(page.getByRole('heading', { name: '남은 작업 목록' })).toBeVisible();
+  await expect(page.getByText('작업 4건', { exact: true })).toBeVisible();
+  await expect(page.locator('.table-wrap tbody tr')).toHaveCount(4);
+});
+
+test('SR-BE-026,035: standalone situation pages still require the existing login session', async ({ page }) => {
+  await page.goto('/external-systems/gps/index.html');
+  await expect(page.getByRole('heading', { name: 'GPS 정보', exact: true })).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('로그인 세션');
+  await expect(page.locator('.situation-card')).toBeHidden();
+  await expect(page.getByRole('navigation')).toHaveCount(0);
+});
+
+test('FR-038: status hover shows responsible departments and official contact availability; detail keeps the process', async ({ page }, info) => {
+  const number = await seed(page, `상태 안내 ${info.project.name}`, [wire, '유선반']);
+  await apiLogin(page, 'team-wireless');
+  await page.goto('/requests');
+  const row = page.getByRole('row').filter({ has: page.getByRole('button', { name: number, exact: true }) });
+  const requestStatus = row.getByRole('button', { name: '요청 전체 상태: 배정', exact: true });
+  const teamStatus = row.getByRole('button', { name: '우리 반 작업 상태: 배정', exact: true });
+  await requestStatus.hover();
+  const requestTooltip = page.getByRole('tooltip');
+  await expect(requestTooltip).toContainText('담당 부서');
+  await expect(requestTooltip).toContainText('무선반');
+  await expect(requestTooltip).toContainText('유선반');
+  await expect(requestTooltip.getByText('대표번호 미등록', { exact: true })).toHaveCount(2);
+  await expect(requestTooltip.locator('.workflow-status-steps')).toHaveCount(0);
+  const requestHint = await requestTooltip.innerText();
+  await requestTooltip.hover();
+  await expect(requestTooltip).toBeVisible();
+  await requestStatus.focus();
+  expect(await requestTooltip.innerText()).toBe(requestHint);
+  await page.keyboard.press('Escape');
+  await expect(requestTooltip).toHaveCount(0);
+  await expect(requestStatus).toBeFocused();
+
+  await teamStatus.hover();
+  const teamTooltip = page.getByRole('tooltip');
+  await expect(teamTooltip).toContainText('무선반');
+  await expect(teamTooltip).not.toContainText('유선반');
+  await expect(teamTooltip.getByText('대표번호 미등록', { exact: true })).toHaveCount(1);
+  await expect(teamTooltip.locator('.workflow-status-steps')).toHaveCount(0);
+  await teamTooltip.hover();
+  await expect(teamTooltip).toBeVisible();
+  await page.keyboard.press('Escape');
+  await row.getByRole('button', { name: number, exact: true }).click();
+  const requestProcess = page.getByRole('region', { name: '전체 처리 흐름' });
+  const teamProcess = page.getByRole('region', { name: '우리 반 작업 흐름' });
+  await expect(requestProcess.locator('.workflow-status-step')).toHaveCount(4);
+  await expect(teamProcess.locator('.workflow-status-step')).toHaveCount(3);
+  await expect(requestProcess.locator('[aria-current="step"]')).toContainText('배정');
+  await expect(teamProcess.locator('[aria-current="step"]')).toContainText('배정');
+
+  await apiLogin(page, 'bnoc');
+  await page.goto('/overview');
+  const bnocRow = page.locator('.queue-row').filter({ hasText: number });
+  const bnocStatus = bnocRow.getByRole('button', { name: '요청 전체 상태: 배정', exact: true });
+  await expect(bnocStatus).toBeVisible();
+  expect(await bnocStatus.evaluate(element => element.parentElement?.closest('button') === null)).toBeTruthy();
+  await bnocStatus.click();
+  await expect(page).toHaveURL(/\/overview$/);
+  await expect(page.getByRole('tooltip')).toContainText('유선반');
+  await expect(page.getByRole('tooltip').getByText('대표번호 미등록', { exact: true })).toHaveCount(2);
+  await noOverflow(page);
+  await screenshot(page, info, 'status-guide-detail');
+});
+
+test('FR-046: optional personal phone is editable and visible only to the owner, BNOC, and current assigned team', async ({ page }, info) => {
+  await page.goto('/requests');
+  await loginWithPopup(page, 'requester');
+  await page.goto('/new');
+  await fields(page, `개인전화 권한 확인 ${info.project.name}`);
+  await page.getByLabel('요청자 개인전화번호', { exact: true }).fill('010-0000-0000');
+  await page.getByRole('button', { name: '신청 등록', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '신청 상세', exact: true })).toBeVisible();
+  const number = new URL(page.url()).pathname.split('/').at(-1)!;
+  await expect(page.getByText('010-0000-0000', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '내용 수정', exact: true }).click();
+  await page.getByText('선택 정보', { exact: true }).click();
+  await page.getByLabel('개인전화번호', { exact: true }).fill('010-0000-0001');
+  await page.getByRole('button', { name: '수정 저장', exact: true }).click();
+  await expect(page.getByText('010-0000-0001', { exact: true })).toBeVisible();
+  await page.goto('/requests');
+  await expect(page.getByRole('table')).not.toContainText('010-0000-0001');
+
+  await switchWithPopup(page, 'bnoc');
+  await page.goto(`/requests/${number}`);
+  await expect(page.getByText('010-0000-0001', { exact: true })).toBeVisible();
+  let detail = (await apiRead(page, `/api/requests/${number}`)).data;
+  await command(page, 'assignTeams', { teamIds: [wire], priority: 'general' }, { requestNumber: number, expectedRevision: detail.revision });
+  await switchWithPopup(page, 'team-wireless');
+  await page.goto(`/requests/${number}`);
+  await expect(page.getByText('010-0000-0001', { exact: true })).toBeVisible();
+
+  await switchWithPopup(page, 'bnoc');
+  detail = (await apiRead(page, `/api/requests/${number}`)).data;
+  await command(page, 'reassignAssignedWork', { teamIds: ['유선반'] }, { requestNumber: number, workNumber: detail.workItems[0].workNumber, expectedRevision: detail.workItems[0].revision });
+  await switchWithPopup(page, 'team-wireless');
+  const previousTeam = (await apiRead(page, `/api/requests/${number}`)).data;
+  expect(previousTeam).not.toHaveProperty('personalContact');
+  await switchWithPopup(page, 'team-wired');
+  const currentTeam = (await apiRead(page, `/api/requests/${number}`)).data;
+  expect(currentTeam.personalContact).toBe('010-0000-0001');
+});
+
+test('FR-047: BNOC selects the real requester and that requester can edit the proxy request', async ({ page }, info) => {
+  await page.goto('/requests');
+  const ownerSession=await apiLogin(page,'requester');
+  await apiLogin(page,'bnoc');
+  const choices=(await apiRead(page,'/api/requesters')).data as {requesterRef:string;displayName:string;department:string}[];
+  expect(choices.some(item=>item.requesterRef===ownerSession.actor.id)).toBeTruthy();
+  await page.goto('/new');
+  const picker=page.getByRole('combobox',{name:'요청자 계정',exact:true});
+  await expect(picker).toBeEnabled();
+  await page.getByRole('button',{name:'신청 등록',exact:true}).click();
+  await expect(page.getByText('실제 요청자를 선택하세요.',{exact:true})).toBeVisible();
+  await picker.selectOption(ownerSession.actor.id);
+  await fields(page,`대리 신청 수정 ${info.project.name}`);
+  await page.getByRole('button',{name:'신청 등록',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'신청 상세',exact:true})).toBeVisible();
+  const number=new URL(page.url()).pathname.split('/').at(-1)!;
+  expect((await apiRead(page,`/api/requests/${number}`)).data.requesterDisplayText).toBe([ownerSession.actor.displayName,ownerSession.actor.department].filter(Boolean).join(' · '));
+  await apiLogin(page,'requester');
+  await page.goto(`/requests/${number}`);
+  await expect(page.getByRole('button',{name:'내용 수정',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'내용 수정',exact:true}).click();
+  await page.getByLabel('내용',{exact:true}).fill(`요청자 직접 수정 ${info.project.name}`);
+  await page.getByRole('button',{name:'수정 저장',exact:true}).click();
+  await expect(page.getByText(`요청자 직접 수정 ${info.project.name}`,{exact:true})).toBeVisible();
+});
+
+test('FR-048: BNOC records a reason to reject an unassigned request and requester sees the closure', async ({ page }, info) => {
+  const number=await seed(page,`담당 범위 밖 요청 ${info.project.name}`);
+  await apiLogin(page,'bnoc');
+  await page.goto(`/requests/${number}`);
+  const reason=page.getByRole('textbox',{name:'기각 사유',exact:true});
+  const reject=page.getByRole('button',{name:'요청 기각',exact:true});
+  await expect(reason).toBeVisible();
+  await expect(reject).toBeDisabled();
+  await reason.fill('우리 부대 담당 범위 밖입니다.');
+  await expect(reject).toBeEnabled();
+  const response=page.waitForResponse(item=>new URL(item.url()).pathname==='/api/commands'&&item.request().method()==='POST');
+  await reject.click();
+  expect((await response).status()).toBe(200);
+  const bnocDetail=(await apiRead(page,`/api/requests/${number}`)).data as {status:string;rejectionReason:string;rejectedAt:string;canReject:boolean};
+  expect(bnocDetail.status).toBe('기각');
+  expect(bnocDetail.rejectionReason).toBe('우리 부대 담당 범위 밖입니다.');
+  expect(Number.isFinite(Date.parse(bnocDetail.rejectedAt))).toBeTruthy();
+  expect(bnocDetail.canReject).toBe(false);
+  await expect(page.getByRole('button',{name:'요청 전체 상태: 기각',exact:true})).toBeVisible();
+  await expect(page.getByText('우리 부대 담당 범위 밖입니다.',{exact:true})).toBeVisible();
+  await expect(reject).toHaveCount(0);
+  await apiLogin(page,'requester');
+  await page.goto(`/requests/${number}`);
+  await expect(page.getByRole('button',{name:'요청 전체 상태: 기각',exact:true})).toBeVisible();
+  await expect(page.getByText('우리 부대 담당 범위 밖입니다.',{exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'내용 수정',exact:true})).toHaveCount(0);
+  await screenshot(page,info,'rejected-request');
 });
 
 test('SR-BE-015: request list shows per-department progress when one department finishes first', async ({ page }, info) => {
@@ -744,18 +1165,29 @@ test('SR-BE-012,014,015,021,030: real day/week/month calendar and returned-work 
   await expect(pastTeamRow).toContainText('우리 반: 현재 담당 아님 · 과거 참여');
 });
 
-test('SR-BE-016,024,025,027,033: completed after-action report, department records and BNOC notice attachment', async ({ page }, info) => {
+test('FR-049, SR-BE-016,024,025,027,033: completed after-action report, department records and BNOC notice attachment', async ({ page }, info) => {
   await apiLogin(page, 'team-wireless');
   await page.goto('/after-action');
+  await page.getByRole('combobox', { name: '요청 유형', exact: true }).selectOption('회의 지원');
+  await page.getByRole('combobox', { name: '회의 유형', exact: true }).selectOption('화상회의');
+  await expect(page.getByRole('combobox', { name: '화상회의 방식', exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('첨부파일', { exact: true })).toHaveAttribute('aria-required', 'false');
+  await page.getByRole('combobox', { name: '요청 유형', exact: true }).selectOption('장비/체계');
   await page.getByLabel('실제 요청자', { exact: true }).fill('요청 부서');
   await fields(page, `완료 후보고 ${info.project.name}`);
   await page.getByRole('button', { name: '후보고 등록', exact: true }).click();
   await expect(page.getByText(/작업을 완료한 뒤 보고/).first()).toBeVisible();
   await expect(page.getByRole('textbox', { name: /^요청 내용·증상(?:\s|$)/ })).toHaveValue(`완료 후보고 ${info.project.name}`);
-  await page.getByLabel('실제 시작 시각', { exact: true }).fill('2026-10-12T10:00');
-  await page.getByLabel('실제 완료 시각', { exact: true }).fill('2026-10-12T11:00');
+  await page.getByLabel('실제 시작 날짜', { exact: true }).fill('2026-10-12');
+  await page.getByLabel('실제 시작 시각', { exact: true }).fill('24:00');
+  await page.getByLabel('실제 완료 날짜', { exact: true }).fill('2026-10-13');
+  await page.getByLabel('실제 완료 시각', { exact: true }).fill('00:00');
   await page.getByRole('textbox', { name: '선조치 사유', exact: true }).fill('직접 요청 완료');
   await page.getByLabel('작업 완료 확인', { exact: true }).check();
+  await page.getByRole('button', { name: '후보고 등록', exact: true }).click();
+  await expect(page.locator('#actual-start-error')).toContainText('00:00~23:59');
+  await expect(page).toHaveURL(/\/after-action$/);
+  await page.getByLabel('실제 시작 시각', { exact: true }).fill('23:59');
   await page.getByRole('button', { name: '후보고 등록', exact: true }).click();
   await expect(page.getByRole('heading', { name: '신청 상세' })).toBeVisible();
   await expect(page.getByText('미분류', { exact: true }).first()).toBeVisible();
@@ -764,13 +1196,33 @@ test('SR-BE-016,024,025,027,033: completed after-action report, department recor
   const reportedNumber = new URL(page.url()).pathname.split('/').at(-1);
   expect(reportedNumber).toBeTruthy();
   const reportedWork = (await apiRead(page, `/api/requests/${reportedNumber}`)).data.workItems[0];
+  expect(reportedWork.actualStartedAt).toBe('2026-10-12T14:59:00Z');
+  expect(reportedWork.completion.completedAt).toBe('2026-10-12T15:00:00Z');
+  await page.goto('/requests');
+  const afterActionListRow = page.getByRole('row').filter({ has: page.getByRole('button', { name: reportedNumber, exact: true }) });
+  const afterActionStatus = afterActionListRow.getByRole('button', { name: '요청 전체 상태: 완료', exact: true });
+  await afterActionStatus.hover();
+  await expect(afterActionStatus).toHaveAttribute('aria-describedby', /.+/);
+  const afterActionTooltip = page.locator(`#${await afterActionStatus.getAttribute('aria-describedby')}`);
+  await expect(afterActionTooltip).toContainText('수행 부서');
+  await expect(afterActionTooltip).toContainText('무선반');
+  await expect(afterActionTooltip).toContainText('대표번호 미등록');
+  await expect(afterActionTooltip).not.toContainText('000-0000');
+  await expect(afterActionTooltip.locator('.workflow-status-step')).toHaveCount(0);
+  const afterActionTeamStatus = afterActionListRow.getByRole('button', { name: '우리 반 작업 상태: 완료', exact: true });
+  await afterActionTeamStatus.hover();
+  await expect(afterActionTeamStatus).toHaveAttribute('aria-describedby', /.+/);
+  const afterActionTeamTooltip = page.locator(`#${await afterActionTeamStatus.getAttribute('aria-describedby')}`);
+  await expect(afterActionTeamTooltip).toContainText('수행 부서');
+  await expect(afterActionTeamTooltip).toContainText('무선반');
+  await expect(afterActionTeamTooltip).toContainText('대표번호 미등록');
   await page.goto('/schedule');
   await page.getByLabel(/기준 날짜|조회 날짜/).fill('2026-10-12');
   const completedCard = page.locator('.calendar-item').filter({ hasText: `작업번호: ${reportedWork.workNumber}` });
   await expect(completedCard).toHaveCount(1, 'an after-action completion is shown once at its actual start');
   await expect(completedCard).toBeVisible();
   await expect(completedCard).toHaveClass(/calendar-item--completed/);
-  await expect(completedCard.locator('.calendar-time')).toHaveText('10:00');
+  await expect(completedCard.locator('.calendar-time')).toHaveText('23:59');
   await expect(completedCard).toContainText(`작업번호: ${reportedWork.workNumber} (완료)`);
   await expect(completedCard).not.toContainText('전화번호');
   await completedCard.click();
@@ -1230,24 +1682,46 @@ test('SR-BE-010,011,019,027,030,032: BNOC drafts retain their starting versions 
   await noOverflow(page);
 });
 
-test('SR-BE-026,032,033,035: situation provenance, query failure distinct from empty, keyboard and PC layout', async ({ page }, info) => {
+test('SR-BE-026,032,033,035: GPS and CPCON open separate popups with status but no timestamps', async ({ page }, info) => {
   await apiLogin(page, 'requester');
-  await page.goto('/situation');
-  await expect(page.getByRole('heading', { name: /정보통신 상황|GPS.*CPCON/ })).toBeVisible();
-  await expect(page.getByText('GPS 정보원', { exact: true })).toBeVisible();
-  await expect(page.getByText('CPCON 정보원', { exact: true })).toBeVisible();
-  await expect(page.getByText(/모의 인증|모의 정보|대회용/)).toHaveCount(0);
-  await expect(page.locator('.card').filter({has:page.getByRole('heading',{name:'CPCON',exact:true})}).locator('.situation-stage')).toHaveText(/^(?:I|II|III|IV|V)$/);
-  await expect(page.getByRole('button', { name: /단계.*변경|단계.*설정/ })).toHaveCount(0);
-  await expect(page.getByText(/원본 기준시각|정보 기준시각/).first()).toBeVisible();
+  await page.goto('/requests');
+  const nav = page.getByRole('navigation', { name: '주 메뉴' });
+  const gpsButton = page.getByRole('button', { name: /^GPS / });
+  const cpconButton = page.getByRole('button', { name: /^CPCON / });
+  await expect(gpsButton).toBeVisible();
+  await expect(cpconButton).toBeVisible();
+  await expect(nav.getByRole('button', { name: 'GPS·CPCON', exact: true })).toHaveCount(0);
+  let gpsPopup: Page | undefined;
+  let cpconPopup: Page | undefined;
   try {
-    const cpconValue=page.locator('.card').filter({has:page.getByRole('heading',{name:'CPCON',exact:true})}).locator('.situation-stage');
+    const gpsOpened = page.waitForEvent('popup');
+    await gpsButton.click();
+    gpsPopup = await gpsOpened;
+    await expect(gpsPopup).toHaveURL(/\/external-systems\/gps\/index\.html$/);
+    await expect(gpsPopup.getByRole('heading', { name: 'GPS 정보', exact: true })).toBeVisible();
+    await expect(gpsPopup.getByText('GPS 정보원', { exact: true })).toBeVisible();
+    await expect(gpsPopup.getByText('CPCON 정보원', { exact: true })).toHaveCount(0);
+    await expect(gpsPopup.getByRole('navigation')).toHaveCount(0);
+    await expect(gpsPopup.getByText(/원본 기준시각|마지막 성공|마지막 시도/)).toHaveCount(0);
+    await expect(gpsPopup.locator('.situation-stage')).toHaveText(/^(?:[1-5]단계(?: · 양호)?|양호|수집된 값 없음)$/);
+
+    const cpconOpened = page.waitForEvent('popup');
+    await cpconButton.click();
+    cpconPopup = await cpconOpened;
+    await expect(cpconPopup).toHaveURL(/\/external-systems\/cpcon\/index\.html$/);
+    await expect(cpconPopup.getByRole('heading', { name: 'CPCON 정보', exact: true })).toBeVisible();
+    await expect(cpconPopup.getByText('CPCON 정보원', { exact: true })).toBeVisible();
+    await expect(cpconPopup.getByText('GPS 정보원', { exact: true })).toHaveCount(0);
+    await expect(cpconPopup.getByText(/원본 기준시각|마지막 성공|마지막 시도/)).toHaveCount(0);
+    await expect(cpconPopup.locator('.situation-stage')).toHaveText(/^(?:I|II|III|IV|V|수집된 값 없음)$/);
+    await expect(cpconPopup.getByRole('button', { name: /단계.*변경|단계.*설정/ })).toHaveCount(0);
+    await expect(cpconPopup.getByText(/모의 인증|모의 정보|대회용/)).toHaveCount(0);
+
     for (const [stageCode,letter,canonical] of [['1','I','Ⅰ'],['2','II','Ⅱ'],['3','III','Ⅲ'],['4','IV','Ⅳ'],['5','V','Ⅴ']]) {
       await providerControl(page,{gps:{scenario:'normal',stageCode:'3'},cpcon:{scenario:'normal',stageCode}});
       await expect.poll(async()=>{const state=(await apiRead(page,'/api/situation/cpcon')).data;return state.collectionState==='ok'&&state.stageCode===stageCode;}).toBe(true);
-      await page.reload();
-      await expect(cpconValue).toHaveText(letter);
-      await expect(page.getByRole('button',{name:new RegExp(`^CPCON ${letter}, 정상,`)})).toContainText(`CPCON · ${letter}`);
+      await cpconPopup.reload();
+      await expect(cpconPopup.locator('.situation-stage')).toHaveText(letter);
       expect((await apiRead(page,'/api/situation/cpcon')).data.stageLabel).toBe(`CPCON${canonical}급`);
     }
     await providerControl(page,{gps:{scenario:'normal',stageCode:'3'},cpcon:{scenario:'normal',stageCode:'4'}});
@@ -1257,12 +1731,12 @@ test('SR-BE-026,032,033,035: situation provenance, query failure distinct from e
       const [gps,cpcon]=await Promise.all([apiRead(page,'/api/situation/gps'),apiRead(page,'/api/situation/cpcon')]);
       return gps.data.collectionState==='failed'&&cpcon.data.collectionState==='ok'&&Number(cpcon.data.stageCode)===4;
     }).toBe(true);
+    await gpsPopup.reload();
+    await cpconPopup.reload();
     await page.reload();
-    const gpsCard=page.locator('.card').filter({has:page.getByRole('heading',{name:'GPS',exact:true})});
-    const cpconCard=page.locator('.card').filter({has:page.getByRole('heading',{name:'CPCON',exact:true})});
+    const gpsCard=gpsPopup.locator('.situation-card');
+    const cpconCard=cpconPopup.locator('.situation-card');
     await expect(cpconCard.locator('.situation-stage')).toHaveText('IV');
-    await expect(page.getByRole('button',{name:/CPCON IV, 정상/})).toContainText('CPCON · IV');
-    expect((await apiRead(page,'/api/situation/cpcon')).data.stageLabel).toBe('CPCONⅣ급');
     await expect(gpsCard.getByText('갱신 실패',{exact:true})).toBeVisible();
     await expect(cpconCard.getByText('수집 정상',{exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:/GPS.*갱신 실패/})).toBeVisible();
@@ -1272,6 +1746,8 @@ test('SR-BE-026,032,033,035: situation provenance, query failure distinct from e
       const [gps,cpcon]=await Promise.all([apiRead(page,'/api/situation/gps'),apiRead(page,'/api/situation/cpcon')]);
       return gps.data.collectionState==='ok'&&Number(gps.data.stageCode)===3&&cpcon.data.collectionState==='failed';
     }).toBe(true);
+    await gpsPopup.reload();
+    await cpconPopup.reload();
     await page.reload();
     await expect(gpsCard.getByText('수집 정상',{exact:true})).toBeVisible();
     await expect(cpconCard.getByText('갱신 실패',{exact:true})).toBeVisible();
@@ -1285,13 +1761,23 @@ test('SR-BE-026,032,033,035: situation provenance, query failure distinct from e
     const gpsContext=page.getByRole('button',{name:/GPS.*조회 오류.*마지막 값/});
     await expect(gpsContext).toContainText('조회 오류 · 마지막 값');
     await expect(gpsContext).not.toContainText('정상');
+    await noOverflow(gpsPopup);
+    await screenshot(cpconPopup, info, 'situation');
+    await page.context().route('**/api/situation/cpcon', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'SAVE_FAILED' }) }));
+    const cpconReadFailure = cpconPopup.waitForResponse(response => new URL(response.url()).pathname === '/api/situation/cpcon' && response.status() === 503);
+    await cpconPopup.getByRole('button', { name: '새로고침' }).click();
+    await cpconReadFailure;
+    await expect(cpconCard.locator('.badge')).toHaveText('조회 오류 · 마지막 값');
+    await expect(cpconCard.locator('.situation-stage')).toHaveText('IV');
+    await expect(cpconCard.locator('.notice')).toContainText('마지막 응답');
   } finally {
     await page.unroute('**/api/situation');
+    await page.context().unroute('**/api/situation/cpcon');
     await providerControl(page,{reset:true});
+    if (gpsPopup && !gpsPopup.isClosed()) await gpsPopup.close();
+    if (cpconPopup && !cpconPopup.isClosed()) await cpconPopup.close();
   }
   await noOverflow(page);
-  await screenshot(page, info, 'situation');
-  await page.goto('/requests');
   await expect(page.getByRole('heading', { name: '신청 목록' })).toBeVisible();
   await page.route('**/api/requests?**', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'SAVE_FAILED', message: '일시적으로 조회할 수 없습니다.' }) }));
   await page.getByRole('button', { name: '검색', exact: true }).click();

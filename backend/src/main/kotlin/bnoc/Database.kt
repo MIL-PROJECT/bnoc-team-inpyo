@@ -24,7 +24,7 @@ class Database(val jdbc:JdbcTemplate,@param:Value("\${bnoc.bootstrap-admin:acces
             "CREATE TABLE IF NOT EXISTS bnoc_sequences (sequence_key VARCHAR(64) PRIMARY KEY,sequence_value BIGINT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS bnoc_subjects (subject_id VARCHAR(128) PRIMARY KEY,role_name VARCHAR(32) NOT NULL,display_label VARCHAR(200) NOT NULL,department VARCHAR(100) NOT NULL,team_id VARCHAR(100),active BOOLEAN NOT NULL,subject_ref VARCHAR(36) NOT NULL UNIQUE,department_manager BOOLEAN NOT NULL,access_admin BOOLEAN NOT NULL,revision BIGINT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS bnoc_departments (department VARCHAR(100) PRIMARY KEY,sort_order INT NOT NULL)",
-            "CREATE TABLE IF NOT EXISTS bnoc_requests (request_number VARCHAR(40) PRIMARY KEY,requester_subject VARCHAR(128),requester_display_text VARCHAR(500) NOT NULL,registered_by VARCHAR(128) NOT NULL,category VARCHAR(100) NOT NULL,subcategories TEXT NOT NULL,detail TEXT NOT NULL,location VARCHAR(500) NOT NULL,contact VARCHAR(200) NOT NULL,equipment_id VARCHAR(200),maintenance_target TEXT,requested_schedule VARCHAR(64),document_ref VARCHAR(500),status VARCHAR(32) NOT NULL,registered_at VARCHAR(64) NOT NULL,updated_at VARCHAR(64) NOT NULL,revision BIGINT NOT NULL,priority VARCHAR(16),assigned_at VARCHAR(64))",
+            "CREATE TABLE IF NOT EXISTS bnoc_requests (request_number VARCHAR(40) PRIMARY KEY,requester_subject VARCHAR(128),requester_display_text VARCHAR(500) NOT NULL,registered_by VARCHAR(128) NOT NULL,category VARCHAR(100) NOT NULL,subcategories TEXT NOT NULL,detail TEXT NOT NULL,location VARCHAR(500) NOT NULL,contact VARCHAR(200) NOT NULL,equipment_id VARCHAR(200),maintenance_target TEXT,requested_schedule VARCHAR(64),document_ref VARCHAR(500),status VARCHAR(32) NOT NULL,registered_at VARCHAR(64) NOT NULL,updated_at VARCHAR(64) NOT NULL,revision BIGINT NOT NULL,priority VARCHAR(16),assigned_at VARCHAR(64),personal_contact VARCHAR(200),rejection_reason TEXT,rejected_by VARCHAR(128),rejected_at VARCHAR(64))",
             "CREATE TABLE IF NOT EXISTS bnoc_works (work_number VARCHAR(48) PRIMARY KEY,request_number VARCHAR(40) NOT NULL,team_id VARCHAR(100) NOT NULL,status VARCHAR(32) NOT NULL,schedule VARCHAR(64),memo TEXT,return_reason TEXT,completion TEXT,resolved_by TEXT NOT NULL,replaces_work_number VARCHAR(48),origin VARCHAR(32) NOT NULL,revision BIGINT NOT NULL,assigned_person_refs TEXT NOT NULL,assigned_at VARCHAR(64),FOREIGN KEY(request_number) REFERENCES bnoc_requests(request_number))",
             "CREATE TABLE IF NOT EXISTS bnoc_history (history_id VARCHAR(36) PRIMARY KEY,request_number VARCHAR(40) NOT NULL,work_number VARCHAR(48),actor_subject VARCHAR(128) NOT NULL,recorded_at VARCHAR(64) NOT NULL,field_name VARCHAR(100) NOT NULL,before_value TEXT,after_value TEXT,FOREIGN KEY(request_number) REFERENCES bnoc_requests(request_number))",
             "CREATE TABLE IF NOT EXISTS bnoc_notifications (notification_id VARCHAR(36) PRIMARY KEY,recipient_subject VARCHAR(128) NOT NULL,event_name VARCHAR(100) NOT NULL,request_number VARCHAR(40) NOT NULL,work_number VARCHAR(48),recorded_at VARCHAR(64) NOT NULL,is_read BOOLEAN NOT NULL,FOREIGN KEY(request_number) REFERENCES bnoc_requests(request_number))",
@@ -45,6 +45,7 @@ class Database(val jdbc:JdbcTemplate,@param:Value("\${bnoc.bootstrap-admin:acces
             "CREATE TABLE IF NOT EXISTS bnoc_situation (kind VARCHAR(16) NOT NULL,scope_key VARCHAR(100) NOT NULL,last_attempt VARCHAR(64),last_success VARCHAR(64),observed_at VARCHAR(64),stage_code VARCHAR(32),stage_label VARCHAR(100),source_mode VARCHAR(32),collection_state VARCHAR(32) NOT NULL,failure_code VARCHAR(100),PRIMARY KEY(kind,scope_key))",
             "CREATE TABLE IF NOT EXISTS bnoc_situation_attempts (attempt_ref VARCHAR(36) PRIMARY KEY,kind VARCHAR(16) NOT NULL,scope_key VARCHAR(100) NOT NULL,attempted_at VARCHAR(64) NOT NULL,succeeded BOOLEAN NOT NULL,failure_code VARCHAR(100))"
         ).forEach { jdbc.execute(it) }
+        ensureColumn("bnoc_attachments","content_analysis_excluded","BOOLEAN NOT NULL DEFAULT FALSE")
         jdbc.execute("CREATE TABLE IF NOT EXISTS bnoc_schema_migrations (version INT PRIMARY KEY,applied_at VARCHAR(64) NOT NULL)")
         ensureColumn("bnoc_works","resolution_kind","VARCHAR(16) NOT NULL DEFAULT 'open'")
         ensureColumn("bnoc_works","resolution_reason","TEXT NULL")
@@ -54,6 +55,9 @@ class Database(val jdbc:JdbcTemplate,@param:Value("\${bnoc.bootstrap-admin:acces
         ensureColumn("bnoc_works","previous_schedule","VARCHAR(64) NULL")
         ensureColumn("bnoc_works","actual_started_at","VARCHAR(64) NULL")
         ensureColumn("bnoc_notices","body_document","MEDIUMTEXT NULL")
+        ensureColumn("bnoc_requests","rejection_reason","TEXT NULL")
+        ensureColumn("bnoc_requests","rejected_by","VARCHAR(128) NULL")
+        ensureColumn("bnoc_requests","rejected_at","VARCHAR(64) NULL")
         if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_schema_migrations WHERE version=8",Int::class.java)==0) {
             // Carry forward the old replacement links and returned schedules without deleting history.
             jdbc.update("UPDATE bnoc_works SET resolution_kind='reassigned',replacement_work_numbers=resolved_by,resolution_reason='기존 재배정 이력' WHERE resolved_by IS NOT NULL AND TRIM(resolved_by) NOT IN ('','[]')")
@@ -94,6 +98,30 @@ class Database(val jdbc:JdbcTemplate,@param:Value("\${bnoc.bootstrap-admin:acces
             }
             jdbc.update("INSERT INTO bnoc_schema_migrations(version,applied_at) VALUES (9,?)",java.time.Instant.now().toString())
         }
+        ensureColumn("bnoc_requests","personal_contact","VARCHAR(200) NULL")
+        if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_schema_migrations WHERE version=10",Int::class.java)==0)
+            jdbc.update("INSERT INTO bnoc_schema_migrations(version,applied_at) VALUES (10,?)",java.time.Instant.now().toString())
+        if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_schema_migrations WHERE version=11",Int::class.java)==0)
+            jdbc.update("INSERT INTO bnoc_schema_migrations(version,applied_at) VALUES (11,?)",java.time.Instant.now().toString())
+        jdbc.execute("CREATE TABLE IF NOT EXISTS bnoc_document_analysis (attachment_ref VARCHAR(36) PRIMARY KEY,source_hash CHAR(64) NOT NULL,parser_version VARCHAR(40) NOT NULL,generation INT NOT NULL,status VARCHAR(16) NOT NULL,body_json MEDIUMTEXT,body_text MEDIUMTEXT,metadata_json MEDIUMTEXT,error_code VARCHAR(100),processed_range VARCHAR(100),updated_at VARCHAR(64) NOT NULL,FOREIGN KEY(attachment_ref) REFERENCES bnoc_attachments(attachment_ref) ON DELETE CASCADE)")
+        ensureColumn("bnoc_document_analysis","processed_range","VARCHAR(100) NULL")
+        jdbc.execute("CREATE TABLE IF NOT EXISTS bnoc_document_jobs (attachment_ref VARCHAR(36) PRIMARY KEY,source_hash CHAR(64) NOT NULL,parser_version VARCHAR(40) NOT NULL,generation INT NOT NULL,status VARCHAR(16) NOT NULL,lease_until VARCHAR(64),attempt_count INT NOT NULL,updated_at VARCHAR(64) NOT NULL,FOREIGN KEY(attachment_ref) REFERENCES bnoc_attachments(attachment_ref) ON DELETE CASCADE)")
+        if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_schema_migrations WHERE version=12",Int::class.java)==0)
+            jdbc.update("INSERT INTO bnoc_schema_migrations(version,applied_at) VALUES (12,?)",java.time.Instant.now().toString())
+        if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_schema_migrations WHERE version=13",Int::class.java)==0)
+            jdbc.update("INSERT INTO bnoc_schema_migrations(version,applied_at) VALUES (13,?)",java.time.Instant.now().toString())
+        if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_schema_migrations WHERE version=14",Int::class.java)==0) {
+            rows("SELECT a.attachment_ref,r.subcategories FROM bnoc_attachments a JOIN bnoc_requests r ON r.request_number=a.resource_ref WHERE a.resource_kind='request' AND a.resource_ref IS NOT NULL AND r.category='회의 지원'").forEach { row ->
+                val meetingType=runCatching { json.readValue<Map<String,String>>(row["subcategories"] as String)["meetingType"] }.getOrNull()
+                if(meetingType!="기타") {
+                    val ref=row["attachment_ref"] as String
+                    jdbc.update("UPDATE bnoc_attachments SET content_analysis_excluded=TRUE WHERE attachment_ref=?",ref)
+                    jdbc.update("DELETE FROM bnoc_document_jobs WHERE attachment_ref=?",ref)
+                    jdbc.update("DELETE FROM bnoc_document_analysis WHERE attachment_ref=?",ref)
+                }
+            }
+            jdbc.update("INSERT INTO bnoc_schema_migrations(version,applied_at) VALUES (14,?)",java.time.Instant.now().toString())
+        }
         if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_sequences WHERE sequence_key='request'",Int::class.java)==0) jdbc.update("INSERT INTO bnoc_sequences VALUES ('request',100)")
         (listOf("BNOC")+teams+configuredDepartments).distinct().forEachIndexed { index,department -> if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_departments WHERE department=?",Int::class.java,department)==0) jdbc.update("INSERT INTO bnoc_departments VALUES (?,?)",department,index) }
         val actors=listOf(Actor("requester","requester","요청자",""),Actor("requester-secondary","requester","요청자",""),
@@ -113,7 +141,7 @@ class Database(val jdbc:JdbcTemplate,@param:Value("\${bnoc.bootstrap-admin:acces
     private fun mapActor(rs:ResultSet)=Actor(rs.getString("subject_id"),rs.getString("role_name"),rs.getString("display_label"),rs.getString("department"),rs.getString("team_id"),rs.getBoolean("active"),rs.getString("subject_ref"),rs.getBoolean("department_manager"),rs.getBoolean("access_admin"),rs.getLong("revision"))
     fun request(number:String,lock:Boolean=false):RequestRecord?=jdbc.query("SELECT * FROM bnoc_requests WHERE request_number=?"+(if(lock) " FOR UPDATE" else ""),{ rs,_ -> mapRequest(rs) },number).firstOrNull()?.also { it.attachments=attachmentMetadata("request",number) }
     fun requests():List<RequestRecord> = jdbc.query("SELECT * FROM bnoc_requests ORDER BY updated_at DESC,request_number DESC",{ rs,_ -> mapRequest(rs) })
-    private fun mapRequest(rs:ResultSet)=RequestRecord(rs.getString("request_number"),rs.getString("requester_subject"),rs.getString("requester_display_text"),rs.getString("registered_by"),rs.getString("category"),json.readValue(rs.getString("subcategories")),rs.getString("detail"),rs.getString("location"),rs.getString("contact"),rs.getString("equipment_id"),rs.getString("maintenance_target")?.let { json.readValue(it) },rs.getString("requested_schedule"),rs.getString("document_ref"),emptyList(),rs.getString("status"),rs.getString("registered_at"),rs.getString("updated_at"),rs.getLong("revision"),rs.getString("priority"),rs.getString("assigned_at"),schedulePreferences(rs.getString("request_number")))
+    private fun mapRequest(rs:ResultSet)=RequestRecord(rs.getString("request_number"),rs.getString("requester_subject"),rs.getString("requester_display_text"),rs.getString("registered_by"),rs.getString("category"),json.readValue(rs.getString("subcategories")),rs.getString("detail"),rs.getString("location"),rs.getString("contact"),rs.getString("equipment_id"),rs.getString("maintenance_target")?.let { json.readValue(it) },rs.getString("requested_schedule"),rs.getString("document_ref"),emptyList(),rs.getString("status"),rs.getString("registered_at"),rs.getString("updated_at"),rs.getLong("revision"),rs.getString("priority"),rs.getString("assigned_at"),schedulePreferences(rs.getString("request_number")),rs.getString("personal_contact"),rs.getString("rejection_reason"),rs.getString("rejected_by"),rs.getString("rejected_at"))
     fun works(number:String):List<WorkRecord> = jdbc.query("SELECT * FROM bnoc_works WHERE request_number=? ORDER BY work_number",{ rs,_ -> mapWork(rs) },number)
     fun work(number:String,lock:Boolean=false):WorkRecord?=jdbc.query("SELECT * FROM bnoc_works WHERE work_number=?"+(if(lock) " FOR UPDATE" else ""),{ rs,_ -> mapWork(rs) },number).firstOrNull()
     fun allWorks():List<WorkRecord> = jdbc.query("SELECT w.* FROM bnoc_works w JOIN bnoc_requests r ON r.request_number=w.request_number ORDER BY w.work_number",{ rs,_ -> mapWork(rs) })
@@ -140,12 +168,12 @@ class Database(val jdbc:JdbcTemplate,@param:Value("\${bnoc.bootstrap-admin:acces
         intervals.forEachIndexed { index,interval -> jdbc.update("INSERT INTO bnoc_work_schedule_intervals VALUES (?,?,?,?,?)",workNumber,kind,index,interval.startsAt,interval.endsAt) }
     }
     fun insertRequest(r:RequestRecord):Int {
-        val inserted=jdbc.update("INSERT INTO bnoc_requests(request_number,requester_subject,requester_display_text,registered_by,category,subcategories,detail,location,contact,equipment_id,maintenance_target,requested_schedule,document_ref,status,registered_at,updated_at,revision,priority,assigned_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",r.number,r.requesterSubject,r.requesterDisplayText,r.registeredBy,r.category,json.writeValueAsString(r.subcategories),r.detail,r.location,r.contact,r.equipmentId,r.maintenanceTarget?.let { json.writeValueAsString(it) },r.scheduledAt,r.documentRef,r.status,r.registeredAt,r.updatedAt,r.revision,r.priority,r.assignedAt)
+        val inserted=jdbc.update("INSERT INTO bnoc_requests(request_number,requester_subject,requester_display_text,registered_by,category,subcategories,detail,location,contact,equipment_id,maintenance_target,requested_schedule,document_ref,status,registered_at,updated_at,revision,priority,assigned_at,personal_contact) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",r.number,r.requesterSubject,r.requesterDisplayText,r.registeredBy,r.category,json.writeValueAsString(r.subcategories),r.detail,r.location,r.contact,r.equipmentId,r.maintenanceTarget?.let { json.writeValueAsString(it) },r.scheduledAt,r.documentRef,r.status,r.registeredAt,r.updatedAt,r.revision,r.priority,r.assignedAt,r.personalContact)
         replaceSchedulePreferences(r.number,r.schedulePreferences)
         return inserted
     }
     fun saveRequest(r:RequestRecord):Int {
-        val changed=jdbc.update("UPDATE bnoc_requests SET detail=?,location=?,contact=?,requested_schedule=NULL,document_ref=?,status=?,updated_at=?,revision=?,priority=?,assigned_at=? WHERE request_number=?",r.detail,r.location,r.contact,r.documentRef,r.status,r.updatedAt,r.revision,r.priority,r.assignedAt,r.number)
+        val changed=jdbc.update("UPDATE bnoc_requests SET detail=?,location=?,contact=?,requested_schedule=NULL,document_ref=?,status=?,updated_at=?,revision=?,priority=?,assigned_at=?,personal_contact=?,rejection_reason=?,rejected_by=?,rejected_at=? WHERE request_number=?",r.detail,r.location,r.contact,r.documentRef,r.status,r.updatedAt,r.revision,r.priority,r.assignedAt,r.personalContact,r.rejectionReason,r.rejectedBy,r.rejectedAt,r.number)
         replaceSchedulePreferences(r.number,r.schedulePreferences)
         return changed
     }

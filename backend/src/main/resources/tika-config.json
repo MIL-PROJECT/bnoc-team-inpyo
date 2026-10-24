@@ -1,0 +1,14 @@
+{
+  "text-recognizers": [],
+  "parsers": [
+    { "default-parser": {} },
+    {
+      "pdf-parser": {
+        "maxPages": 50,
+        "pages": {
+          "text": "EXTRACT"
+        }
+      }
+    }
+  ]
+}

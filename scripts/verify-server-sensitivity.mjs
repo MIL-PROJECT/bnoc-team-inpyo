@@ -27,7 +27,7 @@ const mutations = [
   {
     name: 'backend-assignment-schedule', kind: 'backend', file: 'backend/src/main/kotlin/bnoc/WorkflowService.kt',
     anchor: 'WorkRecord("${request.number}-${index+1}",request.number,team,assignedAt=at)',
-    injected: 'WorkRecord("${request.number}-${index+1}",request.number,team,schedule=request.scheduledAt,assignedAt=at)',
+    injected: 'WorkRecord("${request.number}-${index+1}",request.number,team,scheduleIntervals=listOf(WorkScheduleInterval(at,at)),assignedAt=at)',
     assertion: 'BNOC_ASSIGNMENT_MUST_NOT_SET_SCHEDULE'
   },
   {
@@ -86,6 +86,12 @@ const mutations = [
     assertion: 'BNOC_IDENTITY_RAW_BOUNDARY_MUST_BE_REJECTED'
   },
   {
+    name: 'backend-meeting-form-content-privacy', kind: 'backend', file: 'backend/src/main/kotlin/bnoc/WorkflowService.kt',
+    anchor: 'if(excluded) ids.forEach { db.jdbc.update("UPDATE bnoc_attachments SET content_analysis_excluded=TRUE WHERE attachment_ref=?",it) }',
+    injected: 'if(false && excluded) ids.forEach { db.jdbc.update("UPDATE bnoc_attachments SET content_analysis_excluded=TRUE WHERE attachment_ref=?",it) }',
+    assertion: 'MEETING_SUPPORT_ATTACHMENT_CONTENT_MUST_STAY_EXCLUDED', suite: 'bnoc.DocumentAnalysisContractTest'
+  },
+  {
     name: 'frontend-login-origin', kind: 'frontend', file: 'frontend/src/api/loginProof.mjs',
     anchor: 'event.origin === origin && ', injected: '', assertion: 'LOGIN_PROVIDER_ORIGIN_REQUIRED'
   },
@@ -99,6 +105,7 @@ function copy(label) {
   const directory = join(temporary, label);
   mkdirSync(directory);
   cpSync(join(root, 'backend'), join(directory, 'backend'), { recursive: true, filter: path => !['build', '.gradle'].includes(relative(join(root, 'backend'), path).split('/')[0]) });
+  cpSync(join(root, 'mock-provider'), join(directory, 'mock-provider'), { recursive: true });
   cpSync(join(root, 'frontend/src'), join(directory, 'frontend/src'), { recursive: true });
   symlinkSync(join(root, 'frontend/node_modules'), join(directory, 'frontend/node_modules'), 'dir');
   return directory;
@@ -152,15 +159,26 @@ function run(label, kind, directory, assertion = null, suiteOverride = null) {
 }
 
 let status = 'failed', failure = null;
+let selectedMutationSpecs = [];
 try {
+  const meetingPrivacyOnly = process.argv.includes('--meeting-form-privacy-only');
+  const assignmentScheduleOnly = process.argv.includes('--assignment-schedule-only');
   const normal = copy('normal');
-  run('normal-backend', 'backend', normal);
-  run('normal-planned', 'planned', normal);
-  run('normal-operations', 'backend', normal, null, 'bnoc.OperationsContractTest');
-  run('normal-auth', 'auth', normal);
-  run('normal-proxy', 'proxy', normal);
-  run('normal-frontend', 'frontend', normal);
-  for (const mutation of mutations) {
+  if (meetingPrivacyOnly) run('normal-document-analysis', 'backend', normal, null, 'bnoc.DocumentAnalysisContractTest');
+  else if (assignmentScheduleOnly) run('normal-backend', 'backend', normal, null, 'bnoc.WorkflowContractTest');
+  else {
+    run('normal-backend', 'backend', normal);
+    run('normal-planned', 'planned', normal);
+    run('normal-operations', 'backend', normal, null, 'bnoc.OperationsContractTest');
+    run('normal-document-analysis', 'backend', normal, null, 'bnoc.DocumentAnalysisContractTest');
+    run('normal-auth', 'auth', normal);
+    run('normal-proxy', 'proxy', normal);
+    run('normal-frontend', 'frontend', normal);
+  }
+  const selectedMutations = meetingPrivacyOnly ? mutations.filter(item => item.name === 'backend-meeting-form-content-privacy')
+    : assignmentScheduleOnly ? mutations.filter(item => item.name === 'backend-assignment-schedule') : mutations;
+  selectedMutationSpecs = selectedMutations;
+  for (const mutation of selectedMutations) {
     const directory = copy(mutation.name);
     const path = join(directory, mutation.file);
     const original = readFileSync(path, 'utf8');
@@ -183,7 +201,7 @@ try {
   rmSync(temporary, { recursive: true, force: true });
   const cleaned = !existsSync(temporary);
   if (!unchanged || !cleaned) { status = 'failed'; failure = 'Original source changed or temporary source remains.'; process.exitCode = 1; }
-  const summary = { kind: 'isolated-error-sensitivity', status, startedAt, completedAt: new Date().toISOString(), nodeVersion: process.version, runnerSha256: hash(new URL(import.meta.url)), results, mutations, sourceHashes: before, originalSourceUnchanged: unchanged, temporarySourceRemoved: cleaned, failure, limitations: [`${mutations.length} selected artificial defects; no general error-prevention or productivity claim.`, 'Real HTTP/MySQL and browser acceptance are separate checks.'] };
+  const summary = { kind: 'isolated-error-sensitivity', status, startedAt, completedAt: new Date().toISOString(), nodeVersion: process.version, runnerSha256: hash(new URL(import.meta.url)), results, selectedMutationCount: selectedMutationSpecs.length, mutations: selectedMutationSpecs, sourceHashes: before, originalSourceUnchanged: unchanged, temporarySourceRemoved: cleaned, failure, limitations: [`${selectedMutationSpecs.length} selected artificial defects; no general error-prevention or productivity claim.`, 'Real HTTP/MySQL and browser acceptance are separate checks.'] };
   writeFileSync(join(output, 'summary.json'), JSON.stringify(summary, null, 2) + '\n');
   console.log(JSON.stringify({ status, output: relative(root, output), results, failure }, null, 2));
 }

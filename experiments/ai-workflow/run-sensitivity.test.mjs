@@ -14,6 +14,7 @@ function isolatedRun(extraTest) {
     mkdirSync(directory, { recursive: true });
     mkdirSync(join(root, 'frontend'));
     cpSync(join(repo, 'frontend/src'), join(root, 'frontend/src'), { recursive: true });
+    cpSync(join(repo, 'mock-provider'), join(root, 'mock-provider'), { recursive: true });
     symlinkSync(join(repo, 'frontend/node_modules'), join(root, 'frontend/node_modules'), 'dir');
     for (const name of ['run-sensitivity.mjs', 'schedule-contract.test.mjs']) cpSync(join(import.meta.dirname, name), join(directory, name));
     if (extraTest) writeFileSync(join(root, 'frontend/src/workflow/added-regression.test.mjs'), extraTest);

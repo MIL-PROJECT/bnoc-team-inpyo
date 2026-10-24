@@ -316,7 +316,11 @@ class OperationsContractTest {
         val storage=Database(JdbcTemplate(tracked));storage.initialize()
         val shared=TransactionTemplate(DataSourceTransactionManager(tracked)).also { it.isolationLevel=TransactionDefinition.ISOLATION_REPEATABLE_READ }
         val service=WorkflowService(storage,shared,root.toString())
-        service.execute(storage.actor("requester")!!,command("createRequest",mapOf("category" to "회의 지원","subcategories" to mapOf("meetingType" to "일반회의"),"detail" to "지원 요청","location" to "신청 위치","contact" to "1234")))
+        val formId=UUID.randomUUID().toString();val formBytes="fixture".toByteArray();val storedName="$formId.bin"
+        Files.write(root.resolve(storedName),formBytes)
+        storage.jdbc.update("INSERT INTO bnoc_attachments(attachment_ref,owner_subject,resource_kind,resource_ref,file_name,content_type,byte_size,stored_name,uploaded_at,was_linked,current_link) VALUES (?,?,?,?,?,?,?,?,?,?,?)",formId,"requester","request",null,"support-form-fixture.txt","text/plain",formBytes.size,storedName,Instant.now().toString(),false,false)
+        val form=mapOf("id" to formId)
+        service.execute(storage.actor("requester")!!,command("createRequest",mapOf("category" to "회의 지원","subcategories" to mapOf("meetingType" to "일반회의"),"detail" to "지원 요청","location" to "신청 위치","contact" to "1234","attachments" to listOf(form))))
         assertEquals(setOf(TransactionDefinition.ISOLATION_READ_COMMITTED),observed,"BUSINESS_WRITES_MUST_READ_CURRENT_COMMITTED_ROWS")
         assertEquals(TransactionDefinition.ISOLATION_REPEATABLE_READ,shared.isolationLevel,"SHARED_TRANSACTION_TEMPLATE_MUST_NOT_CHANGE")
     }

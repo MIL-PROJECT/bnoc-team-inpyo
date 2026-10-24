@@ -39,6 +39,7 @@ function run(label, directory, tests) {
 }
 
 try {
+  cpSync(join(repo, 'mock-provider'), join(temporary, 'mock-provider'), { recursive: true });
   for (const variant of ['original', 'mutated']) {
     const directory = join(temporary, variant);
     mkdirSync(directory);

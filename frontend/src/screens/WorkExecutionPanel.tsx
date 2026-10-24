@@ -10,6 +10,7 @@ import { displayScheduleRange, removeScheduleIntervalSlots, scheduleIntervalsFro
 import { ResourceStatus } from './ResourceStatus';
 import { focusFormError, saveFailureMessage } from '../app/formFeedback.mjs';
 import { workStatusLabel } from '../types';
+import { StatusBadge } from '../ui/WorkflowStatus';
 
 type WorkInput = { nextStatus: WorkItemView['status']; scheduleSlots: string[]; memo: string; returnReason: string; completionMemo: string; assignedPersonRefs: string[]; reusePreviousSchedule: boolean };
 const workInput = (work: WorkItemView): WorkInput => ({
@@ -73,7 +74,7 @@ export function WorkExecutionPanel({ requestNumber, work, requestStatus, api, ru
     setRangeStartHour(value);
     if (rangeEndHour && Number(rangeEndHour) <= Number(value)) setRangeEndHour('');
   };
-  return <article ref={panelRef} className="work-card"><div className="row-head"><h3>{work.teamId} · 작업 {work.workNumber}</h3><span className={`badge status-${work.status.replace(' ','-')}`}>{workStatusLabel(work.status)}</span></div>
+  return <article ref={panelRef} className="work-card"><div className="row-head"><h3>{work.teamId} · 작업 {work.workNumber}</h3><StatusBadge status={work.status} work afterAction={work.origin==='after-action'} department={work.teamId} /></div>
     <p>작업 일정: {work.scheduleIntervals.length ? work.scheduleIntervals.map(displayScheduleRange).join(' · ') : '미정'}</p>{work.assignedAt && <small>배정 시각(접수 시간): {displayTime(work.assignedAt)}</small>}{work.status==='반환' && work.previousScheduleIntervals.length>0 && <p className="muted">반환 전 일정: {work.previousScheduleIntervals.map(displayScheduleRange).join(' · ')}</p>}
     {work.returnReason && <p>반환 사유: {work.returnReason}</p>}{work.resolved && <p className="muted">{work.resolutionKind==='withdrawn'?'반환된 부서 배정이 해제된 과거 작업입니다.':'재배정된 이전 작업입니다.'}</p>}
     {work.completion && <p>완료: {displayTime(work.completion.completedAt)} · {work.completion.completedBy} · {work.completion.memo || '메모 없음'}</p>}

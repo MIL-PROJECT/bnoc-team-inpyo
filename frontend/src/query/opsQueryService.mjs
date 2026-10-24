@@ -11,7 +11,7 @@ export class OpsQueryService {
       .sort((a,b) => (a.scheduledAt ?? '9999').localeCompare(b.scheduledAt ?? '9999'));
   }
   getBnocOverview(filter = {}) {
-    const statuses = ['대기','문서 대기','배정','작업 중','완료','취소'];
+    const statuses = ['대기','문서 대기','배정','작업 중','완료','취소','기각'];
     if (this.store.getActor()?.role !== 'bnoc') return { total: 0, byStatus: Object.fromEntries(statuses.map(status => [status, 0])), list: [], teams: FixtureCatalog.load().teams };
     const list = this.requests.searchRequests(filter);
     const byStatus = Object.fromEntries(statuses.map(status => [status, list.filter(item => item.status === status).length]));

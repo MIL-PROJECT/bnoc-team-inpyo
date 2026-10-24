@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 // These expectations come from the approved design, not from the interrupted demo.
@@ -110,7 +110,8 @@ function failure(result, status, code) {
 }
 async function detail(number, actor = clients.bnoc) { return (await actor.read(`/api/requests/${number}`)).data; }
 async function create(actor = clients.requester, overrides = {}) {
-  const saved = success(await actor.command('createRequest', input(overrides)));
+  const requesterRef = actor.session?.actor?.role === 'bnoc' ? clients.requester.session.actor.id : undefined;
+  const saved = success(await actor.command('createRequest', input({ ...(requesterRef ? { requesterRef } : {}), ...overrides })));
   assert.match(saved.requestNumber, /^\d{3,}$/);
   return detail(saved.requestNumber, actor);
 }
@@ -160,15 +161,16 @@ async function unenteredPastDates(actor, department, count = 2) {
   assert.ok(selected.every(date => Date.parse(date) < Date.now() - 86400000), 'selected records exercise past-date correction');
   return selected;
 }
-async function upload(actor, kind, content = '지원 문서', name = `검사-${runId}.txt`) {
+async function upload(actor, kind, content = '지원 문서', name = `검사-${runId}.txt`, contentType = 'text/plain') {
+  const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content);
   const form = new FormData();
-  form.set('file', new Blob([content], { type: 'text/plain' }), name);
+  form.set('file', new Blob([bytes], { type: contentType }), name);
   const response = await actor.raw('POST', `/api/attachments?resourceKind=${kind}`, form);
   assert.equal(response.status, 200, `upload: ${response.json?.code}`);
   const data = response.json.data;
   assert.ok(data?.id, 'upload returns a validated temporary public reference');
   assert.equal(data.fileName, name);
-  assert.equal(data.size, Buffer.byteLength(content));
+  assert.equal(data.size, bytes.byteLength);
   noPrivateFields(data);
   return data;
 }
@@ -299,12 +301,22 @@ contract('expired tickets and provider outages do not establish a session', [1, 
 });
 
 contract('direct and proxy requests keep mandatory, optional, and conditional input rules', [4, 5, 17, 31], async () => {
+  const requesterOptions = (await clients.bnoc.read('/api/requesters')).data;
+  assert.ok(requesterOptions.length > 0);
+  assert.deepEqual(Object.keys(requesterOptions[0]).sort(), ['department', 'displayName', 'requesterRef']);
+  failure(await clients.requester.raw('GET', '/api/requesters'), 403, 'FORBIDDEN');
+  failure(await clients.wireless.raw('GET', '/api/requesters'), 403, 'FORBIDDEN');
   for (const key of ['detail', 'location', 'contact']) {
     failure(await clients.requester.command('createRequest', input({ [key]: '' })), 400, 'VALIDATION');
   }
   failure(await clients.requester.command('createRequest', input({ maintenanceTarget: { department: '요청 부서' } })), 400, 'VALIDATION');
   failure(await clients.requester.command('createRequest', input({ requesterDisplayText: 'BNOC' })), 400, 'VALIDATION');
   failure(await clients.requester.command('createRequest', input({ priority: 'urgent' })), 400, 'VALIDATION');
+  failure(await clients.requester.command('createRequest', input({ requesterRef: clients.requester.session.actor.id })), 400, 'VALIDATION');
+  failure(await clients.bnoc.command('createRequest', input()), 400, 'VALIDATION');
+  failure(await clients.bnoc.command('createRequest', input({ requesterRef: 'not-a-public-ref' })), 400, 'VALIDATION');
+  failure(await clients.bnoc.command('createRequest', input({ requesterRef: clients.wireless.session.actor.id })), 400, 'VALIDATION');
+  failure(await clients.bnoc.command('createRequest', input({ requesterRef: clients.requester.session.actor.id, requesterDisplayText: '임의 요청자' })), 400, 'VALIDATION');
   failure(await clients.requester.command('createRequest', input({ schedulePreferences: [{ rank: 1, date: 'not-a-date', period: 'AM' }] })), 400, 'VALIDATION');
   failure(await clients.requester.command('createRequest', input({ detail: 'a'.repeat(10001) })), 400, 'VALIDATION');
   for (const resourceType of ['PC', '프린터', '회선', '전화']) {
@@ -315,11 +327,15 @@ contract('direct and proxy requests keep mandatory, optional, and conditional in
     assert.equal(saved.status, '대기');
     failure(await clients.requesterOther.raw('GET', `/api/requests/${saved.requestNumber}`), 404, 'NOT_FOUND');
   }
-  const meeting = await create(clients.requester, { category: '회의 지원', subcategories: { meetingType: '일반회의' } });
+  const meetingForm=await upload(clients.requester,'request','일반 회의 의뢰서','일반회의-검사.txt');
+  const meeting = await create(clients.requester, { category: '회의 지원', subcategories: { meetingType: '일반회의' }, attachments:[{id:meetingForm.id}] });
   assert.equal(meeting.subcategories.meetingType, '일반회의');
-  const proxy = await create(clients.bnoc, { requesterDisplayText: '일반 요청자' });
-  assert.equal(proxy.requesterDisplayText, '일반 요청자');
-  failure(await clients.requester.raw('GET', `/api/requests/${proxy.requestNumber}`), 404, 'NOT_FOUND');
+  const proxy = await create(clients.bnoc, { requesterRef: clients.requester.session.actor.id });
+  assert.equal(proxy.requesterDisplayText, [clients.requester.session.actor.displayName,clients.requester.session.actor.department].filter(Boolean).join(' · '));
+  assert.equal((await detail(proxy.requestNumber, clients.requester)).canEdit, true);
+  failure(await clients.requesterOther.raw('GET', `/api/requests/${proxy.requestNumber}`), 404, 'NOT_FOUND');
+  success(await clients.requester.command('updateRequest', { detail: '실제 요청자가 수정' }, { requestNumber: proxy.requestNumber, expectedRevision: proxy.revision }));
+  assert.equal((await detail(proxy.requestNumber, clients.requester)).detail, '실제 요청자가 수정');
   failure(await clients.wireless.command('createRequest', input()), 403, 'FORBIDDEN');
 });
 
@@ -340,6 +356,44 @@ contract('files are real, private, type checked, and cannot be stolen from anoth
   forbidden.set('file', new Blob(['console.log(1)'], { type: 'text/javascript' }), '실행.js');
   failure(await clients.requester.raw('POST', '/api/attachments?resourceKind=request', forbidden), 400, 'VALIDATION');
   failure(await clients.requester.command('createRequest', input({ attachments: [{ fileName: '없는파일.txt', size: 1, type: 'text/plain' }] })), 400, 'VALIDATION');
+});
+
+contract('HWP content search and history viewing preserve authorized original attachments', [40, 41], async () => {
+  const bytes = await readFile('frontend/src/preview/fixtures/support.hwp');
+  const file = await upload(clients.requester, 'request', bytes, `회의 지원-${runId}.hwp`, 'application/octet-stream');
+  const request = await create(clients.requester, { attachments: [{ id: file.id }] });
+  failure(await clients.requesterOther.raw('GET', `/api/attachments/${file.id}/document`), 404, 'NOT_FOUND');
+
+  const deadline = Date.now() + 30000;
+  let document;
+  do {
+    document = (await clients.requester.read(`/api/attachments/${file.id}/document`)).data;
+    if (!['pending', 'processing'].includes(document.status)) break;
+    await pause(500);
+  } while (Date.now() < deadline);
+  assert.equal(document.status, 'ready', `HWP extraction: ${document.errorCode ?? document.status}`);
+  assert.ok(document.blocks.some(block => block.text?.includes('마이크 점검')));
+  failure(await clients.requester.raw('GET', `/api/attachments/${file.id}/document?offset=bad`), 400, 'VALIDATION');
+  failure(await clients.requester.raw('GET', `/api/attachments/${file.id}/document?limit=0`), 400, 'VALIDATION');
+  failure(await clients.requester.raw('POST', `/api/attachments/${file.id}/reprocess`, {}), 409, 'CONFLICT');
+
+  const matching = await clients.requester.read(`/api/requests?q=%EB%A7%88%EC%9D%B4%ED%81%AC&requestNumber=${encodeURIComponent(request.requestNumber)}`);
+  const row = matching.data.items.find(item => item.requestNumber === request.requestNumber);
+  assert.ok(row, 'extracted HWP text must be searchable');
+  assert.ok(row.matches.some(match => match.source === 'document' && match.attachmentRef === file.id));
+  assert.equal(matching.data.documentSearchIncomplete, false);
+
+  const replacement = await upload(clients.requester, 'request', '새 첨부 파일', `교체-${runId}.txt`);
+  success(await clients.requester.command('updateRequest', { attachments: [{ id: replacement.id }] }, { requestNumber: request.requestNumber, expectedRevision: request.revision }));
+  const currentSearch = await clients.requester.read('/api/requests?q=%EB%A7%88%EC%9D%B4%ED%81%AC');
+  assert.equal(currentSearch.data.items.some(item => item.requestNumber === request.requestNumber), false, 'removed attachment must leave current search');
+  const historical = (await clients.requester.read(`/api/attachments/${file.id}/document`)).data;
+  assert.equal(historical.status, 'ready', 'authorized request history retains extracted content');
+  const history = (await clients.requester.read(`/api/requests/${request.requestNumber}/history`)).data.items;
+  assert.ok(history.some(item => item.attachments.some(attachment => attachment.id === file.id)), 'history exposes the historical attachment reference');
+  const original = await clients.requester.raw('GET', `/api/attachments/${file.id}`);
+  assert.equal(original.status, 200);
+  assert.deepEqual(original.bytes, bytes, 'analysis and replacement must not change original bytes');
 });
 
 contract('only BNOC assigns with an explicit classification and no schedule or chief input', [9, 10, 11, 20, 28, 31], async () => {
@@ -473,6 +527,35 @@ contract('requesters cancel their own work at any state without deleting history
   assert.equal((await clients.requester.read(`/api/work-overview?requestNumber=${request.requestNumber}`)).data.items.length, 0);
 });
 
+contract('BNOC rejection closes only unassigned requests and notifies the connected requester', [8, 17, 19, 23, 29, 31], async () => {
+  let request = await create();
+  const target = { requestNumber: request.requestNumber, expectedRevision: request.revision };
+  failure(await clients.wireless.command('rejectRequest', { reason: '담당 범위 밖' }, target), 404, 'NOT_FOUND');
+  const blank = await clients.bnoc.command('rejectRequest', { reason: '  ' }, target);
+  failure(blank, 400, 'VALIDATION');
+  assert.equal(blank.json.fieldErrors.reason, '필수 입력입니다.');
+  success(await clients.bnoc.command('rejectRequest', { reason: '우리 부대 담당 범위 밖입니다.' }, target));
+
+  request = await detail(request.requestNumber, clients.requester);
+  assert.equal(request.status, '기각');
+  assert.equal(request.rejectionReason, '우리 부대 담당 범위 밖입니다.');
+  assert.ok(Number.isFinite(Date.parse(request.rejectedAt)));
+  assert.equal(request.canCancel, false);
+  assert.equal(request.canAssign, false);
+  assert.equal(request.canReject, false);
+  assert.equal((await clients.requester.read(`/api/requests/${request.requestNumber}/history`)).data.items.some(item => item.summary === '기각 사유: 우리 부대 담당 범위 밖입니다.'), true);
+  assert.equal((await clients.requester.read('/api/notifications')).data.items.some(item => item.relatedRequestId === request.requestNumber && item.event === '기각'), true);
+
+  failure(await clients.requester.command('updateRequest', { detail: '종결 후 수정 금지' }, { requestNumber: request.requestNumber, expectedRevision: request.revision }), 409, 'INVALID_STATE');
+  failure(await clients.requester.command('cancelRequest', {}, { requestNumber: request.requestNumber, expectedRevision: request.revision }), 409, 'INVALID_STATE');
+  failure(await clients.bnoc.command('assignTeams', { teamIds: [teams[0]], priority: 'general' }, { requestNumber: request.requestNumber, expectedRevision: request.revision }), 409, 'INVALID_STATE');
+  failure(await clients.bnoc.command('rejectRequest', { reason: '재기각 금지' }, { requestNumber: request.requestNumber, expectedRevision: request.revision }), 409, 'INVALID_STATE');
+  const shared = (await clients.requester.read(`/api/work-overview?bucket=unassigned&requestNumber=${request.requestNumber}`)).data;
+  assert.equal(shared.items.length, 0);
+  assert.equal(shared.unassignedRequests, 0);
+  assert.equal((await clients.wireless.raw('GET', `/api/requests/${request.requestNumber}`)).status, 404);
+});
+
 contract('completed after-action reports start unclassified without approval and cannot be edited as assigned work', [5, 11, 16, 20, 23, 28], async () => {
   const payload = { ...input(), actualRequesterText: '요청 부서', actualStartedAt: '2026-10-12T01:00:00Z', actualCompletedAt: '2026-10-12T02:00:00Z', completedConfirmed: true, reason: '직접 요청 완료' };
   failure(await clients.wireless.command('createAfterActionReport', { ...payload, completedConfirmed: false }), 400, 'VALIDATION');
@@ -562,9 +645,13 @@ contract('public lists paginate without duplicates and share no private request 
     assert.equal(visible?.requesterContact, '000-0000', `${actor.session.actor.role} sees the approved requester phone in the shared list`);
     for (const privateField of ['detail', 'location', 'contact']) assert.ok(!Object.hasOwn(visible, privateField), `${actor.session.actor.role} shared list omits ${privateField}`);
   }
+  const [generalForm,videoForm]=await Promise.all([
+    upload(clients.requesterOther,'request','일반 회의 의뢰서','일반회의-검사-2.txt'),
+    upload(clients.requesterOther,'request','화상 회의 의뢰서','화상회의-검사.txt')
+  ]);
   const pending = await Promise.all([
-    create(clients.requesterOther, { category: '회의 지원', subcategories: { meetingType: '일반회의' } }),
-    create(clients.requesterOther, { category: '회의 지원', subcategories: { meetingType: '화상회의' } })
+    create(clients.requesterOther, { category: '회의 지원', subcategories: { meetingType: '일반회의' }, attachments:[{id:generalForm.id}] }),
+    create(clients.requesterOther, { category: '회의 지원', subcategories: { meetingType: '화상회의',videoPlatform:'KJCCS' }, attachments:[{id:videoForm.id}] })
   ]);
   const unassignedOne = await clients.requesterOther.read(`/api/work-overview?bucket=unassigned&category=${encodeURIComponent('회의 지원')}&page=0&size=1`);
   const unassignedTwo = await clients.requesterOther.read(`/api/work-overview?bucket=unassigned&category=${encodeURIComponent('회의 지원')}&page=1&size=1`);

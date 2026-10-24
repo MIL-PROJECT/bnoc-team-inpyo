@@ -1,11 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { localInputToUtc, utcToLocalInput, calendarRange, moveDate, displayClock } from './dateTime.mjs';
+import { localInputToUtc, localDateTimePartsToUtc, utcToLocalInput, calendarRange, moveDate, displayClock } from './dateTime.mjs';
 
 test('datetime inputs preserve Korea time while transmitting UTC instants', () => {
   assert.equal(localInputToUtc('2026-10-13T09:30'), '2026-10-13T00:30:00.000Z', 'SEOUL_INPUT_TO_UTC_REQUIRED');
   assert.equal(utcToLocalInput('2026-10-13T00:30:00Z'), '2026-10-13T09:30');
   assert.equal(localInputToUtc(''), undefined);
+});
+
+test('24-hour date and time parts validate strictly and preserve Seoul instants', () => {
+  assert.equal(localDateTimePartsToUtc('2026-10-13', '00:00'), '2026-10-12T15:00:00.000Z');
+  assert.equal(localDateTimePartsToUtc('2026-10-13', '23:59'), '2026-10-13T14:59:00.000Z');
+  for (const [date, time] of [['2026-02-30','10:00'], ['2026-10-13','24:00'], ['2026-10-13','12:60'], ['2026-10-13','1:00'], ['','10:00'], ['2026-10-13','']]) {
+    assert.equal(localDateTimePartsToUtc(date, time), undefined, `INVALID_DATE_TIME_ACCEPTED:${date}:${time}`);
+  }
 });
 
 test('calendar uses inclusive Seoul start and exclusive end, Monday week and leap-month limits', () => {

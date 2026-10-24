@@ -207,7 +207,7 @@ class WorkflowContractTest {
         assertEquals(false,db.rows("SELECT is_read FROM bnoc_notifications WHERE notification_id=?",teamNotification).single()["is_read"])
     }
     @Test fun `same submission executes once and changed submission is rejected`() {
-        val command=op("createRequest",payload=mapOf("category" to "회의 지원","subcategories" to mapOf("meetingType" to "일반회의"),"detail" to "회의 지원","location" to "신청 위치","contact" to "1234"))
+        val command=op("createRequest",payload=mapOf("category" to "장비/체계","subcategories" to mapOf("systemType" to "인터넷","resourceType" to "PC","workType" to "지원"),"detail" to "회의 지원","location" to "신청 위치","contact" to "1234"))
         val first=service.execute(requester,command);val second=service.execute(requester,command)
         assertEquals(first.requestNumber,second.requestNumber);assertEquals(true,second.replayed)
         assertEquals(1,db.requests().size)

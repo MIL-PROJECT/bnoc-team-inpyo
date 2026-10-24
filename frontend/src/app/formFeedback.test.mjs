@@ -15,6 +15,8 @@ test('server subtype group errors identify missing active choices without markin
   const meeting = requestFieldErrors({ ...input, category:'회의 지원', meetingType:'' }, errors);
   assert.equal(meeting.meetingType, errors.subcategories);
   assert.equal(meeting.workType, undefined);
+  const videoPlatform = requestFieldErrors({ ...input, category:'회의 지원', meetingType:'화상회의', videoPlatform:'' }, errors);
+  assert.equal(videoPlatform.videoPlatform, errors.subcategories);
   const telephone = requestFieldErrors({ ...input, resourceType:'전화', workType:'지원', phoneType:'잘못된 값' }, errors);
   assert.equal(telephone.phoneType, errors.subcategories);
   assert.equal(requestFieldErrors({ ...input, resourceType:'전화', workType:'지원' }, errors).phoneType, undefined, 'OPTIONAL_PHONE_TYPE_MUST_STAY_OPTIONAL');

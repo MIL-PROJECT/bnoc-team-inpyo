@@ -1,5 +1,5 @@
 export type Role = 'requester' | 'bnoc' | 'team' | 'admin';
-export type RequestStatus = '대기' | '문서 대기' | '배정' | '작업 중' | '완료' | '취소';
+export type RequestStatus = '대기' | '문서 대기' | '배정' | '작업 중' | '완료' | '취소' | '기각';
 export type WorkItemStatus = '배정' | '작업 중' | '완료' | '반환';
 export function workStatusLabel(status: string) { return status === '작업 중' ? '작업 준비' : status; }
 export type ErrorCode = 'VALIDATION' | 'FORBIDDEN' | 'INVALID_STATE' | 'NOT_FOUND' | 'CONFLICT' | 'DUPLICATE_ACTION' | 'OPERATION_NOT_AVAILABLE' | 'SAVE_FAILED' | 'UNAUTHENTICATED' | 'NETWORK' | 'INVALID_RESPONSE' | 'PROCESSING';
@@ -12,7 +12,7 @@ export interface SchedulePreference { rank: 1 | 2; date: string; period: 'AM' | 
 export interface WorkScheduleInterval { startsAt: string; endsAt: string }
 export interface Request {
   id: string; requestNumber: string; registeredBy: string; requesterActorId?: string; requesterDisplayText: string;
-  category: string; subcategories: { systemType?: string; resourceType?: string; workType?: string; meetingType?: string };
+  category: string; subcategories: { systemType?: string; resourceType?: string; workType?: string; meetingType?: string; videoPlatform?: string };
   detail: string; location: string; contact: string; equipmentId?: string; maintenanceTarget?: MaintenanceTarget;
   schedulePreferences: SchedulePreference[]; documentRef?: string; attachments: AttachmentMeta[]; status: RequestStatus;
   registeredAt: string; revision: number
@@ -39,19 +39,23 @@ export type Priority = 'general' | 'urgent' | '일반' | '긴급';
 export function priorityLabel(priority?: string | null) { return priority === 'general' || priority === '일반' ? '일반' : priority === 'urgent' || priority === '긴급' ? '긴급' : '미분류'; }
 export interface DepartmentProgress { department: string; status: string; totalWorks: number; completedWorks: number; returnedWorks: number }
 export interface RequestProgress { currentDepartments: number; completedDepartments: number; totalWorks: number; completedWorks: number; returnedWorks: number; hadAssignment: boolean; departments: DepartmentProgress[] }
-export interface RequestSummary { requestNumber: string; requesterDisplayText: string; category: string; status: RequestStatus; teamIds: string[]; progress?: RequestProgress; myTeamWorkStatus?: WorkItemStatus | '반환' | '미배정' | null; participation?: 'current' | 'past' | 'none'; updatedAt: string; priority?: Priority }
-export interface HistoryView { at: string; actorLabel: string; field: string; summary: string }
+export interface SearchMatch { source: 'request' | 'classification' | 'document'; attachmentRef?: string | null; text: string; blockIndex?: number | null; metadataIndex?: number | null }
+export interface RequestSummary { requestNumber: string; requesterDisplayText: string; category: string; status: RequestStatus; teamIds: string[]; progress?: RequestProgress; myTeamWorkStatus?: WorkItemStatus | '반환' | '미배정' | null; participation?: 'current' | 'past' | 'none'; afterAction?: boolean; updatedAt: string; priority?: Priority; matches?: SearchMatch[] }
+export interface HistoryView { at: string; actorLabel: string; field: string; summary: string; attachments?: AttachmentMeta[] }
 export interface WorkItemView {
   workNumber: string; teamId: string; status: WorkItemStatus; schedule?: string; memo?: string;
   returnReason?: string; completion?: Completion; resolved: boolean; resolutionKind?: 'open' | 'reassigned' | 'withdrawn'; resolutionReason?: string; replacementWorkNumbers?: string[]; scheduleIntervals: WorkScheduleInterval[]; previousScheduleIntervals: WorkScheduleInterval[]; actualStartedAt?: string; editable: boolean; revision: number; assignedAt?: string;
   assignedPersons?: RosterPerson[]; assignedPersonRefs?: string[]; origin?: 'assigned' | 'after-action'
 }
 export interface RequestDetail extends RequestSummary {
-  detail: string; location: string; contact?: string; subcategories: Request['subcategories']; equipmentId?: string;
+  detail: string; location: string; contact?: string; personalContact?: string | null; subcategories: Request['subcategories']; equipmentId?: string;
   maintenanceTarget?: MaintenanceTarget; schedulePreferences: SchedulePreference[]; documentRef?: string; registeredBy: string;
-  registeredAt: string; revision: number; workItems: WorkItemView[]; attachments: AttachmentMeta[]; history: HistoryView[]; assignedAt?: string; canEdit?: boolean; canCancel?: boolean; canAssign?: boolean; canAddTeams?: boolean; canChangePriority?: boolean
+  registeredAt: string; revision: number; workItems: WorkItemView[]; attachments: AttachmentMeta[]; history: HistoryView[]; assignedAt?: string; canEdit?: boolean; canCancel?: boolean; canAssign?: boolean; canReject?: boolean; canAddTeams?: boolean; canChangePriority?: boolean; rejectionReason?: string | null; rejectedAt?: string | null
 }
-export interface SearchCriteria { period?: { from: string; to: string }; status?: RequestStatus[]; category?: string; teamId?: string; location?: string; requestNumber?: string; requesterDeptOrName?: string }
+export interface SearchCriteria { period?: { from: string; to: string }; status?: RequestStatus[]; category?: string; teamId?: string; location?: string; requestNumber?: string; requesterDeptOrName?: string; q?: string }
+export interface ExtractedDocumentBlock { id: string; type: 'paragraph' | 'table'; text?: string; rows?: string[][]; page?: number | null }
+export interface ExtractedDocumentMetadata { label: string; rawValue: string; normalizedValue?: string | null; blockId?: string | null; page?: number | null; source: string; evidence: string }
+export interface AttachmentDocument { attachmentRef: string; fileName: string; status: string; processedRange?: string | null; blocks: ExtractedDocumentBlock[]; offset: number; limit: number; totalBlocks: number; metadata: ExtractedDocumentMetadata[]; parserVersion: string; errorCode?: string | null; canRetry: boolean }
 export interface ScheduleEntry { workNumber: string; teamId: string; request: { requestNumber: string }; scheduleIntervals?: WorkScheduleInterval[]; actualStartedAt?: string; completedAt?: string; status: WorkItemStatus; location: string; memo?: string; origin: 'assigned' | 'after-action' }
 export interface OverviewCounts { total: number; byStatus: Record<RequestStatus,number>; list: RequestSummary[] }
 export interface ServerSession { actor: Actor; teams: string[]; departments: string[]; csrfToken: string; sourceMode?: string; integrationMode?: string }

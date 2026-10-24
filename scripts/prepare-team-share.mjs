@@ -18,6 +18,8 @@ const prefixes = ['frontend/', 'backend/', 'mock-provider/', 'scripts/', 'e2e/',
   'experiments/ai-workflow/', '.agents/', '.codex/', '.github/', 'docker/'];
 const excludedParts = new Set(['node_modules', '.git', '.gradle', 'build', 'dist',
   'coverage', 'playwright-report', 'test-results', '.local', 'runtime']);
+const hwpFixturePath = 'frontend/src/preview/fixtures/support.hwp';
+const hwpFixtureSha256 = 'fe13916c67f52be612f9301296af2c015ad609b644c47dad6f9f739198085bd8';
 export const requiredFiles = [
   'README.md', 'AGENTS.md', 'package.json', 'package-lock.json', 'Dockerfile',
   'compose.yaml', 'compose.dev.yaml', '.dockerignore', 'design/tokens.css', 'backend/build.gradle.kts',
@@ -38,6 +40,10 @@ export function allowedPath(path) {
 
 // These checks stop known credential formats; they do not replace a human review.
 export function secretFindings(path, content) {
+  // These invalid subscriber numbers are deliberate test values, never contact data.
+  if (/^(?:backend\/src\/test\/|frontend\/src\/.*\.test\.mjs$|e2e\/server-ui\.spec\.ts$)/.test(path)) {
+    content = content.replace(/\b010-0000-000[01]\b/g, '');
+  }
   const patterns = [
     ['private-key', /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/],
     ['github-token', /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b/],
@@ -84,8 +90,10 @@ export function shareText(path, text, selected) {
     });
     if (path === 'README.md') {
       const notice = '> 팀 공유 스냅샷: 원본 설문·스크린샷·첨부 원문·실행 DB/첨부·비밀·원시 검증 증거와 원 저장소 Git 이력은 제외했다. 과거 커밋·증거 경로는 비공개 원본 이력이며 이 저장소에서 조회되지 않는다.\n\n';
-      text = text.replace(/^(# .+\n\n)/, `$1${notice}`);
-      changes.push('snapshot-boundary-notice');
+      if (!text.includes(notice)) {
+        text = text.replace(/^(# .+\n\n)/, `$1${notice}`);
+        changes.push('snapshot-boundary-notice');
+      }
     }
   }
   return { text, changes: [...new Set(changes)] };
@@ -106,17 +114,18 @@ export async function prepareTeamShare({ root, name, evidenceRoot, require = req
   const dirty = git(root, 'diff', 'HEAD', '--name-only', '-z').split('\0').filter(path => selected.has(path));
   if (dirty.length) throw new Error(`TEAM_SHARE_COMMIT_CHANGES_FIRST: ${dirty.join(', ')}`);
   const prepared = [];
+  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
   for (const path of [...selected].sort()) {
     const absolute = join(root, path);
     const stat = await lstat(absolute);
     if (!stat.isFile() || stat.isSymbolicLink() || await realpath(absolute) !== absolute) throw new Error(`TEAM_SHARE_UNSAFE_FILE: ${path}`);
     const bytes = await readFile(absolute);
-    if (bytes.length > 5_000_000 || bytes.includes(0) || !Buffer.from(bytes.toString('utf8')).equals(bytes)) throw new Error(`TEAM_SHARE_REVIEW_BINARY_OR_LARGE_FILE: ${path}`);
-    const original = bytes.toString('utf8');
-    const { text, changes } = shareText(path, original, selected);
-    const findings = secretFindings(path, text);
+    const approvedFixture = path === hwpFixturePath && hash(bytes) === hwpFixtureSha256;
+    if (bytes.length > 5_000_000 || (!approvedFixture && (bytes.includes(0) || !Buffer.from(bytes.toString('utf8')).equals(bytes)))) throw new Error(`TEAM_SHARE_REVIEW_BINARY_OR_LARGE_FILE: ${path}`);
+    const { text, changes } = approvedFixture ? { text: null, changes: [] } : shareText(path, bytes.toString('utf8'), selected);
+    const findings = approvedFixture ? [] : secretFindings(path, text);
     if (findings.length) throw new Error(`TEAM_SHARE_SENSITIVE_CONTENT: ${path}: ${findings.join(', ')}`);
-    prepared.push({ path, original: bytes, bytes: Buffer.from(text), changes, executable: !!(stat.mode & 0o111) });
+    prepared.push({ path, original: bytes, bytes: approvedFixture ? bytes : Buffer.from(text), changes, executable: !!(stat.mode & 0o111) });
   }
   // No output is created until the entire candidate snapshot passes the checks.
   await mkdir(dirname(output), { recursive: true });
@@ -128,7 +137,6 @@ export async function prepareTeamShare({ root, name, evidenceRoot, require = req
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, file.bytes, { mode: file.executable ? 0o755 : 0o644 });
     }
-    const hash = bytes => createHash('sha256').update(bytes).digest('hex');
     const manifest = {
       status: 'prepared_not_uploaded', sourceCommit: commit, createdAt: new Date().toISOString(),
       output: relative(root, output), rawGitHistoryIncluded: false, files: prepared.length,

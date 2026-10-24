@@ -1,0 +1,47 @@
+.survey-status { display:inline-flex; }
+.survey-status-stack { display:grid; justify-items:start; gap:var(--space-2); }
+.survey-status-stack>span { display:inline-flex; align-items:center; gap:var(--space-2); }
+.survey-status-trigger { cursor:help; }
+.survey-status-popover { position:fixed; z-index:var(--z-dialog); width:280px; max-width:calc(100vw - 32px); max-height:calc(100vh - 32px); overflow:auto; box-sizing:border-box; padding:var(--space-3); color:var(--color-text); background:var(--color-surface); border:1px solid var(--color-divider); border-radius:var(--radius-card); box-shadow:var(--shadow-dialog); white-space:normal; line-height:1.5; }
+.survey-status-contacts { display:grid; gap:var(--space-2); list-style:none; margin:var(--space-2) 0 0; padding:0; }
+.survey-status-contacts li { display:flex; justify-content:space-between; gap:var(--space-3); }
+.survey-status-contacts li span:last-child { color:var(--color-muted); white-space:nowrap; }
+.survey-status-meaning { margin:var(--space-2) 0 0; color:var(--color-muted); }
+.survey-progress-card h2 { margin:0 0 var(--space-3); }
+.survey-progress-pair { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--space-3); }
+.survey-progress-pair>* { min-width:0; }
+.survey-other-progress { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-2); margin:var(--space-2) 0 var(--space-3); }
+.survey-process { display:grid; list-style:none; padding:0; margin:0; }
+.survey-process li { position:relative; min-width:0; display:flex; flex-direction:column; align-items:center; gap:var(--space-1); text-align:center; }
+.survey-process li:not(:last-child)::after { content:''; position:absolute; top:15px; left:calc(50% + 22px); width:calc(100% - 44px); height:1px; background:var(--color-divider); }
+.survey-step-number { display:grid; place-items:center; width:32px; height:32px; box-sizing:border-box; border:1px solid var(--color-divider); border-radius:50%; background:var(--color-surface); color:var(--color-muted); font-size:var(--text-small); }
+.survey-process strong { color:var(--color-muted); font-size:var(--text-small); font-weight:500; }
+.survey-step-current { min-height:18px; color:var(--color-primary); font-size:12px; }
+.survey-process [aria-current=step]>.survey-step-number { background:var(--color-primary); border-color:var(--color-primary); color:var(--color-surface); }
+.survey-process [aria-current=step]>strong { color:var(--color-primary); font-weight:700; }
+[data-tone=success] .survey-process [aria-current=step]>.survey-step-number { background:var(--color-success); border-color:var(--color-success); }
+[data-tone=success] .survey-process [aria-current=step]>strong,[data-tone=success] .survey-step-current { color:var(--color-success); }
+.survey-process--compact .survey-step-number { width:22px; height:22px; font-size:12px; }
+.survey-process--compact li:not(:last-child)::after { top:10px; left:calc(50% + 15px); width:calc(100% - 30px); }
+.survey-result { overflow-wrap:anywhere; }
+
+.survey-form fieldset { min-width:0; }
+.survey-preformatted { white-space:pre-wrap; overflow-wrap:anywhere; }
+
+.survey-dialog { width:min(1100px,90vw); max-height:88vh; padding:1.5rem; border:1px solid var(--color-control-border); border-radius:var(--radius-control); overflow:auto; }
+.survey-dialog::backdrop { background:#0006; }
+
+.survey-search-primary { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr); gap:var(--space-3); }
+.survey-result td { white-space:normal; max-width:28rem; vertical-align:top; }
+.survey-result .link { white-space:normal; text-align:left; }
+.survey-result .table-wrap { overflow:visible; }
+
+.survey-document-grid { display:grid; grid-template-columns:minmax(0,1.8fr) minmax(0,1fr); gap:var(--space-3); }
+.survey-document-grid>* { min-width:0; overflow-wrap:anywhere; }
+.survey-document-body { min-height:24rem; }
+.survey-document-body iframe { width:100%; min-height:34rem; border:0; }
+.survey-document-body img { max-width:100%; }
+.survey-source-highlight { background:var(--color-info-bg); outline:2px solid var(--color-primary); outline-offset:4px; }
+.survey-dialog > .page-head { position:sticky; top:-1.5rem; z-index:3; background:white; margin:-1.5rem -1.5rem 1.25rem; padding:1rem 1.5rem; border-bottom:1px solid var(--color-divider); }
+.survey-dialog > .page-head h2 { margin:0; }
+.survey-document-body,.survey-document-grid>aside { max-height:62vh; overflow:auto; }

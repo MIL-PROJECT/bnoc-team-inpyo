@@ -14,6 +14,12 @@ dependencies {
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.20.1")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.20.1")
+    implementation("org.apache.tika:tika-parsers-standard-package:4.1.0") {
+        exclude(group="org.apache.logging.log4j",module="log4j-slf4j2-impl")
+    }
+    implementation("org.apache.tika:tika-pipes-fork-parser:4.1.0") {
+        exclude(group="org.apache.logging.log4j",module="log4j-slf4j2-impl")
+    }
     runtimeOnly("com.mysql:mysql-connector-j")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("com.h2database:h2")

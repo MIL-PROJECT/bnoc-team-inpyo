@@ -16,7 +16,8 @@ data class RequestRecord(
     var scheduledAt:String?=null, var documentRef:String?=null, var attachments:List<Map<String,Any?>> = emptyList(),
     var status:String="대기", val registeredAt:String, var updatedAt:String=registeredAt,
     var revision:Long=1, var priority:String?=null, var assignedAt:String?=null,
-    var schedulePreferences:List<SchedulePreference> = emptyList())
+    var schedulePreferences:List<SchedulePreference> = emptyList(), var personalContact:String?=null,
+    var rejectionReason:String?=null, var rejectedBy:String?=null, var rejectedAt:String?=null)
 data class SchedulePreference(val rank:Int,val date:String,val period:String)
 data class WorkScheduleInterval(val startsAt:String,val endsAt:String)
 data class WorkRecord(

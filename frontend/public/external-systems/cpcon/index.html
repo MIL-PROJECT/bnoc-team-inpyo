@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ko" data-situation-kind="cpcon">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CPCON 정보</title>
+    <link rel="stylesheet" href="/external-systems/situation.css" />
+    <script defer src="/external-systems/situation.js"></script>
+  </head>
+  <body>
+    <main class="situation-site">
+      <header class="situation-head">
+        <div><p class="eyebrow">정보 출처</p><h1>CPCON 정보</h1></div>
+        <button id="situation-refresh" type="button">새로고침</button>
+      </header>
+      <p id="situation-status" class="load-status" role="status" aria-live="polite">상황 정보를 불러오는 중입니다.</p>
+      <section id="situation-card" class="situation-card" aria-labelledby="situation-title" hidden>
+        <div class="situation-card-head">
+          <h2 id="situation-title">CPCON</h2>
+          <span id="situation-state" class="badge"></span>
+        </div>
+        <p id="situation-stage" class="situation-stage"></p>
+        <p id="situation-failure" class="notice" role="status" hidden></p>
+        <dl>
+          <div><dt>출처</dt><dd>CPCON 정보원</dd></div>
+          <div><dt>적용 범위</dt><dd id="situation-scope"></dd></div>
+        </dl>
+        <small>단계 I~V</small>
+      </section>
+      <p id="situation-error" class="error" role="alert" hidden></p>
+      <footer><a href="/">BNOC 화면</a></footer>
+    </main>
+  </body>
+</html>

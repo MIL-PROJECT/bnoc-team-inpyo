@@ -3,6 +3,12 @@ export function localInputToUtc(value) {
   const date = new Date(value + ':00+09:00');
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
+export function localDateTimePartsToUtc(date, time) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)) return undefined;
+  const parsedDate = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) return undefined;
+  return localInputToUtc(`${date}T${time}`);
+}
 export function utcToLocalInput(value) {
   if (!value) return '';
   const date = new Date(value);

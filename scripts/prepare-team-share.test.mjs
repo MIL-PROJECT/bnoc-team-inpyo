@@ -44,6 +44,22 @@ test('known credential formats and local personal paths rejected without printin
   ];
   for (const [kind, value] of cases) assert.ok(secretFindings('README.md', value).includes(kind), kind);
   assert.deepEqual(secretFindings('backend/application.properties', 'password=${BNOC_DB_PASSWORD:}\nhttp://127.0.0.1:8081'), []);
+  const sample0 = '010' + '-0000-0000';
+  const sample1 = '010' + '-0000-0001';
+  assert.deepEqual(secretFindings('e2e/server-ui.spec.ts', `${sample0} ${sample1}`), []);
+  assert.deepEqual(secretFindings('e2e/server-ui.spec.ts', '010' + '-2345-6789'), ['personal-phone']);
+  assert.deepEqual(secretFindings('README.md', sample0), ['personal-phone']);
+});
+
+test('only the reviewed HWP fixture bytes pass binary preflight', async t => {
+  const path = 'frontend/src/preview/fixtures/support.hwp';
+  const bytes = await readFile(new URL('../frontend/src/preview/fixtures/support.hwp', import.meta.url));
+  const root = await fixture(t, { [path]: bytes });
+  const manifest = await prepareTeamShare({ root, name: 'hwp', require: ['README.md'] });
+  assert.deepEqual(await readFile(join(root, manifest.output, path)), bytes);
+  await writeFile(join(root, path), Buffer.concat([bytes, Buffer.from([0])]));
+  git(root, 'add', path); git(root, 'commit', '-m', 'change fixture');
+  await assert.rejects(prepareTeamShare({ root, name: 'changed-hwp', require: ['README.md'] }), /TEAM_SHARE_REVIEW_BINARY_OR_LARGE_FILE/);
 });
 
 test('snapshot omits raw files and history, retains product bytes and private evidence provenance', async t => {
@@ -104,4 +120,11 @@ test('personal preparation data generalized only in share text and references st
   assert.match(text, /## 8\. 제출물/);
   assert.ok(changes.includes('personal-preparation-generalized'));
   assert.match(original, /30110/);
+});
+
+test('existing shared README notice stays singular', () => {
+  const notice = '> 팀 공유 스냅샷: 원본 설문·스크린샷·첨부 원문·실행 DB/첨부·비밀·원시 검증 증거와 원 저장소 Git 이력은 제외했다. 과거 커밋·증거 경로는 비공개 원본 이력이며 이 저장소에서 조회되지 않는다.\n\n';
+  const first = shareText('README.md', '# BNOC\n\n', new Set()).text;
+  assert.equal(shareText('README.md', first, new Set()).text, first);
+  assert.equal(first.split(notice).length, 2);
 });

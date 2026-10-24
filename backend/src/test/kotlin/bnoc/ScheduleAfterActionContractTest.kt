@@ -120,6 +120,7 @@ class ScheduleAfterActionContractTest {
             "detail" to "네트워크 연결 오류", "location" to "공작사 2층", "contact" to "9123", "completedConfirmed" to true,
             "actualStartedAt" to "2026-10-22T04:13:00Z", "actualCompletedAt" to "2026-10-22T04:29:00Z", "reason" to "선조치", "completionMemo" to "회선 재연결")))
         val number = result.requestNumber!!; val overview = queries.shared(db.actor("requester")!!, mapOf("requestNumber" to number))
+        assertEquals(true, queries.summary(db.request(number)!!)["afterAction"], "AFTER_ACTION_SUMMARY_MUST_NOT_SHOW_NORMAL_REQUEST_PHASES")
         val counts = overview["counts"] as Map<*, *>
         assertEquals(1, counts["assigned"]); assertEquals(1, counts["completed"]); assertEquals(0, counts["remaining"])
         assertEquals(1, overview["afterActionCompleted"], "AFTER_ACTION_MUST_BE_A_COMPLETED_SUBSET_NOT_ADDED_TWICE")

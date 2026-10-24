@@ -8,6 +8,7 @@
     "build": "npm --prefix frontend run build",
     "test": "npm --prefix frontend test",
     "test:e2e": "node scripts/bnoc-runtime.mjs test-ui",
+    "test:survey-preview": "node e2e/survey-preview.mjs",
     "test:provider": "node --test mock-provider/server.test.mjs",
     "server:build": "node scripts/bnoc-runtime.mjs build",
     "server:start": "node scripts/bnoc-runtime.mjs start",

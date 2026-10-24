@@ -1,0 +1,24 @@
+.workflow-status { display: inline-flex; vertical-align: middle; }
+.workflow-status__trigger { cursor: help; }
+.request-team-progress { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.request-overall-progress { flex-basis: 100%; color: var(--color-muted); font-size: var(--text-small); }
+.workflow-status__popover { position: fixed; z-index: var(--z-dialog); width: 280px; max-width: calc(100vw - 32px); box-sizing: border-box; padding: var(--space-3); color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: var(--radius-card); box-shadow: var(--shadow-dialog); }
+.workflow-status__popover p { margin: var(--space-2) 0 0; color: var(--color-muted); line-height: 1.45; }
+.workflow-status__contacts { display: grid; gap: var(--space-2); list-style: none; margin: var(--space-2) 0 0; padding: 0; }
+.workflow-status__contacts li { display: flex; justify-content: space-between; gap: var(--space-3); }
+.workflow-status__contacts li span:last-child { color: var(--color-muted); white-space: nowrap; }
+.workflow-status-steps { display: grid; list-style: none; margin: 0; padding: 0; }
+.workflow-status-step { position: relative; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: var(--space-1); text-align: center; }
+.workflow-status-step:not(:last-child)::after { content: ''; position: absolute; top: 15px; left: calc(50% + 22px); width: calc(100% - 44px); height: 1px; background: var(--color-divider); }
+.workflow-status-step__number { display: grid; place-items: center; width: 32px; height: 32px; box-sizing: border-box; border: 1px solid var(--color-divider); border-radius: 50%; background: var(--color-surface); color: var(--color-muted); font-size: var(--text-small); }
+.workflow-status-step strong { color: var(--color-muted); font-size: var(--text-small); font-weight: 500; }
+.workflow-status-step__current { min-height: 18px; color: var(--color-primary); font-size: 12px; }
+.workflow-status-step[aria-current='step'] .workflow-status-step__number { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-surface); }
+.workflow-status-step[aria-current='step'] strong { color: var(--color-primary); font-weight: 700; }
+.workflow-status-process { margin: var(--space-3) 0; padding: var(--space-3); background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: var(--radius-card); }
+.workflow-status-process h2 { margin: 0 0 var(--space-3); font-size: var(--text-body); }
+.workflow-status-process p { margin: 0; color: var(--color-muted); }
+.workflow-status-process[data-tone='success'] .workflow-status-step[aria-current='step'] .workflow-status-step__number { background: var(--color-success); border-color: var(--color-success); }
+.workflow-status-process[data-tone='success'] .workflow-status-step[aria-current='step'] strong,.workflow-status-process[data-tone='success'] .workflow-status-step__current { color: var(--color-success); }
+.workflow-status-steps--compact .workflow-status-step__number { width: 22px; height: 22px; font-size: 12px; }
+.workflow-status-steps--compact .workflow-status-step:not(:last-child)::after { top: 10px; left: calc(50% + 15px); width: calc(100% - 30px); }

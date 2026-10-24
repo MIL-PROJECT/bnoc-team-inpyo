@@ -9,4 +9,5 @@ test('SR-DEMO-028,029,030: team schedule scoped and overview count matches list'
   store.switchActor('bnoc-1');
   const overview = query.getBnocOverview({ status: ['배정'] });
   assert.equal(overview.total, overview.list.length);
+  assert.equal(overview.byStatus['기각'], 0, 'rejected requests remain a distinct terminal status count');
 });

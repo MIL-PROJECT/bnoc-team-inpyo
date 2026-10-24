@@ -5,9 +5,9 @@ import { useUnsavedChanges } from '../app/useUnsavedChanges';
 import { uploadAttachmentBatch, attachmentSubmissionBlocked } from '../api/attachmentQueue.mjs';
 export type UploadAttachment = (file: File) => Promise<AttachmentMeta>;
 type FailedUpload = { file: File; error: Error };
-export function AttachmentPicker({ files, onChange, upload, onBusyChange, disabled = false, label = '첨부파일' }: {
+export function AttachmentPicker({ files, onChange, upload, onBusyChange, disabled = false, label = '첨부파일', required = false }: {
   files: AttachmentMeta[]; onChange: (files: AttachmentMeta[]) => void; upload: UploadAttachment;
-  onBusyChange?: (blocked: boolean) => void; disabled?: boolean; label?: string
+  onBusyChange?: (blocked: boolean) => void; disabled?: boolean; label?: string; required?: boolean
 }) {
   const [busy,setBusy] = useState(false), [failures,setFailures] = useState<FailedUpload[]>([]);
   const processing = useRef(false), failed = useRef<FailedUpload[]>([]);
@@ -25,9 +25,9 @@ export function AttachmentPicker({ files, onChange, upload, onBusyChange, disabl
   };
   const exclude = (file: File) => { failed.current=failed.current.filter(item => item.file !== file);setFailures(failed.current);latest.current.onBusyChange?.(attachmentSubmissionBlocked(busy,failed.current)); };
   return <div className="attachment-picker">
-    <label className="field"><span>{label}</span><input type="file" aria-label={label} multiple disabled={busy || disabled} onChange={event => { const selected=[...(event.target.files ?? [])];event.target.value='';void run(selected); }} /></label>
+    <label className="field"><span>{label}<small className="field-hint" aria-hidden="true">{required ? '필수' : '선택'}</small></span><input type="file" aria-label={label} aria-required={required} multiple disabled={busy || disabled} onChange={event => { const selected=[...(event.target.files ?? [])];event.target.value='';void run(selected); }} /></label>
     {busy && <p role="status">파일을 올리는 중…</p>}
     {failures.length > 0 && <div className="error" role="alert"><p>올리지 못한 파일이 있습니다. 다시 시도하거나 해당 파일을 제외한 뒤 저장하세요.</p>{failures.map((item,index) => <div className="attachment-row" key={index}><span>{item.file.name} · 업로드 실패<small>{errorMessage(item.error)}</small></span><div className="actions"><button type="button" disabled={busy || disabled} aria-label={item.file.name + ' 업로드 다시 시도'} onClick={() => void run([item.file],[item.file])}>다시 시도</button><button type="button" disabled={busy || disabled} aria-label={item.file.name + ' 실패 첨부 제외'} onClick={() => exclude(item.file)}>제외</button></div></div>)}</div>}
-    {files.map(file => <div className="attachment-row" key={file.id}><span>{file.fileName} · {Math.ceil(file.size / 1024)} KB</span><button type="button" disabled={busy || disabled} aria-label={file.fileName + ' 첨부 제외'} onClick={() => onChange(files.filter(item => item.id !== file.id))}>제외</button></div>)}
+    {files.map(file => <div className="attachment-row" key={file.id}><span>{file.fileName} · {Math.ceil(file.size / 1024)} KB</span><button type="button" disabled={busy || disabled || (required && files.length === 1)} aria-label={file.fileName + ' 첨부 제외'} onClick={() => onChange(files.filter(item => item.id !== file.id))}>제외</button></div>)}
   </div>;
 }

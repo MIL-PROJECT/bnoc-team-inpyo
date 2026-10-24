@@ -70,7 +70,6 @@ export function TeamScheduleView({ actor, query, revision = 0, onOpen }: { actor
         })}
       </div>
       <details className="details-panel section-gap"><summary>일정 미정 <span className="count">작업 {unscheduled.length}건</span></summary>{unscheduled.length ? <div className="work-list">{unscheduled.map(item => card(item))}</div> : <p className="empty">일정 미정인 작업이 없습니다.</p>}</details>
-      {result.data.queriedAt && <small>일정 기준 시각: {displayTime(result.data.queriedAt)}</small>}
     </>}
   </>;
 }

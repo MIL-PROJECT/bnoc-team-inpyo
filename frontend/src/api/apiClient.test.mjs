@@ -40,6 +40,28 @@ test('query envelope exposes its snapshot and total without returning an empty l
   await assert.rejects(() => malformed.getRequestList({}), error => error.code === 'INVALID_RESPONSE', 'MALFORMED_QUERY_MUST_NOT_BECOME_EMPTY');
 });
 
+test('BNOC requester choices use the protected requester endpoint and expose the public rows', async () => {
+  let sent;
+  const client = new ApiClient(async (url, options) => { sent = { url, options }; return new Response(JSON.stringify({ data: [{ requesterRef:'public-ref',displayName:'요청자',department:'지원실' }] })); });
+  const result = await client.getRequesters();
+  assert.equal(sent.url,'/api/requesters');
+  assert.deepEqual(result.items,[{ requesterRef:'public-ref',displayName:'요청자',department:'지원실' }]);
+});
+
+test('HWP render source uses the same-origin authorized binary endpoint', async () => {
+  let sent;
+  const bytes = new Uint8Array([0xD0, 0xCF, 0x11, 0xE0]);
+  const client = new ApiClient(async (url, options) => {
+    sent = { url, options };
+    return new Response(bytes, { headers: { 'Content-Type': 'application/octet-stream' } });
+  });
+  const result = await client.getAttachmentRenderSource('source-id');
+  assert.equal(sent.url, '/api/attachments/source-id/render-source');
+  assert.equal(sent.options.credentials, 'same-origin');
+  assert.equal(sent.options.headers.Accept, 'application/octet-stream');
+  assert.deepEqual([...result], [...bytes]);
+});
+
 test('planned work uses its dedicated API, server session, CSRF and revision preconditions', async () => {
   const sent = [];
   const client = new ApiClient(async (url, options) => {

@@ -6,9 +6,10 @@ export function requestFieldErrors(input, errors) {
     resourceType:['PC','컴퓨터','프린터','회선','전화','기타'],
     workType:['신설','고장','지원','대여','점검','이전','기타'],
     meetingType:['화상회의','일반회의','기타'],
+    videoPlatform:['KJCCS','AFCCS','웹미팅'],
     phoneType:['IP','아날로그','인터컴','비상벨']
   };
-  const active = input.category === '장비/체계' ? ['systemType','resourceType','workType'] : input.category === '회의 지원' ? ['meetingType'] : [];
+  const active = input.category === '장비/체계' ? ['systemType','resourceType','workType'] : input.category === '회의 지원' ? ['meetingType', ...(input.meetingType === '화상회의' ? ['videoPlatform'] : [])] : [];
   if (input.category === '장비/체계' && input.resourceType === '전화' && input.phoneType) active.push('phoneType');
   for (const key of active) if (!choices[key].includes(input[key])) mapped[key] ??= errors.subcategories;
   return mapped;

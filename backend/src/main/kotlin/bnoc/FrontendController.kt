@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.GetMapping
 class FrontendResources(@Value("\${bnoc.frontend-root}") val root:String):WebMvcConfigurer {
     override fun addResourceHandlers(registry:ResourceHandlerRegistry) {
         val location=java.nio.file.Path.of(root).toAbsolutePath().toUri().toString().let { if(it.endsWith('/')) it else "$it/" }
+        registry.addResourceHandler("/external-systems/**").addResourceLocations("${location}external-systems/","classpath:/static/external-systems/")
         registry.addResourceHandler("/assets/**").addResourceLocations("${location}assets/","classpath:/static/assets/")
         registry.addResourceHandler("/favicon.ico","/robots.txt","/index.html").addResourceLocations(location,"classpath:/static/")
     }

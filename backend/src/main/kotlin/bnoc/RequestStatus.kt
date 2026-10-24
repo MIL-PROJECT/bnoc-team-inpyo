@@ -4,11 +4,11 @@ data class EffectiveWorkSummary(val works:List<WorkRecord>,val departments:List<
 
 object RequestStatus {
     fun summarize(request:RequestRecord,works:List<WorkRecord>):EffectiveWorkSummary {
-        val effective=if(request.status=="취소") emptyList() else works.filter { it.resolutionKind=="open" }
+        val effective=if(request.status in listOf("취소","기각")) emptyList() else works.filter { it.resolutionKind=="open" }
         val departments=effective.map { it.teamId }.distinct().sorted()
         val completed=departments.filter { department -> effective.filter { it.teamId==department }.all { it.status=="완료" } }
         val status=when {
-            request.status=="취소" || request.status=="문서 대기" -> request.status
+            request.status in listOf("취소","기각","문서 대기") -> request.status
             effective.any { it.status=="작업 중" } -> "작업 중"
             effective.any { it.status=="반환" } -> "대기"
             effective.isNotEmpty() && effective.all { it.status=="완료" } -> "완료"
