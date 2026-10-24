@@ -34,6 +34,7 @@ FROM runtime AS verification
 COPY package.json package-lock.json ./
 RUN npm ci && npx playwright install --with-deps chromium firefox && rm -rf /var/lib/apt/lists/*
 COPY e2e ./e2e
+COPY frontend/src/preview/fixtures/support.hwp ./frontend/src/preview/fixtures/support.hwp
 COPY --from=backend-build /build/backend/build/test-results/test ./backend-unit-results
 COPY docker/verify.mjs docker/persistence.mjs ./docker/
 
