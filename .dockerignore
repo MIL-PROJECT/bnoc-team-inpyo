@@ -11,6 +11,9 @@ frontend/**
 !frontend/vite.config.ts
 !frontend/src/
 !frontend/src/**
+!frontend/public/
+!frontend/public/external-systems/
+!frontend/public/external-systems/**
 !backend/
 backend/**
 !backend/build.gradle.kts

@@ -6,6 +6,7 @@ COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY frontend/index.html frontend/tsconfig.json frontend/vite.config.ts ./
 COPY frontend/src ./src
+COPY frontend/public/external-systems ./public/external-systems
 COPY design/tokens.css /build/design/tokens.css
 COPY mock-provider/server.mjs /build/mock-provider/server.mjs
 RUN pnpm test && pnpm build
