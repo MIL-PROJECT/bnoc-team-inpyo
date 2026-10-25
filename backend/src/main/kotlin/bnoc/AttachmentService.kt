@@ -85,7 +85,6 @@ class AttachmentService(val db:Database,val query:QueryService,val transaction:T
     fun inline(actor:Actor,ref:String):Pair<Map<String,Any?>,ByteArray> {
         val data=download(actor,ref)
         if(data.first["resource_kind"]!="request") reject("NOT_FOUND")
-        if(data.first["content_analysis_excluded"]==true) reject("VALIDATION",mapOf("attachment" to "회의 지원 양식은 원본 다운로드만 가능합니다."))
         if(data.first["content_type"] !in setOf("application/pdf","image/png","image/jpeg")) reject("VALIDATION")
         return data
     }
@@ -93,8 +92,9 @@ class AttachmentService(val db:Database,val query:QueryService,val transaction:T
         val data=download(actor,ref)
         val fileName=data.first["file_name"] as? String ?: reject("NOT_FOUND")
         val byteSize=(data.first["byte_size"] as? Number)?.toLong() ?: reject("NOT_FOUND")
-        if(data.first["resource_kind"]!="request" || data.first["content_analysis_excluded"]==true) reject("VALIDATION",mapOf("attachment" to "이 문서는 페이지 보기 대상이 아닙니다."))
-        if(!fileName.endsWith(".hwp",ignoreCase=true) || byteSize !in 1..(10L*1024*1024) || !validFormat("hwp",data.second)) reject("VALIDATION",mapOf("attachment" to "유효한 HWP 원본만 페이지 보기로 열 수 있습니다."))
+        if(data.first["resource_kind"]!="request") reject("VALIDATION",mapOf("attachment" to "이 문서는 페이지 보기 대상이 아닙니다."))
+        val extension=fileName.substringAfterLast('.',"").lowercase()
+        if(extension !in setOf("hwp","docx") || byteSize !in 1..(10L*1024*1024) || !validFormat(extension,data.second)) reject("VALIDATION",mapOf("attachment" to "유효한 HWP 또는 DOCX 원본만 페이지 보기로 열 수 있습니다."))
         return data
     }
     fun exists(storedName:String):Boolean { val file=root.resolve(storedName).normalize();return file.startsWith(root) && Files.isRegularFile(file) }

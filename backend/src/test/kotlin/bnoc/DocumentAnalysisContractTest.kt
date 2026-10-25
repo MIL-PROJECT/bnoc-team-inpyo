@@ -24,6 +24,8 @@ import java.nio.file.Path
 import java.time.Instant
 import java.util.Comparator
 import java.util.UUID
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class DocumentAnalysisContractTest {
     private lateinit var db:Database
@@ -308,7 +310,7 @@ class DocumentAnalysisContractTest {
         assertEquals("pending",pending["status"])
     }
 
-    @Test fun `meeting support attachment is downloadable but never parsed searched previewed or reprocessed`() {
+    @Test fun `meeting support original preview preserves bytes without parsing searching or reprocessing`() {
         val bytes=searchablePdf()
         val (number,id)=createMeetingWithAttachment("화상회의",bytes,"의뢰서.pdf","application/pdf")
 
@@ -324,11 +326,12 @@ class DocumentAnalysisContractTest {
         assertTrue(query.list(requester,mapOf("q" to "microphone")).isEmpty())
         assertFalse(query.documentSearchIncomplete(requester,mapOf("category" to "회의 지원")))
         assertArrayEquals(bytes,files.download(requester,id).second)
-        assertEquals("VALIDATION",assertThrows(BusinessFailure::class.java) { files.inline(requester,id) }.code)
+        assertArrayEquals(bytes,files.inline(requester,id).second,"AUTHORIZED_MEETING_ORIGINAL_PREVIEW_REQUIRED")
+        assertEquals("NOT_FOUND",assertThrows(BusinessFailure::class.java) { files.inline(db.actor("requester-secondary")!!,id) }.code)
         assertEquals("VALIDATION",assertThrows(BusinessFailure::class.java) { documents.reprocess(requester,id) }.code)
     }
 
-    @Test fun `HWP render source is limited to authorized ordinary HWP attachments`() {
+    @Test fun `HWP render source checks current access for ordinary and meeting originals`() {
         val bytes=hwpFixture()
         val ordinary=attach(createRequest(),bytes,"ordinary.hwp")
         assertArrayEquals(bytes,files.renderSource(requester,ordinary).second)
@@ -338,8 +341,36 @@ class DocumentAnalysisContractTest {
         assertEquals("VALIDATION",assertThrows(BusinessFailure::class.java) { files.renderSource(requester,pdf) }.code)
 
         val (_,meeting)=createMeetingWithAttachment("일반회의",bytes,"meeting.hwp","application/octet-stream")
-        assertEquals("VALIDATION",assertThrows(BusinessFailure::class.java) { files.renderSource(requester,meeting) }.code)
+        assertArrayEquals(bytes,files.renderSource(requester,meeting).second,"AUTHORIZED_MEETING_RENDER_SOURCE_REQUIRED")
         assertArrayEquals(bytes,files.download(requester,meeting).second)
+    }
+
+    @Test fun `DOCX original preview requires an authorized linked file and never enables server analysis`() {
+        val bytes=ByteArrayOutputStream().use { output ->
+            ZipOutputStream(output).use { zip ->
+                for((name,value) in mapOf("[Content_Types].xml" to "<Types/>","word/document.xml" to "<document>DOCX PREVIEW PRIVATE 7319</document>")) {
+                    zip.putNextEntry(ZipEntry(name));zip.write(value.toByteArray());zip.closeEntry()
+                }
+            }
+            output.toByteArray()
+        }
+        val temporary=temporaryAttachment(bytes,"source.docx","application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        assertEquals("NOT_FOUND",assertThrows(BusinessFailure::class.java) { files.renderSource(requester,temporary) }.code)
+        val ordinary=attach(createRequest(),bytes,"ordinary.docx")
+        val (_,meeting)=createMeetingWithAttachment("일반회의",bytes,"meeting.docx","application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        for((ref,status) in listOf(ordinary to "unsupported",meeting to "excluded")) {
+            assertArrayEquals(bytes,files.renderSource(requester,ref).second,"AUTHORIZED_DOCX_ORIGINAL_PREVIEW_REQUIRED")
+            assertEquals("NOT_FOUND",assertThrows(BusinessFailure::class.java) { files.renderSource(db.actor("requester-secondary")!!,ref) }.code)
+            assertEquals("VALIDATION",assertThrows(BusinessFailure::class.java) { files.inline(requester,ref) }.code)
+            val result=documents.document(requester,ref,0,50)
+            assertEquals(status,result["status"]);assertEquals(emptyList<Any>(),result["blocks"]);assertEquals(emptyList<Any>(),result["metadata"])
+            assertEquals(0,db.rows("SELECT * FROM bnoc_document_analysis WHERE attachment_ref=?",ref).size)
+            assertEquals(0,db.rows("SELECT * FROM bnoc_document_jobs WHERE attachment_ref=?",ref).size)
+            assertArrayEquals(bytes,files.download(requester,ref).second)
+        }
+        assertTrue(query.list(requester,mapOf("q" to "DOCX PREVIEW PRIVATE 7319")).isEmpty())
+        val invalid=attach(createRequest(),"not a document".toByteArray(),"invalid.docx")
+        assertEquals("VALIDATION",assertThrows(BusinessFailure::class.java) { files.renderSource(requester,invalid) }.code)
     }
 
     @Test fun `ordinary equipment request attachments still enter document analysis`() {

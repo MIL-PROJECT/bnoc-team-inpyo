@@ -2,6 +2,7 @@ import { request as apiRequest, test, expect, type Page, type TestInfo } from '@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { docxFixture, previewPng, previewPdf } from './document-preview-fixture.mjs';
 
 const base = process.env.BNOC_TEST_URL ?? 'http://127.0.0.1:8083';
 const provider = process.env.BNOC_TEST_PROVIDER_URL ?? 'http://127.0.0.1:8082';
@@ -194,12 +195,21 @@ test('an ordinary HWP attachment opens as original pages and keeps extraction as
   expect(source.status()).toBe(200, 'AUTHORIZED_HWP_RENDER_SOURCE_REQUIRED');
   expect((await source.body()).equals(bytes), 'RENDER_SOURCE_MUST_PRESERVE_HWP_BYTES').toBeTruthy();
 
+  let shownPending = false;
+  await page.route(`**/api/attachments/${attachment.id}/document?**`, async route => {
+    const response = await route.fetch(), body = await response.json();
+    if (!shownPending) { body.data.status = 'pending'; shownPending = true; }
+    return route.fulfill({ response, json: body });
+  });
+
   await page.goto(`/requests/${created.requestNumber}`);
   await page.getByRole('link', { name, exact: true }).locator('xpath=..').getByRole('button', { name: '문서 보기', exact: true }).click();
   const viewer = page.getByRole('dialog');
   const pageImage = viewer.locator('.hwp-page-view__image');
   await expect(pageImage).toHaveAttribute('alt', `${name} 1쪽`);
   await expect.poll(() => pageImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBeTruthy();
+  await expect(viewer.getByRole('status').first()).toContainText('분석 완료');
+  await expect(pageImage).toBeVisible();
   await expect(viewer.getByRole('button', { name: '원본 보기', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await screenshot(page, info, 'hwp-original-page-view');
   await viewer.getByRole('button', { name: '추출 본문', exact: true }).click();
@@ -322,15 +332,17 @@ test('meeting support forms stay downloadable without exposing extracted content
   expect(document.blocks).toEqual([]);
   expect(document.metadata).toEqual([]);
   const renderSource = await page.request.get(`/api/attachments/${attachment.id}/render-source`);
-  expect(renderSource.status()).toBe(400, 'MEETING_SUPPORT_MUST_NOT_EXPOSE_RENDER_SOURCE');
+  expect(renderSource.status()).toBe(200, 'AUTHORIZED_MEETING_ORIGINAL_PREVIEW_REQUIRED');
+  expect((await renderSource.body()).equals(bytes)).toBeTruthy();
 
   await page.goto(`/requests/${number}`);
   const file = page.getByRole('link', { name, exact: true });
   await expect(file).toBeVisible();
   await file.locator('xpath=..').getByRole('button', { name: '문서 보기', exact: true }).click();
   const viewer = page.getByRole('dialog');
-  await expect(viewer.getByText(/본문 분석 제외.*보안 양식 첨부는 본문을 추출·검색하지 않습니다/)).toBeVisible();
-  await expect(viewer.getByText('표시할 본문이 없습니다.')).toBeVisible();
+  await expect(viewer.getByText(/본문 분석 제외.*서버 본문 분석·검색은 제외됩니다/)).toBeVisible();
+  await expect(viewer.locator('.hwp-page-view__image')).toBeVisible();
+  await expect.poll(() => viewer.locator('.hwp-page-view__image').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBeTruthy();
   await expect(viewer.getByRole('button', { name: '원본 보기', exact: true })).toHaveCount(0);
   await expect(viewer.getByRole('link', { name: '원본 다운로드', exact: true })).toBeVisible();
   await expect(viewer.locator('.document-dialog__body')).not.toContainText('마이크 점검');
@@ -338,6 +350,65 @@ test('meeting support forms stay downloadable without exposing extracted content
   await viewer.getByRole('link', { name: '원본 다운로드', exact: true }).click();
   const download = await downloadReady;
   expect((await readFile(await download.path())).equals(bytes)).toBeTruthy();
+});
+
+test('original DOCX preview renders paragraphs and tables with no external document access', async ({ page }, info) => {
+  const session = await apiLogin(page, 'requester');
+  const externalRequests: string[] = [];
+  await page.route('https://preview-external.invalid/**', route => { externalRequests.push(route.request().url()); return route.abort(); });
+  for (const meeting of [true, false]) {
+    const bytes = docxFixture(), name = `문서보기-${randomUUID().slice(0,8)}.docx`;
+    const uploaded = await page.request.post('/api/attachments?resourceKind=request', { headers: { Origin: new URL(base).origin, 'X-CSRF-Token': session.csrfToken }, multipart: { file: { name, mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: bytes } } });
+    expect(uploaded.status()).toBe(200);
+    const file = (await uploaded.json()).data;
+    expect((await page.request.get(`/api/attachments/${file.id}/render-source`)).status()).toBe(404);
+    const created = await command(page,'createRequest',{...requestPayload('원본 DOCX 미리보기'),...(meeting?{category:'회의 지원',subcategories:{meetingType:'일반회의'}}:{}),attachments:[{id:file.id}]});
+    expect((await (await page.request.get(`/api/attachments/${file.id}/render-source`)).body()).equals(bytes)).toBeTruthy();
+    await page.goto(`/requests/${created.requestNumber}`);
+    const opener = page.getByRole('link',{name,exact:true}).locator('xpath=..').getByRole('button',{name:'문서 보기',exact:true});
+    await opener.click();
+    const viewer = page.getByRole('dialog'), frame = viewer.frameLocator('iframe');
+    await expect(frame.getByText('회의 지원 원본 7319',{exact:true})).toBeVisible();
+    await expect(frame.getByRole('cell',{name:'회의실',exact:true})).toBeVisible();
+    await expect(frame.getByText('UNSAFE_CHUNK')).toHaveCount(0);
+    await expect(frame.locator('a[href]')).toHaveCount(0);
+    await expect(viewer.locator('iframe')).toHaveAttribute('sandbox','allow-scripts');
+    expect(await frame.locator('body').evaluate(() => { try { void window.parent.document.body; return false; } catch { return true; } })).toBe(true);
+    await expect(viewer.getByRole('button',{name:'추출 본문',exact:true})).toHaveCount(0);
+    await expect(viewer.getByText('표시할 항목이 없습니다.')).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await screenshot(page,info,meeting?'meeting-docx-original-preview':'ordinary-docx-original-preview');
+    const analysis = (await apiRead(page,`/api/attachments/${file.id}/document`)).data;
+    expect(analysis.status).toBe(meeting?'excluded':'unsupported'); expect(analysis.blocks).toEqual([]); expect(analysis.metadata).toEqual([]);
+    const downloadReady = page.waitForEvent('download');
+    await viewer.getByRole('link',{name:'원본 다운로드',exact:true}).click();
+    expect((await readFile(await (await downloadReady).path())).equals(bytes)).toBeTruthy();
+    await viewer.getByRole('button',{name:'닫기',exact:true}).click();
+    await expect(viewer).toHaveCount(0); await expect(opener).toBeFocused();
+  }
+  expect(externalRequests).toEqual([]);
+});
+
+test('meeting PDF and image originals open while a broken DOCX gives a download fallback', async ({ page }, info) => {
+  const session = await apiLogin(page,'requester');
+  for (const [extension, mimeType, bytes] of [['pdf','application/pdf',previewPdf()],['png','image/png',previewPng],['docx','application/vnd.openxmlformats-officedocument.wordprocessingml.document',docxFixture({broken:true})]] as const) {
+    const name = `원본-${randomUUID().slice(0,8)}.${extension}`;
+    const uploaded = await page.request.post('/api/attachments?resourceKind=request',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},multipart:{file:{name,mimeType,buffer:bytes}}});
+    expect(uploaded.status()).toBe(200);const file=(await uploaded.json()).data;
+    const created=await command(page,'createRequest',{category:'회의 지원',subcategories:{meetingType:'일반회의'},detail:'원본 미리보기 형식 검사',location:'회의실',contact:'000-0000',attachments:[{id:file.id}]});
+    await page.goto(`/requests/${created.requestNumber}`);
+    await page.getByRole('link',{name,exact:true}).locator('xpath=..').getByRole('button',{name:'문서 보기',exact:true}).click();
+    const viewer=page.getByRole('dialog');
+    if(extension==='pdf') {
+      const response=await page.request.get(`/api/attachments/${file.id}/inline`);expect(response.status()).toBe(200);expect((await response.body()).equals(bytes)).toBeTruthy();
+      await expect(viewer.getByTitle('원본 PDF')).toBeVisible();
+      await screenshot(page,info,'meeting-pdf-original-preview');
+    } else if(extension==='png') {
+      await expect.poll(()=>viewer.getByRole('img',{name,exact:true}).evaluate((image:HTMLImageElement)=>image.complete&&image.naturalWidth>0)).toBeTruthy();
+    } else await expect(viewer.getByRole('alert')).toContainText('이 Word 문서를 미리 볼 수 없습니다.');
+    await expect(viewer.getByRole('link',{name:'원본 다운로드',exact:true})).toBeVisible();
+    await page.keyboard.press('Escape');await expect(viewer).toHaveCount(0);
+  }
 });
 
 test('PC completeness: missing type choices show server group errors and focus the first invalid choice', async ({ page }, info) => {

@@ -122,6 +122,6 @@ export function RequestDetailWorkspace({ actor, requestNumber, api, teams, run, 
       })}
     </>}
     </section></div><HistoryPanel actor={actor} requestId={detail.requestNumber} query={api} revision={detail.revision} onViewAttachment={id=>{setSelectedAttachmentSearch({});setSelectedAttachment(id);}} /></>}
-    {selectedAttachment&&<AttachmentDocumentDialog api={api} attachmentId={selectedAttachment} searchTerm={selectedAttachmentSearch.term} targetBlockIndex={selectedAttachmentSearch.blockIndex} targetMetadataIndex={selectedAttachmentSearch.metadataIndex} onClose={()=>setSelectedAttachment(null)}/>}
+    {selectedAttachment&&<AttachmentDocumentDialog key={selectedAttachment} api={api} attachmentId={selectedAttachment} searchTerm={selectedAttachmentSearch.term} targetBlockIndex={selectedAttachmentSearch.blockIndex} targetMetadataIndex={selectedAttachmentSearch.metadataIndex} onClose={()=>setSelectedAttachment(null)}/>}
   </>;
 }

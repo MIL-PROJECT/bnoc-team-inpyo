@@ -83,18 +83,18 @@ export class ApiClient {
       });
     } catch (error) {
       if (error?.name === 'AbortError') throw error;
-      throw new ApiError('NETWORK', '한글 원본에 연결하지 못했습니다.');
+        throw new ApiError('NETWORK', '문서 원본에 연결하지 못했습니다.');
     }
     if (!response.ok) {
       let data = {};
       try { data = await response.json(); } catch { /* use the response status */ }
       const code = data.errorCode ?? data.code ?? (response.status === 401 ? 'UNAUTHENTICATED' : 'ATTACHMENT_UNAVAILABLE');
       if (response.status === 401 || code === 'UNAUTHENTICATED') this.onUnauthenticated?.();
-      throw new ApiError(code, data.message ?? '한글 원본을 열 수 없습니다.', response.status, data.fieldErrors);
+        throw new ApiError(code, data.message ?? '문서 원본을 열 수 없습니다.', response.status, data.fieldErrors);
     }
-    if (response.headers.get('Content-Type')?.split(';')[0].trim() !== 'application/octet-stream') throw new ApiError('INVALID_RESPONSE', '한글 원본 응답 형식을 확인할 수 없습니다.', response.status);
+      if (response.headers.get('Content-Type')?.split(';')[0].trim() !== 'application/octet-stream') throw new ApiError('INVALID_RESPONSE', '문서 원본 응답 형식을 확인할 수 없습니다.', response.status);
     const bytes = new Uint8Array(await response.arrayBuffer());
-    if (!bytes.length || bytes.length > 10 * 1024 * 1024) throw new ApiError('INVALID_RESPONSE', '한글 원본 크기를 확인할 수 없습니다.', response.status);
+      if (!bytes.length || bytes.length > 10 * 1024 * 1024) throw new ApiError('INVALID_RESPONSE', '문서 원본 크기를 확인할 수 없습니다.', response.status);
     return bytes;
   }
   getAttachmentDocument(id, offset = 0, limit = 50, signal) { return this.query('/attachments/' + encodeURIComponent(id) + '/document' + queryString({ offset, limit }), signal); }

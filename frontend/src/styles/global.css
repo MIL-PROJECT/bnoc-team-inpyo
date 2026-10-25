@@ -252,6 +252,8 @@ nav .nav-badge--error { background: var(--color-warning); }
 .document-dialog__head h2 { margin:0; overflow-wrap:anywhere; }
 .document-dialog__actions { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
 .document-dialog__content { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(14rem,1fr); gap:1rem; }
+.document-dialog__content--original { grid-template-columns:minmax(0,1fr); }
+.docx-page-view iframe { height:52vh; background:#f2f4f7; }
 .document-dialog__body,.document-dialog__metadata { min-width:0; max-height:58vh; overflow:auto; padding:1rem; border:1px solid var(--color-divider); border-radius:var(--radius-card); overflow-wrap:anywhere; }
 .document-dialog__body iframe { display:block; width:100%; min-height:52vh; border:0; }
 .document-dialog__body img { display:block; max-width:100%; height:auto; margin:auto; }

@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@rhwp/core": "0.8.7",
+    "docx-preview": "0.4.1",
+    "jszip": "3.10.1",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
