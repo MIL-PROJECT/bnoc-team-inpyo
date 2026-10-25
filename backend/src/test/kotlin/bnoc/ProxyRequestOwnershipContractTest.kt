@@ -44,6 +44,19 @@ class ProxyRequestOwnershipContractTest {
         assertEquals("FORBIDDEN",assertThrows(BusinessFailure::class.java) { query.requesters(requester) }.code)
     }
 
+    @Test fun `reuse is available only for own directly registered requests including closed requests`() {
+        val direct=command(requester,"createRequest",payload=requestPayload(null)).requestNumber!!
+        assertEquals(true,query.detail(requester,direct)["canReuse"],"OWN_DIRECT_REQUEST_CAN_BE_REUSED")
+        assertEquals(false,query.detail(bnoc,direct)["canReuse"],"BNOC_MUST_NOT_REUSE_ANOTHER_AUTHORS_REQUEST")
+        assertEquals("NOT_FOUND",assertThrows(BusinessFailure::class.java){query.detail(otherRequester,direct)}.code)
+        command(requester,"cancelRequest",direct,db.request(direct)!!.revision)
+        assertEquals(true,query.detail(requester,direct)["canReuse"],"CLOSED_REQUEST_CAN_START_A_NEW_DRAFT")
+        val proxy=command(bnoc,"createRequest",payload=requestPayload()).requestNumber!!
+        assertEquals(false,query.detail(requester,proxy)["canReuse"],"PROXY_IS_OWNED_BUT_NOT_DIRECTLY_AUTHORED")
+        assertEquals(false,query.detail(bnoc,proxy)["canReuse"])
+        assertTrue(db.works(direct).isEmpty())
+    }
+
     @Test fun `proxy request binds selected account and actual requester can edit it`() {
         val number=command(bnoc,"createRequest",payload=requestPayload()).requestNumber!!
         val stored=db.request(number)!!

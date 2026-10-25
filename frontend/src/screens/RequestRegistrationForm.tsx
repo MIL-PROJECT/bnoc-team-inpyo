@@ -9,7 +9,7 @@ import { requestDetailGuidance, requestLocationGuidance } from '../app/requestGu
 export type CommandTarget = { requestNumber: string; workNumber?: string };
 export type RunCommand = (type: string, payload: Record<string, unknown>, target?: CommandTarget, expectedRevision?: number, operationId?: string) => Promise<ViewCommandResult>;
 export type RequesterChoice = { requesterRef: string; displayName: string; department: string };
-type Props = { actor: Actor; run: RunCommand; upload: UploadAttachment; getRequesters: () => Promise<{ items: RequesterChoice[] }>; onSaved: (id: string, message?: string) => void; initialDraft?: RequestInput | null; onDraftChange?: (input: RequestInput) => void };
+type Props = { actor: Actor; run: RunCommand; upload: UploadAttachment; getRequesters: () => Promise<{ items: RequesterChoice[] }>; onSaved: (id: string, message?: string) => void; initialDraft?: RequestInput | null; sourceRequestNumber?: string; onDraftChange?: (input: RequestInput) => void };
 export type RequestInput = {
   requesterDisplayText: string; requesterRef: string; category: string; systemType: string; resourceType: string; workType: string; meetingType: string; videoPlatform: string; phoneType: string;
   detail: string; location: string; contact: string; personalContact: string; equipmentId: string; preference1Date: string; preference1Period: string; preference2Date: string; preference2Period: string; documentRef: string;
@@ -79,7 +79,7 @@ export function RequestFields({ actor, input, setInput, errors, upload, onUpload
     </div>
   </div>;
 }
-export function RequestRegistrationForm({ actor, run, upload, getRequesters, onSaved, initialDraft, onDraftChange }: Props) {
+export function RequestRegistrationForm({ actor, run, upload, getRequesters, onSaved, initialDraft, sourceRequestNumber, onDraftChange }: Props) {
   const [input, setInput] = useState(() => initialDraft ?? initialInput(actor));
   const [errors, setErrors] = useState<Record<string,string>>({});
   const [message, setMessage] = useState('');
@@ -119,5 +119,5 @@ export function RequestRegistrationForm({ actor, run, upload, getRequesters, onS
     if (result.ok) { setErrors({}); if (result.requestNumber) { const success = `요청 ${result.requestNumber}을 등록했습니다.`; setMessage(success); onSaved(result.requestNumber, success); } return; }
     setErrors(result.fieldErrors ?? {}); setMessage(saveFailureMessage(result)); setFailed(true);
   };
-  return <section className="card"><h1>{actor.role === 'bnoc' ? '대리 등록' : '작업 신청'}</h1>{actor.role==='bnoc'&&requesterLoadError&&<p className="error" role="alert">{requesterLoadError} <button type="button" onClick={()=>void refreshRequesters()}>다시 불러오기</button></p>}<form ref={formRef} onSubmit={submit}><fieldset disabled={saving || (actor.role==='bnoc'&&requesterLoading)}><RequestFields actor={actor} input={input} setInput={change} errors={errors} upload={upload} onUploading={setUploading} requesters={requesters} /></fieldset>{actor.role==='bnoc'&&requesterLoading&&<p role="status">요청자 목록을 불러오는 중…</p>}{message && <p ref={feedbackRef} tabIndex={-1} role={failed ? 'alert' : 'status'} className={failed ? 'error' : 'notice'}>{message}</p>}{dirty && !message && <p className="draft-status" role="status">저장하지 않은 입력이 있습니다.</p>}<div className="actions"><button className="primary" type="submit" disabled={saving || uploading || (actor.role==='bnoc'&&(requesterLoading||!!requesterLoadError||requesters.length===0))}>{saving ? '저장 중…' : '신청 등록'}</button></div></form></section>;
+  return <section className="card"><h1>{actor.role === 'bnoc' ? '대리 등록' : '작업 신청'}</h1>{sourceRequestNumber&&<p className="notice" role="status">요청 {sourceRequestNumber}을 불러온 새 신청 초안입니다. 희망 일정과 첨부파일은 이번 요청에 맞게 새로 입력하세요.</p>}{actor.role==='bnoc'&&requesterLoadError&&<p className="error" role="alert">{requesterLoadError} <button type="button" onClick={()=>void refreshRequesters()}>다시 불러오기</button></p>}<form ref={formRef} onSubmit={submit}><fieldset disabled={saving || (actor.role==='bnoc'&&requesterLoading)}><RequestFields actor={actor} input={input} setInput={change} errors={errors} upload={upload} onUploading={setUploading} requesters={requesters} /></fieldset>{actor.role==='bnoc'&&requesterLoading&&<p role="status">요청자 목록을 불러오는 중…</p>}{message && <p ref={feedbackRef} tabIndex={-1} role={failed ? 'alert' : 'status'} className={failed ? 'error' : 'notice'}>{message}</p>}{dirty && !message && <p className="draft-status" role="status">저장하지 않은 입력이 있습니다.</p>}<div className="actions"><button className="primary" type="submit" disabled={saving || uploading || (actor.role==='bnoc'&&(requesterLoading||!!requesterLoadError||requesters.length===0))}>{saving ? '저장 중…' : '신청 등록'}</button></div></form></section>;
 }
