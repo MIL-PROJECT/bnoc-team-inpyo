@@ -5,11 +5,14 @@ import { requestPayload } from '../api/requestPayload.mjs';
 import { useUnsavedChanges } from '../app/useUnsavedChanges';
 import { focusFormError, requestFieldErrors, saveFailureMessage } from '../app/formFeedback.mjs';
 import { requestDetailGuidance, requestLocationGuidance } from '../app/requestGuidance.mjs';
+import {useRequestDraft,type RequestDraftApi} from '../app/useRequestDraft';
+import {Button} from '../ui/Button';
+import {ActionGroup} from '../ui/ActionGroup';
 
 export type CommandTarget = { requestNumber: string; workNumber?: string };
 export type RunCommand = (type: string, payload: Record<string, unknown>, target?: CommandTarget, expectedRevision?: number, operationId?: string) => Promise<ViewCommandResult>;
 export type RequesterChoice = { requesterRef: string; displayName: string; department: string };
-type Props = { actor: Actor; run: RunCommand; upload: UploadAttachment; getRequesters: () => Promise<{ items: RequesterChoice[] }>; onSaved: (id: string, message?: string) => void; initialDraft?: RequestInput | null; sourceRequestNumber?: string; onDraftChange?: (input: RequestInput) => void };
+type Props = { actor: Actor; run: RunCommand; upload: UploadAttachment; getRequesters: () => Promise<{ items: RequesterChoice[] }>; draftApi:RequestDraftApi; onSaved: (id: string, message?: string) => void; initialDraft?: RequestInput | null; sourceRequestNumber?: string; onDraftChange?: (input: RequestInput) => void };
 export type RequestInput = {
   requesterDisplayText: string; requesterRef: string; category: string; systemType: string; resourceType: string; workType: string; meetingType: string; videoPlatform: string; phoneType: string;
   detail: string; location: string; contact: string; personalContact: string; equipmentId: string; preference1Date: string; preference1Period: string; preference2Date: string; preference2Period: string; documentRef: string;
@@ -79,14 +82,19 @@ export function RequestFields({ actor, input, setInput, errors, upload, onUpload
     </div>
   </div>;
 }
-export function RequestRegistrationForm({ actor, run, upload, getRequesters, onSaved, initialDraft, sourceRequestNumber, onDraftChange }: Props) {
+export function RequestRegistrationForm({ actor, run, upload, getRequesters, draftApi, onSaved, initialDraft, sourceRequestNumber, onDraftChange }: Props) {
   const [input, setInput] = useState(() => initialDraft ?? initialInput(actor));
   const [errors, setErrors] = useState<Record<string,string>>({});
   const [message, setMessage] = useState('');
   const [failed, setFailed] = useState(false);
   const [requesters,setRequesters]=useState<RequesterChoice[]>([]),[requesterLoading,setRequesterLoading]=useState(false),[requesterLoadError,setRequesterLoadError]=useState('');
   const [saving, setSaving] = useState(false), [uploading, setUploading] = useState(false);
+  const [formalUncertain,setFormalUncertain]=useState(false);
   const operationId = useRef(crypto.randomUUID());
+  const [showReuseNotice,setShowReuseNotice]=useState(Boolean(sourceRequestNumber));
+  const persisted=useRequestDraft({actor,input,empty:initialInput(actor),api:draftApi,
+    onRestore:value=>{setInput(value);onDraftChange?.(value);operationId.current=crypto.randomUUID();setShowReuseNotice(false);setErrors({});setMessage('');setFailed(false);},
+    onSaved:()=>{operationId.current=crypto.randomUUID();setShowReuseNotice(false);setErrors({});setMessage('');setFailed(false);}});
   const formRef = useRef<HTMLFormElement>(null);
   const feedbackRef = useRef<HTMLParagraphElement>(null);
   useEffect(() => { if (failed) focusFormError(formRef.current, feedbackRef.current); }, [errors, message, failed]);
@@ -101,12 +109,12 @@ export function RequestRegistrationForm({ actor, run, upload, getRequesters, onS
     finally { setRequesterLoading(false); }
   },[getRequesters]);
   useEffect(()=>{if(actor.role==='bnoc')void refreshRequesters();},[actor.id,actor.role,refreshRequesters]);
-  const dirty = JSON.stringify(input) !== JSON.stringify(initialInput(actor));
-  useUnsavedChanges(dirty);
-  const change = (value: RequestInput) => { setInput(value); onDraftChange?.(value); operationId.current = crypto.randomUUID(); setErrors({}); setMessage(''); setFailed(false); };
+  const inputDirty=JSON.stringify(input)!==(persisted.baseline??JSON.stringify(initialInput(actor)));
+  useUnsavedChanges(inputDirty||Boolean(persisted.uncertain)||formalUncertain);
+  const change = (value: RequestInput) => { setInput(value); onDraftChange?.(value); operationId.current = crypto.randomUUID(); persisted.clearFeedback();setErrors({}); setMessage(''); setFailed(false); };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (saving || uploading) return;
+    if (saving || uploading || persisted.busy || persisted.uncertain) return;
     if(actor.role==='bnoc' && requesterLoading) return;
     if(actor.role==='bnoc' && requesterLoadError) { setMessage(requesterLoadError);setFailed(true);return; }
     if(actor.role==='bnoc' && !input.requesterRef) { setErrors({requesterRef:'요청자 계정을 선택하세요.'});setMessage('실제 요청자를 선택하세요.');setFailed(true);return; }
@@ -114,10 +122,33 @@ export function RequestRegistrationForm({ actor, run, upload, getRequesters, onS
       setErrors({ attachments:'회의 지원 의뢰서를 1개 이상 첨부하세요.' }); setMessage('필수 회의 지원 의뢰서를 첨부하세요.'); setFailed(true); return;
     }
     setSaving(true); setMessage(''); setFailed(false);
-    const result = await run('createRequest', toPayload(input, actor), undefined, undefined, operationId.current);
+    const result = await run('createRequest', {...toPayload(input, actor),...(persisted.reference?{draftRef:persisted.reference}:{})}, undefined, undefined, operationId.current);
     setSaving(false);
-    if (result.ok) { setErrors({}); if (result.requestNumber) { const success = `요청 ${result.requestNumber}을 등록했습니다.`; setMessage(success); onSaved(result.requestNumber, success); } return; }
+    if (result.ok) { setFormalUncertain(false);setErrors({}); if (result.requestNumber) { const success = `요청 ${result.requestNumber}을 등록했습니다.`; setMessage(success); onSaved(result.requestNumber, success); } return; }
+    const uncertain=['NETWORK','INVALID_RESPONSE','PROCESSING','SAVE_FAILED'].includes(result.errorCode??'');
+    if(uncertain)setFormalUncertain(true);
+    else if(!['UNAUTHENTICATED','FORBIDDEN'].includes(result.errorCode??''))setFormalUncertain(false);
     setErrors(result.fieldErrors ?? {}); setMessage(saveFailureMessage(result)); setFailed(true);
   };
-  return <section className="card"><h1>{actor.role === 'bnoc' ? '대리 등록' : '작업 신청'}</h1>{sourceRequestNumber&&<p className="notice" role="status">요청 {sourceRequestNumber}을 불러온 새 신청 초안입니다. 희망 일정과 첨부파일은 이번 요청에 맞게 새로 입력하세요.</p>}{actor.role==='bnoc'&&requesterLoadError&&<p className="error" role="alert">{requesterLoadError} <button type="button" onClick={()=>void refreshRequesters()}>다시 불러오기</button></p>}<form ref={formRef} onSubmit={submit}><fieldset disabled={saving || (actor.role==='bnoc'&&requesterLoading)}><RequestFields actor={actor} input={input} setInput={change} errors={errors} upload={upload} onUploading={setUploading} requesters={requesters} /></fieldset>{actor.role==='bnoc'&&requesterLoading&&<p role="status">요청자 목록을 불러오는 중…</p>}{message && <p ref={feedbackRef} tabIndex={-1} role={failed ? 'alert' : 'status'} className={failed ? 'error' : 'notice'}>{message}</p>}{dirty && !message && <p className="draft-status" role="status">저장하지 않은 입력이 있습니다.</p>}<div className="actions"><button className="primary" type="submit" disabled={saving || uploading || (actor.role==='bnoc'&&(requesterLoading||!!requesterLoadError||requesters.length===0))}>{saving ? '저장 중…' : '신청 등록'}</button></div></form></section>;
+  const draftDisabled=saving||uploading||persisted.busy||formalUncertain;
+  return <section className="card"><h1>{actor.role === 'bnoc' ? '대리 등록' : '작업 신청'}</h1>
+    {showReuseNotice&&sourceRequestNumber&&<p className="notice" role="status">요청 {sourceRequestNumber}을 불러온 새 신청 초안입니다. 희망 일정과 첨부파일은 이번 요청에 맞게 새로 입력하세요.</p>}
+    <section aria-label="신청서 임시저장"><p className="field-hint">임시저장은 정식 접수가 아닙니다. 업로드를 마치고 임시저장한 첨부파일만 함께 보존됩니다.</p>
+      {!persisted.ready&&!persisted.error&&<p role="status">임시저장 상태를 확인하는 중…</p>}
+      {persisted.state.draft&&<p className="notice" role="status">임시저장한 신청서가 있습니다. 마지막 저장 {new Date(persisted.state.draft.savedAt).toLocaleString('ko-KR')}</p>}
+      <ActionGroup><Button disabled={draftDisabled||!persisted.ready||Boolean(persisted.uncertain&&persisted.uncertain!=='save')||(!inputDirty&&Boolean(persisted.reference)&&!persisted.uncertain)} onClick={()=>void persisted.save()}>{persisted.busy?'처리 중…':'임시저장'}</Button>
+        <Button disabled={draftDisabled||!persisted.ready||(!persisted.state.draft&&!persisted.uncertain)} onClick={()=>void persisted.restore()}>임시저장 불러오기</Button>
+        <Button variant="danger" disabled={draftDisabled||!persisted.state.draft||Boolean(persisted.uncertain&&persisted.uncertain!=='delete')} onClick={()=>void persisted.remove()}>임시저장 삭제</Button>
+        {!persisted.ready&&persisted.error&&<Button disabled={draftDisabled} onClick={()=>void persisted.refresh()}>임시저장 상태 다시 확인</Button>}</ActionGroup>
+      {persisted.error&&<p className="error" role="alert">{persisted.error}</p>}{persisted.notice&&<p className="notice" role="status">{persisted.notice}</p>}
+      {persisted.uncertain&&<p className="notice" role="status">임시저장 결과를 확인할 때까지 입력과 신청 등록을 잠시 멈춥니다. 같은 작업으로 다시 시도하거나 저장본을 불러오세요.</p>}
+      {formalUncertain&&<p className="notice" role="status">신청 등록 결과를 먼저 확인해야 합니다. 입력과 임시저장을 유지한 채 같은 신청 등록으로 다시 확인하세요.</p>}
+    </section>
+    {actor.role==='bnoc'&&requesterLoadError&&<p className="error" role="alert">{requesterLoadError} <Button onClick={()=>void refreshRequesters()}>다시 불러오기</Button></p>}
+    <form ref={formRef} onSubmit={submit}><fieldset disabled={saving||formalUncertain||persisted.busy||Boolean(persisted.uncertain)||(actor.role==='bnoc'&&requesterLoading)}><RequestFields actor={actor} input={input} setInput={change} errors={errors} upload={upload} onUploading={setUploading} requesters={requesters}/></fieldset>
+      {actor.role==='bnoc'&&requesterLoading&&<p role="status">요청자 목록을 불러오는 중…</p>}
+      {message&&<p ref={feedbackRef} tabIndex={-1} role={failed?'alert':'status'} className={failed?'error':'notice'}>{message}</p>}
+      {inputDirty&&!message&&<p className="draft-status" role="status">{persisted.baseline?'임시저장 후 변경한 입력이 있습니다. 다시 임시저장하세요.':'저장하지 않은 입력이 있습니다.'}</p>}
+      <ActionGroup><Button variant="primary" type="submit" disabled={saving||uploading||persisted.busy||Boolean(persisted.uncertain)||(actor.role==='bnoc'&&(requesterLoading||!!requesterLoadError||requesters.length===0))}>{saving?'저장 중…':'신청 등록'}</Button></ActionGroup>
+    </form></section>;
 }

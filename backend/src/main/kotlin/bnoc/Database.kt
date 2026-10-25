@@ -46,6 +46,8 @@ class Database(val jdbc:JdbcTemplate,@param:Value("\${bnoc.bootstrap-admin:acces
             "CREATE TABLE IF NOT EXISTS bnoc_situation_attempts (attempt_ref VARCHAR(36) PRIMARY KEY,kind VARCHAR(16) NOT NULL,scope_key VARCHAR(100) NOT NULL,attempted_at VARCHAR(64) NOT NULL,succeeded BOOLEAN NOT NULL,failure_code VARCHAR(100))"
         ).forEach { jdbc.execute(it) }
         ensureColumn("bnoc_attachments","content_analysis_excluded","BOOLEAN NOT NULL DEFAULT FALSE")
+        ensureColumn("bnoc_attachments","draft_ref","VARCHAR(36) NULL")
+        jdbc.execute("CREATE TABLE IF NOT EXISTS bnoc_request_drafts (actor_subject VARCHAR(128) NOT NULL,role_name VARCHAR(32) NOT NULL,draft_id VARCHAR(36),input_json MEDIUMTEXT,revision BIGINT NOT NULL,updated_at VARCHAR(64) NOT NULL,last_operation_id VARCHAR(128),last_fingerprint CHAR(64),PRIMARY KEY(actor_subject,role_name))")
         jdbc.execute("CREATE TABLE IF NOT EXISTS bnoc_schema_migrations (version INT PRIMARY KEY,applied_at VARCHAR(64) NOT NULL)")
         ensureColumn("bnoc_works","resolution_kind","VARCHAR(16) NOT NULL DEFAULT 'open'")
         ensureColumn("bnoc_works","resolution_reason","TEXT NULL")
@@ -122,6 +124,8 @@ class Database(val jdbc:JdbcTemplate,@param:Value("\${bnoc.bootstrap-admin:acces
             }
             jdbc.update("INSERT INTO bnoc_schema_migrations(version,applied_at) VALUES (14,?)",java.time.Instant.now().toString())
         }
+        if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_schema_migrations WHERE version=15",Int::class.java)==0)
+            jdbc.update("INSERT INTO bnoc_schema_migrations(version,applied_at) VALUES (15,?)",java.time.Instant.now().toString())
         if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_sequences WHERE sequence_key='request'",Int::class.java)==0) jdbc.update("INSERT INTO bnoc_sequences VALUES ('request',100)")
         (listOf("BNOC")+teams+configuredDepartments).distinct().forEachIndexed { index,department -> if(jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_departments WHERE department=?",Int::class.java,department)==0) jdbc.update("INSERT INTO bnoc_departments VALUES (?,?)",department,index) }
         val actors=listOf(Actor("requester","requester","요청자",""),Actor("requester-secondary","requester","요청자",""),

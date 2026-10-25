@@ -8,7 +8,7 @@ export class ApiClient {
   constructor(fetcher = (...args) => globalThis.fetch(...args)) { this.fetcher = fetcher; this.csrfToken = ''; this.onUnauthenticated = null; }
   async send(path, options = {}) {
     const method = options.method ?? 'GET';
-    const command = (path === '/commands' && method === 'POST') || (path.startsWith('/planned-works') && ['POST', 'PATCH'].includes(method));
+    const command = (path === '/commands' && method === 'POST') || (path === '/request-draft' && ['PUT','DELETE'].includes(method)) || (path.startsWith('/planned-works') && ['POST', 'PATCH'].includes(method));
     const unknownSaveMessage = '저장 결과를 확인하지 못했습니다. 입력은 유지됩니다. 같은 제출로 다시 확인하세요.';
     const headers = { Accept: 'application/json', ...(options.headers ?? {}) };
     if (method !== 'GET' && method !== 'HEAD') headers['X-CSRF-Token'] = this.csrfToken;
@@ -49,6 +49,9 @@ export class ApiClient {
   }
   getRequestList(criteria = {}, signal) { return this.query('/requests' + queryString(criteria), signal, ['items']); }
   getRequesters(signal) { return this.query('/requesters', signal, ['items']); }
+  getRequestDraft(signal) { return this.query('/request-draft', signal); }
+  async saveRequestDraft(body) { return (await this.send('/request-draft', {method:'PUT',body:JSON.stringify(body)})).data; }
+  async deleteRequestDraft(body) { return (await this.send('/request-draft', {method:'DELETE',body:JSON.stringify(body)})).data; }
   getRequestDetail(number, signal) { return this.query('/requests/' + encodeURIComponent(number), signal); }
   getHistory(number, signal, criteria = {}) { return this.query('/requests/' + encodeURIComponent(number) + '/history' + queryString(criteria), signal, ['items']); }
   getNotifications(signal, criteria = {}) { return this.query('/notifications' + queryString(criteria), signal, ['items']); }

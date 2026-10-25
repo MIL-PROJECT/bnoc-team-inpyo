@@ -2,6 +2,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ApiClient, ApiError } from './apiClient.mjs';
 
+test('request drafts use private same-origin CRUD with the original version and retry operation',async()=>{
+  const calls=[];
+  const client=new ApiClient(async(url,options)=>{calls.push({url,options});return new Response(JSON.stringify({data:{draft:null,revision:4}}));});
+  client.csrfToken='draft-csrf';
+  assert.equal((await client.getRequestDraft()).revision,4);
+  const save={role:'requester',expectedRevision:3,operationId:'draft-save-retry',input:{detail:'unfinished',attachments:[]}};
+  await client.saveRequestDraft(save);await client.saveRequestDraft(save);
+  await client.deleteRequestDraft({role:'requester',expectedRevision:4,operationId:'draft-delete-retry'});
+  assert.deepEqual(calls.map(call=>[call.url,call.options.method]),[['/api/request-draft','GET'],['/api/request-draft','PUT'],['/api/request-draft','PUT'],['/api/request-draft','DELETE']]);
+  for(const call of calls){assert.equal(call.options.credentials,'same-origin');if(call.options.method!=='GET')assert.equal(call.options.headers['X-CSRF-Token'],'draft-csrf');}
+  assert.deepEqual(JSON.parse(calls[1].options.body),save);assert.equal(calls[1].options.body,calls[2].options.body);
+});
+
+test('lost draft-save responses remain unknown writes and trigger explicit same-save recovery',async()=>{
+  const client=new ApiClient(async()=>{throw new Error('network gone');});
+  await assert.rejects(()=>client.saveRequestDraft({}),error=>error instanceof ApiError&&error.code==='NETWORK'&&error.message.includes('같은 제출'));
+});
+
 test('business submission sends the existing id, CSRF and server session; no client actor authority', async () => {
   let sent;
   const client = new ApiClient(async (url, options) => { sent = { url, options }; return new Response(JSON.stringify({ ok: true, requestNumber: '101' }), { headers: { 'Content-Type': 'application/json' } }); });

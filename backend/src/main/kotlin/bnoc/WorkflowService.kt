@@ -21,17 +21,18 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
     // Writes must see other committed changes after acquiring locks; query snapshots remain separate.
     private val writeTransaction=TransactionTemplate(checkNotNull(transaction.transactionManager),transaction).apply { isolationLevel=TransactionDefinition.ISOLATION_READ_COMMITTED }
     private val fileRoot=Path.of(fileRoot).toAbsolutePath().normalize()
+    val requestDrafts=RequestDraftService(db,writeTransaction,this.fileRoot)
     val operations=OperationsService(db)
     private val inflight=ConcurrentHashMap<String,String>()
     private fun now()=Instant.now().toString()
     private val seoul=ZoneId.of("Asia/Seoul")
-    private val createFields=setOf("category","subcategories","detail","location","contact","personalContact","equipmentId","maintenanceTarget","schedulePreferences","documentRef","attachments","requesterRef")
+    private val createFields=setOf("category","subcategories","detail","location","contact","personalContact","equipmentId","maintenanceTarget","schedulePreferences","documentRef","attachments","requesterRef","draftRef")
     private val fields=mapOf(
         "createRequest" to createFields,"updateRequest" to setOf("detail","location","contact","personalContact","schedulePreferences","documentRef","attachments"),
         "cancelRequest" to emptySet(),"moveToDocumentWaiting" to emptySet(),"rejectRequest" to setOf("reason"),"assignTeams" to setOf("teamIds","priority"),"changePriority" to setOf("priority"),
         "updateWork" to setOf("nextStatus","scheduleIntervals","memo","returnReason","completionMemo","assignedPersonRefs","reusePreviousSchedule"),"returnWork" to setOf("returnReason","reason","scheduleIntervals","memo"),
         "updateWorkDetails" to setOf("scheduleIntervals","memo"),"reassignReturnedWork" to setOf("teamIds"),"reassignAssignedWork" to setOf("teamIds"),"addTeams" to setOf("teamIds"),"withdrawReturnedWork" to emptySet(),"markNotificationsSeen" to setOf("notificationIds"),
-        "createAfterActionReport" to (createFields-setOf("requesterDisplayText","schedulePreferences","personalContact")+setOf("completedConfirmed","actualRequesterText","actualStartedAt","actualCompletedAt","reason","completionMemo"))
+        "createAfterActionReport" to (createFields-setOf("requesterDisplayText","schedulePreferences","personalContact","draftRef")+setOf("completedConfirmed","actualRequesterText","actualStartedAt","actualCompletedAt","reason","completionMemo"))
     )+OperationsService.fields
 
     private fun schedulePreferences(value:Any?):List<SchedulePreference> {
@@ -247,6 +248,7 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
         }
     }
     @Suppress("UNCHECKED_CAST") private fun createRequest(actor:Actor,payload:Map<String,Any?>):String {
+        val draft=if("draftRef" in payload) requestDrafts.lockReference(actor,payload["draftRef"]) else null
         validateRequest(payload,requireMeetingForm=true)
         val actualRequester=when(actor.role) {
             "requester" -> {
@@ -261,7 +263,8 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
         }
         val requesterDisplay=if(actor.role=="bnoc") listOf(actualRequester.displayName,actualRequester.department).filter { it.isNotBlank() }.joinToString(" · ") else actualRequester.displayName
         val request=RequestRecord(db.nextNumber(),actualRequester.id,requesterDisplay,actor.id,text(payload,"category",100),payload["subcategories"] as Map<String,String>,text(payload,"detail",10000),text(payload,"location",200),text(payload,"contact",50),text(payload,"equipmentId",200).ifBlank { null },payload["maintenanceTarget"] as? Map<String,String>,documentRef=text(payload,"documentRef",500).ifBlank { null },registeredAt=now(),schedulePreferences=schedulePreferences(payload["schedulePreferences"]),personalContact=personalContact(payload))
-        db.insertRequest(request);linkAttachments(actor,"request",request.number,payload["attachments"])
+        db.insertRequest(request);linkAttachments(actor,"request",request.number,payload["attachments"],draft?.id)
+        if(draft!=null) requestDrafts.consume(actor,draft)
         history(actor,request,null,"등록",null,"대기");notify("요청 등록",request);return request.number
     }
     private fun changeRequest(actor:Actor,request:RequestRecord,status:String) {
@@ -436,7 +439,7 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
         val work=WorkRecord("${request.number}-1",request.number,actor.teamId!!,status="완료",completion=mapOf("completedBy" to actor.id,"completedAt" to completed)+(if(memo.isNotBlank()) mapOf("memo" to memo) else emptyMap()),origin="after-action",actualStartedAt=started)
         db.insertWork(work);history(actor,request,null,"선조치 후보고",null,reason);history(actor,request,work,"실제 시작 시각",null,started);history(actor,request,work,"완료정보",null,work.completion);history(actor,request,work,"상태",null,"완료");notify("선조치 후보고",request,listOf(work));return request.number
     }
-    fun linkAttachments(actor:Actor,kind:String,ref:String,value:Any?):List<Map<String,Any?>> {
+    fun linkAttachments(actor:Actor,kind:String,ref:String,value:Any?,draftId:String?=null):List<Map<String,Any?>> {
         val list=(value ?: emptyList<Any>()) as? List<*> ?: reject("VALIDATION")
         if(list.size>10) reject("VALIDATION",mapOf("attachments" to "첨부는 최대 10개입니다."))
         val ids=list.map { item -> if(item is String) item else (item as? Map<*,*>)?.get("id") as? String ?: reject("VALIDATION") }
@@ -446,14 +449,15 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
             val row=db.rows("SELECT * FROM bnoc_attachments WHERE attachment_ref=? FOR UPDATE",id).firstOrNull() ?: reject("VALIDATION",mapOf("attachments" to "첨부파일을 확인하세요."))
             val bound=row["resource_ref"] as? String
             if(row["resource_kind"]!=kind || (bound!=null && bound!=ref) || (bound==null && row["owner_subject"]!=actor.id)) reject("FORBIDDEN")
-            if(bound==null && Instant.parse(row["uploaded_at"] as String).isBefore(Instant.now().minusSeconds(86400))) reject("VALIDATION",mapOf("attachments" to "임시 첨부의 유효시간이 지났습니다. 다시 업로드하세요."))
+            if(row["draft_ref"]!=null && row["draft_ref"]!=draftId) reject("CONFLICT",mapOf("attachments" to "이 파일의 임시저장 신청서를 불러온 뒤 등록하세요."))
+            if(bound==null && row["draft_ref"]==null && Instant.parse(row["uploaded_at"] as String).isBefore(Instant.now().minusSeconds(86400))) reject("VALIDATION",mapOf("attachments" to "임시 첨부의 유효시간이 지났습니다. 다시 업로드하세요."))
             val stored=fileRoot.resolve(row["stored_name"] as String).normalize()
             if(!stored.startsWith(fileRoot) || !Files.isRegularFile(stored)) reject("VALIDATION",mapOf("attachments" to "첨부파일을 다시 업로드하세요."))
             bytes+=(row["byte_size"] as Number).toLong()
         }
         if(bytes>50L*1024*1024) reject("VALIDATION",mapOf("attachments" to "첨부 합계는 50MiB 이하여야 합니다."))
         db.jdbc.update("UPDATE bnoc_attachments SET current_link=FALSE WHERE resource_kind=? AND resource_ref=?",kind,ref)
-        ids.forEach { db.jdbc.update("UPDATE bnoc_attachments SET resource_ref=?,was_linked=TRUE,current_link=TRUE WHERE attachment_ref=?",ref,it) }
+        ids.forEach { db.jdbc.update("UPDATE bnoc_attachments SET resource_ref=?,was_linked=TRUE,current_link=TRUE,draft_ref=NULL WHERE attachment_ref=?",ref,it) }
         if(kind=="request") {
             val request=db.rows("SELECT category,subcategories FROM bnoc_requests WHERE request_number=?",ref).firstOrNull()
             val excluded=request?.let { row ->

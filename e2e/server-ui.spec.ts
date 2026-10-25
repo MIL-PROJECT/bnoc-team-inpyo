@@ -67,6 +67,25 @@ async function seed(page: Page, text: string, teamIds?: string[]) {
   }
   return result.requestNumber as string;
 }
+async function resetRequestDraft(page:ApiSurface,subject='requester') {
+  const session=await apiLogin(page,subject);
+  const state=(await apiRead(page,'/api/request-draft')).data;
+  if(state.draft){const result=await page.request.delete('/api/request-draft',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},data:{role:session.actor.role,expectedRevision:state.revision,operationId:randomUUID()}});expect(result.status()).toBe(200);}
+  return (await apiRead(page,'/api/request-draft')).data;
+}
+async function saveDraftApi(page:ApiSurface,input:Record<string,unknown>,revision:number) {
+  const session=(await apiRead(page,'/api/session')).data;
+  const response=await page.request.put('/api/request-draft',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},data:{role:session.actor.role,expectedRevision:revision,operationId:randomUUID(),input}});
+  expect(response.status()).toBe(200);return (await response.json()).data;
+}
+const draftInput=(detail:string)=>({category:'장비/체계',systemType:'인터넷',resourceType:'PC',workType:'지원',detail,location:'업무 위치',contact:'000-0000',attachments:[]});
+async function draftSaved(page:Page) {await expect(page.getByRole('status').filter({hasText:'신청서를 임시저장했습니다.'})).toBeVisible();}
+async function draftKeyboard(page:Page,name:string) {
+  const button=page.getByRole('button',{name,exact:true});await expect(button).toBeEnabled();
+  await page.getByRole('button',{name:'작업 신청',exact:true}).focus();
+  for(let step=0;step<30;step++){await page.keyboard.press('Tab');if(await button.evaluate(element=>element===document.activeElement))break;}
+  await expect(button).toBeFocused();await page.keyboard.press('Enter');
+}
 async function departmentRecord(page: Page, kind: 'personnel' | 'night-duty', department: string, date: string) {
   return (await apiRead(page, `/api/${kind}?date=${date}&department=${encodeURIComponent(department)}`)).data.departments.find((item: { department: string }) => item.department === department);
 }
@@ -175,6 +194,161 @@ test.afterEach(async ({ page }, info) => {
   const errors = scriptErrors.get(page) ?? [];
   await info.attach('browser-script-errors', { body: JSON.stringify(errors), contentType: 'application/json' });
   expect(errors, 'browser scripts must not throw unhandled errors').toEqual([]);
+});
+
+test('draft: incomplete input and completed uploads survive closing and logging in, with explicit keyboard restore',async({page,context},info)=>{
+  await resetRequestDraft(page);const count=(await apiRead(page,'/api/requests?size=100')).total;
+  const text=`미완성 초안 ${info.project.name} ${randomUUID()}`;
+  await page.goto('/new');await page.getByLabel('요청 내용·증상',{exact:true}).fill(text);
+  await page.getByRole('checkbox',{name:'정비대상자가 요청자와 다름',exact:true}).check();
+  await page.getByLabel('정비대상자 이름',{exact:true}).fill('작성 중 대상');
+  await page.getByRole('checkbox',{name:'정비대상자가 요청자와 다름',exact:true}).uncheck();
+  await page.getByText('선택 정보',{exact:true}).click();await page.getByLabel('2지망 날짜',{exact:true}).fill('2026-10-30');
+  const fileName=`draft-${info.project.name}.txt`;
+  await page.getByLabel('첨부파일',{exact:true}).setInputFiles({name:fileName,mimeType:'text/plain',buffer:Buffer.from('persistent draft bytes')});
+  await expect(page.getByRole('button',{name:fileName+' 첨부 제외',exact:true})).toBeVisible();
+  await draftKeyboard(page,'임시저장');await draftSaved(page);
+  expect((await apiRead(page,'/api/requests?size=100')).total).toBe(count,'DRAFT_SAVE_MUST_NOT_REGISTER_A_REQUEST');
+  const saved=(await apiRead(page,'/api/request-draft')).data;
+  expect(saved.draft.input.preference2Date).toBe('2026-10-30');expect(saved.draft.input.preference2Period).toBe('');
+  const session=(await apiRead(page,'/api/session')).data;
+  expect((await page.request.post('/api/auth/logout',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},data:{}})).status()).toBe(200);
+  await page.close();const restored=await context.newPage();const errors:string[]=[];restored.on('pageerror',error=>errors.push(error.message));
+  try{
+    await apiLogin(restored,'requester');await restored.goto('/new');
+    await expect(restored.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('');
+    await draftKeyboard(restored,'임시저장 불러오기');
+    await expect(restored.getByLabel('요청 내용·증상',{exact:true})).toHaveValue(text);
+    await expect(restored.getByRole('button',{name:fileName+' 첨부 제외',exact:true})).toBeVisible();
+    await restored.getByText('선택 정보',{exact:true}).click();
+    await expect(restored.getByLabel('1지망 날짜',{exact:true})).toHaveValue('');await expect(restored.getByLabel('2지망 날짜',{exact:true})).toHaveValue('2026-10-30');
+    await expect(restored.getByLabel('2지망 오전·오후',{exact:true})).toHaveValue('');
+    await restored.getByRole('checkbox',{name:'정비대상자가 요청자와 다름',exact:true}).check();await expect(restored.getByLabel('정비대상자 이름',{exact:true})).toHaveValue('작성 중 대상');
+    await restored.getByRole('checkbox',{name:'정비대상자가 요청자와 다름',exact:true}).uncheck();
+    expect(await restored.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    expect(await restored.evaluate(value=>Object.values(localStorage).join('').includes(value)||Object.values(sessionStorage).join('').includes(value),text)).toBe(false);
+    await screenshot(restored,info,'persistent-request-draft');
+    await restored.getByLabel('요청 내용·증상',{exact:true}).fill(text+' 미저장 변경');
+    expect((await apiRead(restored,'/api/request-draft')).data.draft.input.detail).toBe(text,'UNSAVED_EDITS_MUST_NOT_CHANGE_SERVER_DRAFT');
+    expect(errors).toEqual([]);
+  }finally{await resetRequestDraft(restored);await restored.close();}
+});
+
+test('draft: current writer owns a BNOC draft and restoration or deletion requires explicit confirmation',async({page})=>{
+  const inspector={request:await apiRequest.newContext({baseURL:base})};
+  try{
+    await resetRequestDraft(inspector,'bnoc');const empty=await resetRequestDraft(page);
+    await saveDraftApi(page,draftInput('요청자의 마지막 저장본'),empty.revision);
+    await apiLogin(inspector,'requester-secondary');expect((await apiRead(inspector,'/api/request-draft')).data.draft).toBeNull();
+    await apiLogin(page,'bnoc');await page.goto('/new');await page.getByLabel('요청 내용·증상',{exact:true}).fill('BNOC가 작성 중인 대리 신청');
+    await expect(page.getByRole('button',{name:'임시저장',exact:true})).toBeEnabled();await page.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(page);
+    expect((await apiRead(page,'/api/request-draft')).data.draft.input.detail).toBe('BNOC가 작성 중인 대리 신청');
+    await apiLogin(page,'requester');await page.goto('/new');
+    await expect(page.getByRole('button',{name:'임시저장 불러오기',exact:true})).toBeEnabled();
+    await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('');
+    await page.getByLabel('요청 내용·증상',{exact:true}).fill('현재 작성 중인 내용');
+    page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();
+    await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('현재 작성 중인 내용');
+    page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();
+    await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('요청자의 마지막 저장본');
+    page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'임시저장 삭제',exact:true}).click();
+    await expect(page.getByRole('status').filter({hasText:'임시저장한 신청서를 삭제했습니다.'})).toBeVisible();
+    await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('요청자의 마지막 저장본');
+    expect((await apiRead(page,'/api/request-draft')).data.draft).toBeNull();
+    await apiLogin(inspector,'bnoc');expect((await apiRead(inspector,'/api/request-draft')).data.draft.input.detail).toBe('BNOC가 작성 중인 대리 신청');
+    await apiLogin(inspector,'team-wireless');expect((await inspector.request.get('/api/request-draft')).status()).toBe(403);
+  }finally{await resetRequestDraft(inspector);await resetRequestDraft(inspector,'bnoc');await inspector.request.dispose();}
+});
+
+test('draft: two tabs reject stale writes and recover after deletion without losing the current input',async({page,context})=>{
+  const empty=await resetRequestDraft(page);const first=await saveDraftApi(page,draftInput('공통 시작 초안'),empty.revision);
+  const before=(await apiRead(page,'/api/requests?size=100')).total;
+  await page.goto('/new');await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('공통 시작 초안');
+  const other=await context.newPage();
+  try{
+    await other.goto('/new');await other.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expect(other.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('공통 시작 초안');
+    await page.getByLabel('요청 내용·증상',{exact:true}).fill('먼저 저장한 탭');await page.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(page);
+    await other.getByLabel('요청 내용·증상',{exact:true}).fill('충돌 뒤에도 유지할 입력');await other.getByRole('button',{name:'임시저장',exact:true}).click();
+    await expect(other.getByRole('alert')).toContainText('다른 화면에서 임시저장이 변경');await expect(other.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('충돌 뒤에도 유지할 입력');
+    other.once('dialog',dialog=>dialog.accept());await other.getByRole('button',{name:'임시저장 삭제',exact:true}).click();await expect(other.getByRole('alert')).toContainText('다른 화면에서');
+    const denied=other.waitForResponse(response=>new URL(response.url()).pathname==='/api/commands'&&response.request().method()==='POST');
+    await other.getByRole('button',{name:'신청 등록',exact:true}).click();expect((await denied).status()).toBe(409);
+    expect((await apiRead(page,'/api/requests?size=100')).total).toBe(before);
+    expect((await apiRead(page,'/api/request-draft')).data.draft.input.detail).toBe('먼저 저장한 탭');
+    const current=(await apiRead(page,'/api/request-draft')).data;const session=(await apiRead(page,'/api/session')).data;
+    expect((await page.request.delete('/api/request-draft',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},data:{role:'requester',expectedRevision:current.revision,operationId:randomUUID()}})).status()).toBe(200);
+    other.once('dialog',dialog=>dialog.accept());await other.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();
+    await expect(other.getByRole('status').filter({hasText:'임시저장한 신청서가 없습니다.'})).toBeVisible();
+    await expect(other.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('충돌 뒤에도 유지할 입력');
+    await expect(other.getByRole('button',{name:'임시저장',exact:true})).toBeEnabled();await other.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(other);
+    const recreated=(await apiRead(other,'/api/request-draft')).data;expect(recreated.draft.id).not.toBe(first.draft.id);expect(recreated.draft.input.detail).toBe('충돌 뒤에도 유지할 입력');
+    const posted=other.waitForResponse(response=>new URL(response.url()).pathname==='/api/commands'&&response.request().method()==='POST');await other.getByRole('button',{name:'신청 등록',exact:true}).click();expect((await posted).status()).toBe(200);
+    expect((await apiRead(other,'/api/request-draft')).data.draft).toBeNull();
+  }finally{await resetRequestDraft(other);await other.close();}
+});
+
+test('draft: a lost save and same-account reauthentication keep the same draft operation and input',async({page})=>{
+  await resetRequestDraft(page);await page.goto('/new');await fields(page,'응답 유실 임시저장');
+  const sent:Record<string,unknown>[]=[];page.on('request',request=>{if(new URL(request.url()).pathname==='/api/request-draft'&&request.method()==='PUT')sent.push(request.postDataJSON());});
+  let lost=false;await page.route('**/api/request-draft',async route=>{if(route.request().method()!=='PUT'||lost)return route.continue();lost=true;expect((await route.fetch()).status()).toBe(200);await route.abort('failed');});
+  await page.getByRole('button',{name:'임시저장',exact:true}).click();await expect(page.getByRole('alert')).toContainText('같은 제출');
+  await expect(page.getByLabel('요청 내용·증상',{exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'신청 등록',exact:true})).toBeDisabled();
+  const committed=(await apiRead(page,'/api/request-draft')).data;
+  await page.unroute('**/api/request-draft');await page.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(page);
+  expect((await apiRead(page,'/api/request-draft')).data.revision).toBe(committed.revision);expect(sent[0]).toEqual(sent[1]);
+  await page.getByLabel('요청 내용·증상',{exact:true}).fill('같은 계정 재인증 뒤 임시저장');
+  const session=(await apiRead(page,'/api/session')).data;expect((await page.request.post('/api/auth/logout',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},data:{}})).status()).toBe(200);
+  await page.getByRole('button',{name:'임시저장',exact:true}).click();await expect(page.getByRole('dialog',{name:'로그인 만료',exact:true})).toBeVisible();
+  await loginWithPopup(page,'requester');await expect(page.getByRole('dialog',{name:'로그인 만료',exact:true})).toHaveCount(0);
+  await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('같은 계정 재인증 뒤 임시저장');
+  await page.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(page);
+  expect(sent.at(-1)).toEqual(sent.at(-2));expect((await apiRead(page,'/api/request-draft')).data.draft.input.detail).toBe('같은 계정 재인증 뒤 임시저장');
+  await resetRequestDraft(page);
+});
+
+test('draft: a meeting may be saved incomplete but restored files are required and consumed with formal registration',async({page},info)=>{
+  await resetRequestDraft(page);await page.goto('/new');
+  await page.getByLabel('요청 유형',{exact:true}).selectOption('회의 지원');await page.getByLabel('회의 유형',{exact:true}).selectOption('화상회의');await page.getByLabel('화상회의 방식',{exact:true}).selectOption('KJCCS');
+  await page.getByLabel('요청 내용·증상',{exact:true}).fill('임시저장 회의');await page.getByLabel('작업 위치',{exact:true}).fill('회의 위치');await page.getByLabel('요청자 군내전화번호',{exact:true}).fill('000-0000');
+  await page.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(page);
+  await page.getByRole('button',{name:'신청 등록',exact:true}).click();await expect(page.getByRole('alert')).toContainText('필수 회의 지원 의뢰서를 첨부하세요.');
+  const bytes=await readFile('frontend/src/preview/fixtures/support.hwp'),name=`draft-meeting-${info.project.name}.hwp`;
+  await page.getByLabel('화상회의 지원 의뢰서',{exact:true}).setInputFiles({name,mimeType:'application/octet-stream',buffer:bytes});await expect(page.getByRole('button',{name:name+' 첨부 제외',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(page);const saved=(await apiRead(page,'/api/request-draft')).data;
+  await page.reload();await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expect(page.getByLabel('회의 유형',{exact:true})).toHaveValue('화상회의');await expect(page.getByRole('button',{name:name+' 첨부 제외',exact:true})).toBeVisible();
+  const response=page.waitForResponse(result=>new URL(result.url()).pathname==='/api/commands'&&result.request().method()==='POST');await page.getByRole('button',{name:'신청 등록',exact:true}).click();
+  const received=await response;expect(received.status()).toBe(200);const result=await received.json();expect(received.request().postDataJSON().payload.draftRef.id).toBe(saved.draft.id);
+  const detail=(await apiRead(page,`/api/requests/${result.requestNumber}`)).data;expect(detail.attachments[0].id).toBe(saved.draft.input.attachments[0].id);expect(detail.status).toBe('대기');expect(detail.workItems).toEqual([]);
+  expect((await apiRead(page,'/api/request-draft')).data.draft).toBeNull();const downloaded=await page.request.get(`/api/attachments/${detail.attachments[0].id}`);expect(downloaded.status()).toBe(200);expect(await downloaded.body()).toEqual(bytes);
+});
+
+test('draft: saved drafts never overwrite request reuse automatically and late saves cannot transfer across accounts',async({page})=>{
+  const inspector={request:await apiRequest.newContext({baseURL:base})};await resetRequestDraft(inspector,'bnoc');const empty=await resetRequestDraft(page);await saveDraftApi(page,draftInput('명시적으로 불러올 저장본'),empty.revision);
+  const number=await seed(page,'과거 요청에서 불러온 내용');await page.goto(`/requests/${number}`);await page.getByRole('button',{name:'새 요청으로 불러오기',exact:true}).click();
+  await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('과거 요청에서 불러온 내용');await expect(page.getByRole('button',{name:'임시저장 불러오기',exact:true})).toBeEnabled();
+  page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('과거 요청에서 불러온 내용');
+  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('명시적으로 불러올 저장본');
+  let release:()=>void=()=>{},started:()=>void=()=>{};const held=new Promise<void>(resolve=>{release=resolve;}),captured=new Promise<void>(resolve=>{started=resolve;});let heldRequest:import('@playwright/test').Request|undefined;
+  await page.route('**/api/request-draft',async route=>{if(route.request().method()!=='PUT')return route.continue();heldRequest=route.request();const response=await route.fetch();expect(response.status()).toBe(200);started();await held;await route.fulfill({response});});
+  try{
+    await page.getByLabel('요청 내용·증상',{exact:true}).fill('이전 계정의 늦은 임시저장');await page.getByRole('button',{name:'임시저장',exact:true}).click();await captured;
+    page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'로그아웃',exact:true}).click();await loginWithPopup(page,'bnoc');await page.getByRole('button',{name:'대리 등록',exact:true}).click();await expect(page.getByRole('button',{name:'임시저장',exact:true})).toBeEnabled();
+    const arrived=page.waitForResponse(response=>response.request()===heldRequest);release();await(await arrived).finished();await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
+    await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('');expect((await apiRead(page,'/api/request-draft')).data.draft).toBeNull();
+    await apiLogin(inspector,'requester');expect((await apiRead(inspector,'/api/request-draft')).data.draft.input.detail).toBe('이전 계정의 늦은 임시저장');
+  }finally{release();await page.unroute('**/api/request-draft');await resetRequestDraft(inspector);await resetRequestDraft(inspector,'bnoc');await inspector.request.dispose();}
+});
+
+test('draft: an unknown formal submission freezes draft actions until the original receipt is recovered even after SAVE_FAILED',async({page})=>{
+  await resetRequestDraft(page);const before=(await apiRead(page,'/api/requests?size=100')).total;await page.goto('/new');await fields(page,'접수 응답 유실 후 초안 조작 방지');await expect(page.getByRole('button',{name:'임시저장',exact:true})).toBeEnabled();
+  const submissions:Record<string,unknown>[]=[];let number='';
+  await page.route('**/api/commands',async route=>{submissions.push(route.request().postDataJSON());if(submissions.length===1){const response=await route.fetch();expect(response.status()).toBe(200);number=(await response.json()).requestNumber;await route.abort('failed');}else if(submissions.length===2)await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({code:'SAVE_FAILED',message:'처리를 확인하지 못했습니다. 같은 제출 번호로 다시 확인하세요.'})});else await route.continue();});
+  await page.getByRole('button',{name:'신청 등록',exact:true}).click();await expect(page.getByRole('alert')).toBeVisible();
+  for(const label of ['임시저장','임시저장 불러오기','임시저장 삭제'])await expect(page.getByRole('button',{name:label,exact:true})).toBeDisabled();await expect(page.getByLabel('요청 내용·증상',{exact:true})).toBeDisabled();
+  await page.getByRole('button',{name:'신청 등록',exact:true}).click();await expect(page.getByRole('alert')).toContainText('같은 제출 번호');await expect(page.getByRole('button',{name:'임시저장',exact:true})).toBeDisabled();
+  await page.getByRole('button',{name:'신청 등록',exact:true}).click();await expect(page.getByRole('heading',{name:'신청 상세',exact:true})).toBeVisible();
+  expect(new URL(page.url()).pathname).toBe(`/requests/${number}`);expect(submissions).toHaveLength(3);expect(submissions[1]).toEqual(submissions[0]);expect(submissions[2]).toEqual(submissions[0]);
+  expect((await apiRead(page,'/api/requests?size=100')).total).toBe(before+1);expect((await apiRead(page,'/api/request-draft')).data.draft).toBeNull();
 });
 
 test('an ordinary HWP attachment opens as original pages and keeps extraction as a secondary view', async ({ page }, info) => {

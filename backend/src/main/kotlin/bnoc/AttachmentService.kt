@@ -100,8 +100,8 @@ class AttachmentService(val db:Database,val query:QueryService,val transaction:T
     fun exists(storedName:String):Boolean { val file=root.resolve(storedName).normalize();return file.startsWith(root) && Files.isRegularFile(file) }
     @Scheduled(fixedDelay=3600000,initialDelay=3600000) fun cleanTemporary() {
         val names=transaction.execute {
-            val rows=db.rows("SELECT attachment_ref,stored_name FROM bnoc_attachments WHERE resource_ref IS NULL AND was_linked=FALSE AND uploaded_at<? FOR UPDATE",Instant.now().minusSeconds(86400).toString())
-            rows.forEach { db.jdbc.update("DELETE FROM bnoc_attachments WHERE attachment_ref=? AND resource_ref IS NULL AND was_linked=FALSE",it["attachment_ref"]) }
+            val rows=db.rows("SELECT attachment_ref,stored_name FROM bnoc_attachments WHERE resource_ref IS NULL AND was_linked=FALSE AND draft_ref IS NULL AND uploaded_at<? FOR UPDATE",Instant.now().minusSeconds(86400).toString())
+            rows.forEach { db.jdbc.update("DELETE FROM bnoc_attachments WHERE attachment_ref=? AND resource_ref IS NULL AND was_linked=FALSE AND draft_ref IS NULL",it["attachment_ref"]) }
             rows.map { it["stored_name"] as String }
         } ?: emptyList()
         names.forEach { name -> runCatching { val file=root.resolve(name).normalize();if(file.startsWith(root)) Files.deleteIfExists(file) } }

@@ -18,6 +18,9 @@ import java.time.ZoneId
 class ApiController(val auth:AuthService,val db:Database,val workflow:WorkflowService,val query:QueryService,val files:AttachmentService,val situation:SituationService,val plannedWorks:PlannedWorkService,val documents:DocumentAnalysisService) {
     private fun actor(request:HttpServletRequest)=auth.actor(request) ?: reject("UNAUTHENTICATED")
     private fun envelope(data:Any?):Map<String,Any?> = mapOf("data" to data,"queriedAt" to Instant.now().toString())
+    @GetMapping("/request-draft") fun requestDraft(request:HttpServletRequest)=envelope(workflow.requestDrafts.get(actor(request)))
+    @PutMapping("/request-draft") fun saveRequestDraft(request:HttpServletRequest,@RequestBody body:Map<String,Any?>)=envelope(workflow.requestDrafts.save(actor(request),body))
+    @DeleteMapping("/request-draft") fun deleteRequestDraft(request:HttpServletRequest,@RequestBody body:Map<String,Any?>)=envelope(workflow.requestDrafts.delete(actor(request),body))
     private fun page(params:Map<String,String>,items:List<Any?>):Map<String,Any?> {
         val page=params["page"]?.toIntOrNull() ?: if(params["page"]==null) 0 else reject("VALIDATION")
         val size=params["size"]?.toIntOrNull() ?: if(params["size"]==null) 20 else reject("VALIDATION")
