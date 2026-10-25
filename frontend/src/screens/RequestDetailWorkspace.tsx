@@ -17,11 +17,13 @@ import { focusFormError, saveFailureMessage } from '../app/formFeedback.mjs';
 import { requestDetailGuidance, requestLocationGuidance } from '../app/requestGuidance.mjs';
 import { StatusBadge, StatusProcess } from '../ui/WorkflowStatus';
 import { AttachmentDocumentDialog } from './AttachmentDocumentDialog';
+import { Button } from '../ui/Button';
 type DetailDraft = { detail: string; location: string; contact: string; personalContact: string; preference1Date: string; preference1Period: string; preference2Date: string; preference2Period: string; documentRef: string; attachments: AttachmentMeta[] };
 const editingInput = (detail: RequestDetail): DetailDraft => ({ detail: detail.detail, location: detail.location, contact: detail.contact ?? '', personalContact: detail.personalContact ?? '', ...schedulePreferenceInput(detail.schedulePreferences), documentRef: detail.documentRef ?? '', attachments: detail.attachments });
-export function RequestDetailWorkspace({ actor, requestNumber, api, teams, run, upload, revision = 0, onBack, onAssigned, initialMessage = '', initialAttachmentId, initialAttachmentSearchTerm, initialAttachmentBlockIndex, initialAttachmentMetadataIndex, onAttachmentOpened }: { actor: Actor; requestNumber: string; api: ApiClient; teams: string[]; run: RunCommand; upload: UploadAttachment; revision?: number; onBack: () => void; onAssigned?: (message: string) => void; initialMessage?: string; initialAttachmentId?: string; initialAttachmentSearchTerm?: string; initialAttachmentBlockIndex?: number; initialAttachmentMetadataIndex?: number; onAttachmentOpened?: () => void }) {
+export function RequestDetailWorkspace({ actor, requestNumber, api, teams, run, upload, revision = 0, onBack, onAssigned, initialMessage = '', initialAttachmentId, initialAttachmentSearchTerm, initialAttachmentBlockIndex, initialAttachmentMetadataIndex, onAttachmentOpened, onReuseRequest }: { actor: Actor; requestNumber: string; api: ApiClient; teams: string[]; run: RunCommand; upload: UploadAttachment; revision?: number; onBack: () => void; onAssigned?: (message: string) => void; initialMessage?: string; initialAttachmentId?: string; initialAttachmentSearchTerm?: string; initialAttachmentBlockIndex?: number; initialAttachmentMetadataIndex?: number; onAttachmentOpened?: () => void; onReuseRequest?: (number:string)=>Promise<void> }) {
   const result = useResource<RequestDetail>(signal => api.getRequestDetail(requestNumber, signal), [api, actor.id, requestNumber, revision]);
   const detail = result.data;
+  const [reusing,setReusing]=useState(false);
   const [selected, setSelected] = useState<string[]>([]), [reassignment, setReassignment] = useState<Record<string,string[]>>({}), [addingTeams,setAddingTeams]=useState<string[]>([]);
   const [priorityDraft, setPriorityDraft] = useState<string|null>(null), [editingPriority,setEditingPriority]=useState(false), [editing, setEditing] = useState(false), [draft, setDraft] = useState<DetailDraft | null>(null), [draftRevision, setDraftRevision] = useState(0);
   const [assignmentRevision,setAssignmentRevision] = useState<number | null>(null), [priorityRevision,setPriorityRevision] = useState<number | null>(null), [reassignmentRevisions,setReassignmentRevisions] = useState<Record<string,number>>({});
@@ -38,6 +40,13 @@ export function RequestDetailWorkspace({ actor, requestNumber, api, teams, run, 
   const dirty = (editing && !!draft && !!detail && JSON.stringify(draft) !== JSON.stringify(editingInput(detail))) || selected.length > 0 || addingTeams.length>0 || Object.values(reassignment).some(items => items.length > 0) || (!!priorityDraft && priorityDraft!==detail?.priority) || !!rejectionReason.trim();
   useUnsavedChanges(dirty);
   const clearFeedback = () => { setErrors({}); setMessage(''); setFailed(false); };
+  const reuse=async()=>{
+    if(!detail || !onReuseRequest || reusing)return;
+    setReusing(true);clearFeedback();
+    try{await onReuseRequest(detail.requestNumber);}
+    catch(error){setMessage(errorMessage(error instanceof Error?error:new Error('이전 요청을 불러오지 못했습니다.')));setFailed(true);}
+    finally{setReusing(false);}
+  };
   const changeDraft = (next: DetailDraft) => { setDraft(next); clearFeedback(); };
   const act = async (type: string, payload: Record<string,unknown>, workNumber?: string, expectedRevision = detail?.revision, form?: HTMLElement) => {
     if (!detail) return;
@@ -83,6 +92,7 @@ export function RequestDetailWorkspace({ actor, requestNumber, api, teams, run, 
   return <><button className="back" onClick={onBack}>신청 목록</button><ResourceStatus loading={result.loading} error={result.error} retry={result.reload} />
     {detail && <><div className="page-head"><div><small>요청 번호 {detail.requestNumber} · 등록 {displayTime(detail.registeredAt)}</small><h1>신청 상세</h1></div><StatusBadge status={detail.status} afterAction={detail.workItems.length>0&&detail.workItems.every(work=>work.origin==='after-action')} departments={detail.teamIds} /></div>
     <StatusProcess status={detail.status} afterAction={detail.workItems.length>0&&detail.workItems.every(work=>work.origin==='after-action')} />
+    {actor.role==='requester'&&detail.canReuse&&onReuseRequest&&<div className="actions"><Button disabled={reusing||result.loading} onClick={()=>void reuse()}>{reusing?'불러오는 중…':'새 요청으로 불러오기'}</Button></div>}
     {actor.role==='team'&&detail.workItems.filter(work=>work.teamId===actor.teamId&&!work.resolved).map(work=><StatusProcess key={work.workNumber} status={work.status} work afterAction={work.origin==='after-action'} />)}
     {message && <p ref={feedbackRef} tabIndex={-1} role={failed ? 'alert' : 'status'} className={failed ? 'error' : 'notice'}>{message}</p>}
     {dirty && !message && <p className="draft-status" role="status">요청 {detail.requestNumber}에 저장하지 않은 변경이 있습니다.</p>}

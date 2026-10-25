@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ErrorCode, ServerSession, ViewCommandResult, SituationSnapshot } from '../types';
+import type { ErrorCode, ServerSession, ViewCommandResult, SituationSnapshot, RequestDetail } from '../types';
 import { ApiClient, ApiError } from '../api/apiClient.mjs';
 import { errorMessage } from './useResource';
 import { UnsavedChangesContext } from './useUnsavedChanges';
-import { RequestRegistrationForm, type RunCommand } from '../screens/RequestRegistrationForm';
+import { RequestRegistrationForm, initialInput, type RequestInput, type RunCommand } from '../screens/RequestRegistrationForm';
+import { requestReuseFields } from './requestReuse.mjs';
 import { AfterActionReportForm } from '../screens/AfterActionReportForm';
 import { RequestListAndSearch } from '../screens/RequestListAndSearch';
 import { RequestDetailWorkspace } from '../screens/RequestDetailWorkspace';
@@ -33,7 +34,9 @@ export function App() {
   const [session,setSession] = useState<ServerSession | null>(null), [loading,setLoading] = useState(true), [sessionError,setSessionError] = useState('');
   const [expired,setExpired] = useState(false), [route,setRoute] = useState(routeFromPath), [revision,setRevision] = useState(0), [notice,setNotice] = useState('');
   const [globalContext,setGlobalContext]=useState<GlobalContext>(emptyGlobalContext);
+  const requestContextVersion=useRef(0);
   const [routeReceipt,setRouteReceipt] = useState<{path:string;message:string} | null>(null);
+  const [requestDraft,setRequestDraft]=useState<{key:string;actorId:string;sourceNumber:string;input:RequestInput}|null>(null);
   const [attachmentNavigation,setAttachmentNavigation] = useState<{requestNumber:string;attachmentId:string;searchTerm?:string;blockIndex?:number|null;metadataIndex?:number|null}|null>(null);
   const sessionRef = useRef<ServerSession | null>(null), expiredRef = useRef(false), dirty = useRef(new Set<string>()), blocked = useRef(new Set<string>()), routeRef = useRef(route);
   const expiryDialog = useRef<HTMLDialogElement | null>(null);
@@ -50,6 +53,8 @@ export function App() {
       await api.logout(); setNotice('입력을 유지했습니다. 이전 사용자로 다시 로그인하세요.'); expiredRef.current = true; setExpired(true); return;
     }
     const changedUser = sessionRef.current?.actor.id !== next.actor.id;
+    requestContextVersion.current++;
+    if(changedUser || sessionRef.current?.actor.role!==next.actor.role) setRequestDraft(null);
     if (sessionRef.current && changedUser) clearPendingPlannedCreateRecovery();
     if (changedUser) setRouteReceipt(null);
     if (changedUser) setGlobalContext(emptyGlobalContext);
@@ -72,7 +77,7 @@ export function App() {
       const next = routeFromPath();
       if (blocked.current.size > 0) { window.history.pushState({},'', routeUrl(routeRef.current)); setNotice('저장 결과를 계획 화면에서 확인한 뒤 이동할 수 있습니다.'); return; }
       if (dirty.current.size > 0 && !window.confirm('저장하지 않은 입력이 있습니다. 페이지를 이동할까요?')) { window.history.pushState({},'', routeUrl(routeRef.current)); return; }
-      routeRef.current = next; setRoute(next); setNotice(''); setRouteReceipt(null);
+      requestContextVersion.current++;routeRef.current = next; setRoute(next); setNotice(''); setRouteReceipt(null);setRequestDraft(null);
     };
     const leave = (event: BeforeUnloadEvent) => { if (dirty.current.size > 0) { event.preventDefault(); event.returnValue = ''; } };
     window.addEventListener('popstate',pop); window.addEventListener('beforeunload',leave);
@@ -80,12 +85,23 @@ export function App() {
   }, []);
   useEffect(() => { if (expired && expiryDialog.current && !expiryDialog.current.open) expiryDialog.current.showModal(); else if (!expired) expiryDialog.current?.close(); }, [expired]);
   const go = useCallback((path: string, saved = false, serverDetail = false) => {
-    if (path === routeRef.current && !serverDetail) return;
-    if (!saved && blocked.current.size > 0) { setNotice('저장 결과를 계획 화면에서 확인한 뒤 이동할 수 있습니다.'); return; }
-    if (!saved && dirty.current.size > 0 && !window.confirm('저장하지 않은 입력이 있습니다. 페이지를 이동할까요?')) return;
-    if (serverDetail && surveyPreview) { window.location.assign('/' + path); return; }
-    window.history.pushState({},'', routeUrl(path)); routeRef.current = path; setRoute(path); setNotice(''); setRouteReceipt(null); window.scrollTo(0,0);
+    if (path === routeRef.current && !serverDetail) return false;
+    if (!saved && blocked.current.size > 0) { setNotice('저장 결과를 계획 화면에서 확인한 뒤 이동할 수 있습니다.'); return false; }
+    if (!saved && dirty.current.size > 0 && !window.confirm('저장하지 않은 입력이 있습니다. 페이지를 이동할까요?')) return false;
+    requestContextVersion.current++;
+    if (serverDetail && surveyPreview) { window.location.assign('/' + path); return true; }
+    window.history.pushState({},'', routeUrl(path)); routeRef.current = path; setRoute(path); setNotice(''); setRouteReceipt(null); setRequestDraft(null);window.scrollTo(0,0);
+    return true;
   }, []);
+  const reuseRequest=useCallback(async(number:string)=>{
+    const current=sessionRef.current,sourceRoute=routeRef.current,contextVersion=requestContextVersion.current;
+    if(!current || current.actor.role!=='requester' || expiredRef.current) throw new Error('다시 로그인한 뒤 불러오세요.');
+    const source=await api.getRequestDetail(number) as RequestDetail;
+    if(requestContextVersion.current!==contextVersion || sessionRef.current?.actor.id!==current.actor.id || sessionRef.current?.actor.role!==current.actor.role || routeRef.current!==sourceRoute || expiredRef.current) return;
+    if(!source.canReuse) throw new Error('본인이 직접 작성한 요청만 불러올 수 있습니다.');
+    const input={...initialInput(current.actor),...requestReuseFields(source)} as RequestInput;
+    if(go('new')) setRequestDraft({key:crypto.randomUUID(),actorId:current.actor.id,sourceNumber:number,input});
+  },[go]);
   const openSaved = (path:string,message?:string) => { go(path,true); setRouteReceipt(message ? {path,message} : null); };
   const run: RunCommand = useCallback(async (type,payload,target,expectedRevision,operationId) => {
     if (expiredRef.current || !sessionRef.current) return { ok:false,errorCode:'UNAUTHENTICATED',message:'다시 로그인한 뒤 저장을 눌러주세요. 입력은 유지됩니다.' };
@@ -126,7 +142,7 @@ export function App() {
   const logout = async () => {
     if (blocked.current.size > 0) { setNotice('저장 결과를 계획 화면에서 확인한 뒤 로그아웃할 수 있습니다.'); return; }
     if (dirty.current.size > 0 && !window.confirm('저장하지 않은 입력이 있습니다. 로그아웃할까요?')) return;
-    try { await api.logout(); clearPendingPlannedCreateRecovery(); sessionRef.current = null; setSession(null);setGlobalContext(emptyGlobalContext); expiredRef.current = false; setExpired(false); dirty.current.clear(); setNotice(''); setRouteReceipt(null); setRoute('requests'); routeRef.current = 'requests'; window.history.replaceState({},'', '/requests'); }
+    try { await api.logout(); clearPendingPlannedCreateRecovery(); requestContextVersion.current++;setRequestDraft(null);sessionRef.current = null; setSession(null);setGlobalContext(emptyGlobalContext); expiredRef.current = false; setExpired(false); dirty.current.clear(); setNotice(''); setRouteReceipt(null); setRoute('requests'); routeRef.current = 'requests'; window.history.replaceState({},'', '/requests'); }
     catch (error) { setNotice(errorMessage(error instanceof Error ? error : new Error('로그아웃하지 못했습니다.'))); }
   };
   if (loading && !session) return <main><p role="status">서비스 상태를 확인하는 중…</p></main>;
@@ -149,8 +165,8 @@ export function App() {
   const onOpen = (number: string) => go('requests/' + encodeURIComponent(number),false,true);
   const forbidden = <section className="card"><h1>접근 권한이 없습니다</h1><p>현재 사용자의 허용 범위를 확인하세요.</p><button onClick={() => go('operations')}>부서별 작업 현황</button></section>;
   let content;
-  if (route.startsWith('requests/')) { const requestNumber=decodeURIComponent(route.slice('requests/'.length));content = <RequestDetailWorkspace key={route} actor={actor} requestNumber={requestNumber} api={api} teams={session.teams} run={run} upload={upload} revision={revision} onBack={() => go('requests')} onAssigned={message => openSaved('overview',message)} initialMessage={routeReceipt?.path === route ? routeReceipt.message : undefined} initialAttachmentId={attachmentNavigation?.requestNumber===requestNumber?attachmentNavigation.attachmentId:undefined} initialAttachmentSearchTerm={attachmentNavigation?.requestNumber===requestNumber?attachmentNavigation.searchTerm:undefined} initialAttachmentBlockIndex={attachmentNavigation?.requestNumber===requestNumber?attachmentNavigation.blockIndex??undefined:undefined} initialAttachmentMetadataIndex={attachmentNavigation?.requestNumber===requestNumber?attachmentNavigation.metadataIndex??undefined:undefined} onAttachmentOpened={()=>setAttachmentNavigation(null)} />; }
-  else if (route === 'new') content = actor.role === 'requester' || actor.role === 'bnoc' ? <RequestRegistrationForm actor={actor} run={run} upload={upload} getRequesters={loadRequesters} onSaved={(number,message) => openSaved('requests/' + encodeURIComponent(number),message)} /> : forbidden;
+  if (route.startsWith('requests/')) { const requestNumber=decodeURIComponent(route.slice('requests/'.length));content = <RequestDetailWorkspace key={route} onReuseRequest={reuseRequest} actor={actor} requestNumber={requestNumber} api={api} teams={session.teams} run={run} upload={upload} revision={revision} onBack={() => go('requests')} onAssigned={message => openSaved('overview',message)} initialMessage={routeReceipt?.path === route ? routeReceipt.message : undefined} initialAttachmentId={attachmentNavigation?.requestNumber===requestNumber?attachmentNavigation.attachmentId:undefined} initialAttachmentSearchTerm={attachmentNavigation?.requestNumber===requestNumber?attachmentNavigation.searchTerm:undefined} initialAttachmentBlockIndex={attachmentNavigation?.requestNumber===requestNumber?attachmentNavigation.blockIndex??undefined:undefined} initialAttachmentMetadataIndex={attachmentNavigation?.requestNumber===requestNumber?attachmentNavigation.metadataIndex??undefined:undefined} onAttachmentOpened={()=>setAttachmentNavigation(null)} />; }
+  else if (route === 'new') content = actor.role === 'requester' || actor.role === 'bnoc' ? <RequestRegistrationForm key={requestDraft?.key ?? actor.id} initialDraft={requestDraft?.actorId===actor.id?requestDraft.input:null} sourceRequestNumber={requestDraft?.actorId===actor.id?requestDraft.sourceNumber:undefined} actor={actor} run={run} upload={upload} getRequesters={loadRequesters} onSaved={(number,message) => openSaved('requests/' + encodeURIComponent(number),message)} /> : forbidden;
   else if (route === 'after-action') content = actor.role === 'team' ? <AfterActionReportForm actor={actor} run={run} upload={upload} onSaved={(number,message) => openSaved('requests/' + encodeURIComponent(number),message)} /> : forbidden;
   else if (route === 'schedule') content = actor.role === 'bnoc' || actor.role === 'team' ? <TeamScheduleView actor={actor} query={api} revision={revision} onOpen={onOpen} /> : forbidden;
   else if (route === 'overview') content = actor.role === 'bnoc' ? <BnocOverviewView query={api} teams={session.teams} revision={revision} onOpen={onOpen} initialMessage={routeReceipt?.path === route ? routeReceipt.message : undefined} /> : forbidden;

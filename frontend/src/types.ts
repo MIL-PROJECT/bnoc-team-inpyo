@@ -48,6 +48,7 @@ export interface WorkItemView {
   assignedPersons?: RosterPerson[]; assignedPersonRefs?: string[]; origin?: 'assigned' | 'after-action'
 }
 export interface RequestDetail extends RequestSummary {
+  canReuse?: boolean;
   detail: string; location: string; contact?: string; personalContact?: string | null; subcategories: Request['subcategories']; equipmentId?: string;
   maintenanceTarget?: MaintenanceTarget; schedulePreferences: SchedulePreference[]; documentRef?: string; registeredBy: string;
   registeredAt: string; revision: number; workItems: WorkItemView[]; attachments: AttachmentMeta[]; history: HistoryView[]; assignedAt?: string; canEdit?: boolean; canCancel?: boolean; canAssign?: boolean; canReject?: boolean; canAddTeams?: boolean; canChangePriority?: boolean; rejectionReason?: string | null; rejectedAt?: string | null
