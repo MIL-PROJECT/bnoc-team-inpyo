@@ -233,13 +233,21 @@ test('reuse a closed own request as an unsaved new application without copying i
   const before=(await apiRead(page,`/api/requests/${created.requestNumber}`)).data;
   const count=(await apiRead(page,'/api/requests?size=100')).total;
   await page.goto(`/requests/${created.requestNumber}`);
-  await page.getByRole('button',{name:'새 요청으로 불러오기',exact:true}).click();
+  const reuseButton=page.getByRole('button',{name:'새 요청으로 불러오기',exact:true});
+  await expect(reuseButton).toBeVisible();
+  await page.getByRole('button',{name:'신청 목록',exact:true}).focus();
+  for(let step=0;step<16;step++){
+    await page.keyboard.press('Tab');
+    if(await reuseButton.evaluate(element=>element===document.activeElement))break;
+  }
+  await expect(reuseButton,'reuse action is reachable by Tab').toBeFocused();
+  await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/\/new$/);
   await expect(page.getByRole('status').filter({hasText:'새 신청 초안'})).toContainText(String(created.requestNumber));
   await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue(originalText);
   await expect(page.getByLabel('작업 위치',{exact:true})).toHaveValue('반복 업무 위치');
   await expect(page.getByLabel('체계 종류',{exact:true})).toHaveValue('인트라넷');
-  await expect(page.getByLabel('개인전화번호',{exact:true})).toHaveValue('000-0000-0000');
+  await expect(page.getByLabel('요청자 개인전화번호',{exact:true})).toHaveValue('000-0000-0000');
   await page.getByText('선택 정보',{exact:true}).click();
   await expect(page.getByLabel('1지망 날짜',{exact:true})).toHaveValue('');
   await expect(page.getByLabel('2지망 날짜',{exact:true})).toHaveValue('');
@@ -250,7 +258,13 @@ test('reuse a closed own request as an unsaved new application without copying i
   await screenshot(page,info,'reuse-closed-request-draft');
   await page.getByLabel('요청 내용·증상',{exact:true}).fill(originalText+' 새 신청');
   const submitted=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/commands'&&response.request().method()==='POST');
-  await page.getByRole('button',{name:'신청 등록',exact:true}).click();
+  const submitButton=page.getByRole('button',{name:'신청 등록',exact:true});
+  for(let step=0;step<30;step++){
+    await page.keyboard.press('Tab');
+    if(await submitButton.evaluate(element=>element===document.activeElement))break;
+  }
+  await expect(submitButton,'new request submit is reachable by Tab').toBeFocused();
+  await page.keyboard.press('Enter');
   const response=await submitted;expect(response.status()).toBe(200);const saved=await response.json();
   expect(saved.requestNumber).not.toBe(created.requestNumber);
   const payload=response.request().postDataJSON().payload;
@@ -264,11 +278,11 @@ test('reuse respects unsaved navigation cancellation and clears its draft after 
   const number=await seed(page,'저장된 원본 내용');
   await apiLogin(page,'requester');await page.goto(`/requests/${number}`);
   await page.getByRole('button',{name:'내용 수정',exact:true}).click();
-  await page.getByLabel('요청 내용·증상',{exact:true}).fill('아직 저장하지 않은 상세 편집');
+  await page.getByLabel('내용',{exact:true}).fill('아직 저장하지 않은 상세 편집');
   page.once('dialog',dialog=>dialog.dismiss());
   await page.getByRole('button',{name:'새 요청으로 불러오기',exact:true}).click();
   await expect(page).toHaveURL(new RegExp('/requests/'+number+'$'));
-  await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('아직 저장하지 않은 상세 편집');
+  await expect(page.getByLabel('내용',{exact:true})).toHaveValue('아직 저장하지 않은 상세 편집');
   page.once('dialog',dialog=>dialog.accept());
   await page.getByRole('button',{name:'새 요청으로 불러오기',exact:true}).click();
   await expect(page).toHaveURL(/\/new$/);
@@ -283,9 +297,10 @@ test('reuse respects unsaved navigation cancellation and clears its draft after 
   await expect(page.getByRole('status').filter({hasText:'새 신청 초안'})).toHaveCount(0);
 });
 
-test('reuse does not transfer a stale response or another account proxy request into a new draft', async ({ page }) => {
+test('reuse does not transfer a stale response or an owned proxy request into a new draft', async ({ page }) => {
   const number=await seed(page,'늦게 도착하는 원본');
-  await apiLogin(page,'requester');await page.goto(`/requests/${number}`);
+  const owner=await apiLogin(page,'requester');await page.goto(`/requests/${number}`);
+  await expect(page.getByRole('button',{name:'새 요청으로 불러오기',exact:true})).toBeVisible();
   let release:()=>void=()=>{};const held=new Promise<void>(resolve=>{release=resolve;});
   let started:()=>void=()=>{};const requested=new Promise<void>(resolve=>{started=resolve;});
   let holding=false;
@@ -304,9 +319,12 @@ test('reuse does not transfer a stale response or another account proxy request 
   await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('');
   await page.unroute(`**/api/requests/${number}`);
   await apiLogin(page,'bnoc');
-  const requester=(await apiRead(page,'/api/requesters')).data.items[0];
+  const requester=(await apiRead(page,'/api/requesters')).data.find((item:{requesterRef:string})=>item.requesterRef===owner.actor.id);
+  expect(requester,'the proxy request belongs to the same requester').toBeTruthy();
   const proxy=await command(page,'createRequest',{...requestPayload('대리 작성 요청'),requesterRef:requester.requesterRef});
+  await apiLogin(page,'requester');
   await page.goto(`/requests/${proxy.requestNumber}`);
+  await expect(page.getByRole('button',{name:'내용 수정',exact:true})).toBeVisible();
   await expect(page.getByRole('button',{name:'새 요청으로 불러오기',exact:true})).toHaveCount(0);
 });
 
