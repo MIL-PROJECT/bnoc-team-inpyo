@@ -38,18 +38,18 @@ class PersonalContactContractTest {
 
     private fun create():String = command(requester,"createRequest",payload=mapOf(
         "category" to "장비/체계","subcategories" to mapOf("systemType" to "인터넷","resourceType" to "PC","workType" to "고장"),
-        "detail" to "화면 오류","location" to "사무실","contact" to "군내 1234","personalContact" to "010-0000-0000"
+        "detail" to "화면 오류","location" to "사무실","contact" to "1234","personalContact" to "010-0000-0000"
     )).requestNumber!!
 
     @Test fun `optional phone accepts omission and enforces the existing text limit`() {
-        val payload=mapOf("category" to "장비/체계","subcategories" to mapOf("systemType" to "인터넷","resourceType" to "PC","workType" to "고장"),"detail" to "화면 오류","location" to "사무실","contact" to "군내 1234")
+        val payload=mapOf("category" to "장비/체계","subcategories" to mapOf("systemType" to "인터넷","resourceType" to "PC","workType" to "고장"),"detail" to "화면 오류","location" to "사무실","contact" to "1234")
         val number=command(requester,"createRequest",payload=payload).requestNumber!!
         assertNull(db.request(number)!!.personalContact)
-        for(value in listOf("문자만 입력","123-abc-4567","123456")) {
+        for(value in listOf("문자만 입력","123-abc-4567","123456","+82 10 1234 5678","010(1234)5678")) {
             val invalid=assertThrows(BusinessFailure::class.java) { command(requester,"createRequest",payload=payload+mapOf("personalContact" to value)) }
             assertEquals("VALIDATION",invalid.code)
         }
-        assertEquals("+82 10 1234 5678",db.request(command(requester,"createRequest",payload=payload+mapOf("personalContact" to "+82 10 1234 5678")).requestNumber!!)!!.personalContact)
+        assertEquals("821012345678",db.request(command(requester,"createRequest",payload=payload+mapOf("personalContact" to "821012345678")).requestNumber!!)!!.personalContact)
         val invalid=assertThrows(BusinessFailure::class.java) { command(requester,"createRequest",payload=payload+mapOf("personalContact" to "0".repeat(51))) }
         assertEquals("VALIDATION",invalid.code)
         assertEquals("VALIDATION",assertThrows(BusinessFailure::class.java) { command(wireless,"createAfterActionReport",payload=mapOf("personalContact" to "010-0000-0000")) }.code)

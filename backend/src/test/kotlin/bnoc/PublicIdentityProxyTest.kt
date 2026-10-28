@@ -40,7 +40,7 @@ class PublicIdentityProxyTest {
         }
         server.start()
         auth=AuthService(db,"competition","http://127.0.0.1:${server.address.port}","test-mock-secret-at-least-24-characters","https://bnoc.example").also { it.validate() }
-        val api=ApiController(auth,db,mock(WorkflowService::class.java),mock(QueryService::class.java),mock(AttachmentService::class.java),mock(SituationService::class.java),mock(PlannedWorkService::class.java),mock(DocumentAnalysisService::class.java))
+        val api=ApiController(auth,db,mock(WorkflowService::class.java),mock(QueryService::class.java),mock(AttachmentService::class.java),mock(SituationService::class.java),mock(OperationsStatusService::class.java),mock(PlannedWorkService::class.java),mock(DocumentAnalysisService::class.java))
         mvc=MockMvcBuilders.standaloneSetup(PublicIdentityController(api)).setControllerAdvice(ApiErrors()).addFilters<StandaloneMockMvcBuilder>(PublicIdentityBoundaryFilter(api)).build()
     }
     @AfterEach fun cleanup() { server.stop(0) }

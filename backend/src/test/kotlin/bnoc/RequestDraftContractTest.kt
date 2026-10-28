@@ -86,7 +86,8 @@ class RequestDraftContractTest {
         assertEquals(1,db.rows("SELECT * FROM bnoc_attachments WHERE attachment_ref=?",id).size,"DRAFT_ATTACHMENT_MUST_SURVIVE_CLEANUP")
         val stored=db.rows("SELECT * FROM bnoc_attachments WHERE attachment_ref=?",id).single()
         assertTrue(Files.exists(root.resolve(stored["stored_name"] as String)))
-        assertEquals("NOT_FOUND",assertThrows(BusinessFailure::class.java){files.download(owner,id)}.code)
+        assertArrayEquals("draft bytes".toByteArray(),files.download(owner,id).second,"OWN_DRAFT_ATTACHMENT_PREVIEW_REQUIRED")
+        assertEquals("NOT_FOUND",assertThrows(BusinessFailure::class.java){files.download(other,id)}.code)
         assertThrows(BusinessFailure::class.java){create(payload()+mapOf("attachments" to listOf(mapOf("id" to id))))}
         assertEquals("FORBIDDEN",assertThrows(BusinessFailure::class.java){save(other,value=input()+mapOf("attachments" to listOf(file)))}.code)
         val result=create(payload()+mapOf("attachments" to listOf(mapOf("id" to id)),"draftRef" to reference(saved)))

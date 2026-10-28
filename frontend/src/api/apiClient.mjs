@@ -56,8 +56,9 @@ export class ApiClient {
   getHistory(number, signal, criteria = {}) { return this.query('/requests/' + encodeURIComponent(number) + '/history' + queryString(criteria), signal, ['items']); }
   getNotifications(signal, criteria = {}) { return this.query('/notifications' + queryString(criteria), signal, ['items']); }
   getNotificationUnseen(signal) { return this.query('/notifications/unseen', signal); }
-  getTeamSchedule(range = {}, signal) { return this.query('/schedule' + queryString(range), signal, ['entries','unscheduled']); }
+  getTeamSchedule(range = {}, signal) { return this.query('/schedule' + queryString(range), signal, ['entries','completedRecords','unscheduled','plans']); }
   getBnocOverview(criteria = {}, signal) { return this.query('/overview' + queryString(criteria), signal, ['list']); }
+  getDepartmentContacts(signal) { return this.query('/department-contacts', signal, ['items']); }
   getWorkOverview(criteria = {}, signal) { return this.query('/work-overview' + queryString(criteria), signal, ['items','byDepartment']); }
   getPlannedWorks(workDate, signal) { return this.query('/planned-works' + queryString({ workDate }), signal, ['inProgress','completed']); }
   async createPlannedWork(input) { return (await this.send('/planned-works', { method: 'POST', body: JSON.stringify(input) })).data; }
@@ -67,7 +68,9 @@ export class ApiClient {
   getRoster(department, signal) { return this.query('/personnel-roster' + queryString({ department }), signal, ['entries']); }
   getPersonnel(criteria = {}, signal) { return this.query('/personnel' + queryString(criteria), signal, ['departments']); }
   getNightDuty(criteria = {}, signal) { return this.query('/night-duty' + queryString(criteria), signal, ['departments']); }
+  getDutySchedules(criteria = {}, signal) { return this.query('/duty-schedules' + queryString(criteria), signal, ['entries']); }
   getSituation(signal) { return this.query('/situation', signal); }
+  getOperationsStatus(signal) { return this.query('/operations/status', signal); }
   getNotices(criteria = {}, signal) { return this.query('/notices' + queryString(criteria), signal, ['items']); }
   getNotice(ref, signal) { return this.query('/notices/' + encodeURIComponent(ref), signal); }
   getAccess(signal, criteria = {}) { return this.query('/access-assignments' + queryString(criteria), signal, ['items']); }

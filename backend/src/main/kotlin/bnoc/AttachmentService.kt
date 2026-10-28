@@ -74,7 +74,9 @@ class AttachmentService(val db:Database,val query:QueryService,val transaction:T
     fun download(actor:Actor,ref:String):Pair<Map<String,Any?>,ByteArray> = transaction.execute {
         val row=db.rows("SELECT * FROM bnoc_attachments WHERE attachment_ref=?",ref).firstOrNull() ?: reject("NOT_FOUND")
         val resource=row["resource_ref"] as? String
-        if(resource==null) reject("NOT_FOUND")
+        if(resource==null) {
+            if(row["resource_kind"]!="request" || row["owner_subject"]!=actor.id || row["was_linked"]!=false) reject("NOT_FOUND")
+        }
         else if(row["resource_kind"]=="request") query.requireRequest(actor,resource)
         else if(row["resource_kind"]=="notice") { if(db.jdbc.queryForObject("SELECT COUNT(*) FROM bnoc_notices WHERE notice_ref=?",Int::class.java,resource)!=1) reject("NOT_FOUND") }
         else reject("NOT_FOUND")
@@ -94,7 +96,7 @@ class AttachmentService(val db:Database,val query:QueryService,val transaction:T
         val byteSize=(data.first["byte_size"] as? Number)?.toLong() ?: reject("NOT_FOUND")
         if(data.first["resource_kind"]!="request") reject("VALIDATION",mapOf("attachment" to "이 문서는 페이지 보기 대상이 아닙니다."))
         val extension=fileName.substringAfterLast('.',"").lowercase()
-        if(extension !in setOf("hwp","docx") || byteSize !in 1..(10L*1024*1024) || !validFormat(extension,data.second)) reject("VALIDATION",mapOf("attachment" to "유효한 HWP 또는 DOCX 원본만 페이지 보기로 열 수 있습니다."))
+        if(extension !in setOf("hwp","hwpx","docx") || byteSize !in 1..(10L*1024*1024) || !validFormat(extension,data.second)) reject("VALIDATION",mapOf("attachment" to "유효한 HWP, HWPX 또는 DOCX 원본만 페이지 보기로 열 수 있습니다."))
         return data
     }
     fun exists(storedName:String):Boolean { val file=root.resolve(storedName).normalize();return file.startsWith(root) && Files.isRegularFile(file) }

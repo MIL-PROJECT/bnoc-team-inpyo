@@ -1,0 +1,224 @@
+/* Hallmark v2.0.0 · shape: app screen · theme: BNOC (brand) · scope: app · redesign: full · signature: department roster and duty calendar · copy: verbatim */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V3 · weakest: V, retain familiar calendar cells and strengthen roster grouping instead of adding ornament. */
+/* Hallmark · answered F4 · selected personnel categories and duty dates use colour to identify the active view; they are not competing submit actions. */
+/* User contract: monthly duty keeps its existing viewport containment; mobile support is excluded. */
+/* Hallmark · dismissed 3 · existing calendar entry stripe communicates a real scheduled assignment; task groups use flat rules. */
+.main-preview-stack { display: grid; gap: var(--space-4); }
+.main-preview-status-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.main-preview-status-row .card { display: grid; gap: .4rem; }
+.main-preview-status-row strong { font-size: 1.05rem; }
+.main-preview-group-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+.main-preview-status-list,.main-preview-list { padding: 0; margin: var(--space-4) 0 0; list-style: none; }
+.main-preview-status-list li,.main-preview-list li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: .55rem 0; border-top: 1px solid var(--color-divider); }
+.main-preview-list small { display: block; }
+.main-preview-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem; }
+.main-preview .card { min-width: 0; }
+.main-preview .actions button[aria-pressed=true] { border-color: var(--color-primary); color: var(--color-primary); }
+.main-preview-days { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+.main-preview-days>span { display: inline-flex; align-items: center; gap: .35rem; border: 1px solid var(--color-divider); padding: var(--space-1) .4rem; }
+.main-preview-calendar { display: grid; gap: .35rem; margin-top: var(--space-4); }
+.main-preview-calendar--week,.main-preview-calendar--month { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.main-preview-weekday { padding: .3rem .6rem; text-align: center; background: var(--color-neutral-bg); font-size: .85rem; }
+.main-preview-calendar-empty { background: var(--color-bg); }
+.main-preview-calendar-day { min-width: 0; min-height: 7rem; padding: .6rem; border: 1px solid var(--color-divider); background: var(--color-surface); overflow-wrap: anywhere; }
+.main-preview-calendar--day .main-preview-calendar-day { min-height: 10rem; }
+.main-preview-calendar-day>strong { display: block; font-size: .85rem; }
+.main-preview-calendar-item { display: grid; gap: .15rem; margin-top: .45rem; padding: .35rem; background: var(--color-info-bg); border-left: 3px solid var(--color-primary); font-size: .8rem; }
+.main-preview-calendar-item small { font-size: .75rem; }
+
+.personnel-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: .9rem; }
+.personnel-toolbar>.field { flex: 0 1 165px; }
+.personnel-toolbar>.personnel-search { flex: 1 1 210px; }
+.personnel-tools { margin-left: auto; }
+.personnel-categories { display: flex; gap: var(--space-2); }
+.personnel-categories button[aria-pressed="true"],.duty-toolbar button[aria-pressed="true"],.duty-slots button[aria-pressed="true"] { border-color: var(--color-primary); color: var(--color-primary); background: var(--color-info-bg); }
+.personnel-editor { display: grid; gap: var(--space-4); }
+.personnel-inputs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+.personnel-department .row-head { align-items: center; margin-bottom: .7rem; }
+.personnel-department h2 { margin: 0; }
+.personnel-department table { table-layout: fixed; }
+.personnel-department td { overflow-wrap: anywhere; }
+.personnel-department th:first-child { width: 15%; }
+.personnel-department th:last-child { width: 28%; }
+.personnel-group th { text-align: left; background: var(--color-neutral-bg); color: var(--color-text); }
+.personnel-group th span { color: var(--color-muted); font-size: .85rem; font-weight: 400; margin-left: .4rem; }
+.personnel-absence { display: block; color: var(--color-warning); }
+.duty-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .6rem var(--space-4); }
+.duty-role-note { margin: var(--space-1) 0 0; color: var(--color-muted); font-size: .88rem; }
+.duty-view-tabs { display: flex; gap: var(--space-1); padding: 0; border: 0; background: transparent; }
+.duty-view-tabs .ui-button { min-width: 2.5rem; }
+.duty-month { width: 180px; }
+.duty-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 340px; align-items: start; gap: var(--space-4); }
+.duty-calendar-panel { padding: var(--space-3); }
+.duty-calendar { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .3rem; }
+.duty-weekday { text-align: center; font-weight: 600; padding: var(--space-2) 0; color: var(--color-muted); }
+.duty-weekday:nth-child(7) { color: var(--color-danger); }
+.duty-day.ui-button { --control-size: auto; display: flex; flex-direction: column; align-items: stretch; justify-content: start; min-width: 0; min-height: 112px; padding: .6rem .45rem; text-align: left; border-color: var(--color-divider); }
+.duty-day[aria-pressed="true"] { border-color: var(--color-primary); background: var(--color-info-bg); box-shadow: inset 0 0 0 1px var(--color-primary); }
+.duty-day--today .duty-day-number { color: var(--color-primary); }
+.duty-day--conflict { background: var(--color-warning-bg); }
+.duty-day-number { display: flex; justify-content: space-between; align-items: center; font-weight: 700; }
+.duty-conflict-dot { color: var(--color-danger); }
+.duty-day-entries { display: grid; gap: .55rem; margin-top: .4rem; }
+.duty-entry { display: grid; gap: .1rem; font-size: .78rem; line-height: 1.45; overflow-wrap: anywhere; }
+.duty-entry-slot { font-size: .72rem; color: var(--color-muted); }
+.duty-editor { position: sticky; top: 1rem; gap: .9rem; padding: 1.1rem; }
+.duty-editor .row-head { align-items: center; }
+.duty-editor h2 { margin: 0; font-size: 1.1rem; }
+.duty-slots { display: grid; gap: .4rem; }
+.duty-person-filters { display: grid; gap: .65rem; }
+.duty-candidates { display: block; max-height: 350px; overflow: auto; }
+.duty-person { display: flex; align-items: center; gap: .65rem; padding: .7rem .45rem; border-bottom: 1px solid var(--color-divider); cursor: pointer; }
+.duty-person>span { display: grid; gap: .15rem; min-width: 0; }
+.duty-person strong { font-size: .9rem; }
+.duty-person small { color: var(--color-muted); font-size: .78rem; }
+.duty-person:has(input:checked) { background: var(--color-info-bg); }
+.duty-person--unavailable { color: var(--color-muted); }
+.duty-unavailable { font-size: .78rem; color: var(--color-warning); }
+.duty-selected-days,.duty-selected-people { display: flex; flex-wrap: wrap; gap: .35rem; max-height: 120px; overflow: auto; }
+.duty-save { width: 100%; }
+.duty-candidates { max-height: 200px; }
+.duty-editor:has(.duty-selected-days) .duty-candidates { max-height: 160px; }
+.duty-selected-days { max-height: 88px; }
+.duty-feedback { color: var(--color-success); margin: 0; font-size: .875rem; }
+.duty-workspace--readonly { grid-template-columns: minmax(0, 1fr) 340px; }
+.duty-workspace--readonly.duty-workspace--day { grid-template-columns: minmax(0, 1fr); }
+.duty-daily-summary { display: grid; align-content: start; gap: .65rem; height: 100%; min-height: 0; overflow: auto; padding: .35rem; }
+.duty-date-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); align-content: start; gap: .55rem; }
+.duty-date-group { min-width: 0; padding: .7rem .8rem; border: 1px solid var(--color-divider); border-radius: .5rem; background: var(--color-surface); }
+.duty-date-group h3 { margin: 0 0 .4rem; font-size: .9rem; }
+.duty-date-group ul { display: grid; gap: var(--space-1); padding: 0; margin: 0; list-style: none; }
+.duty-date-group li { font-weight: 600; }
+.duty-date-groups>.empty { grid-column: 1 / -1; margin: 0; padding: .8rem; color: var(--color-muted); }
+.duty-readonly-details { min-height: 0; overflow: auto; padding: var(--space-3); }
+.duty-readonly-details .row-head { margin-bottom: .55rem; }
+.duty-readonly-details h2,.duty-current-summary h3 { margin: 0; font-size: 1rem; }
+.duty-current-summary { display: grid; gap: var(--space-2); padding-bottom: .7rem; border-bottom: 1px solid var(--color-divider); }
+.duty-current-summary>summary { cursor: pointer; font-weight: 600; }
+.duty-current-summary .duty-date-groups { grid-template-columns: 1fr; }
+.duty-current-summary .duty-date-group { padding: .45rem .6rem; }
+.duty-editor--month { gap: .45rem; padding: var(--space-3); overflow: hidden; }
+.duty-editor--month .duty-current-summary { padding-bottom: .35rem; }
+.duty-editor--month .duty-candidates { max-height: 120px; }
+.duty-text-import { margin: 0; border-top: 1px solid var(--color-divider); border-bottom: 1px solid var(--color-divider); }
+.duty-text-import>summary { cursor: pointer; padding: .35rem 0; font-weight: 600; }
+.duty-text-import__body { display: grid; gap: .7rem; padding: .2rem 0 .8rem; }
+.duty-text-import__body textarea { min-height: 112px; font-family: var(--font-mono); font-size: .875rem; }
+.duty-text-import__body p { margin: 0; }
+.duty-text-import__body .error { margin: 0; }
+
+/* The monthly schedule is a single-screen workflow; keep all surrounding screens on normal document flow. */
+body:has(.duty-page) { height: 100dvh; overflow: clip; }
+#root:has(.duty-page) { height: 100%; min-height: 0; }
+#root>div:has(.duty-page) { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+#root>div:has(.duty-page)>header { flex: 0 0 auto; }
+#root>div:has(.duty-page)>main { flex: 1 1 auto; width: 100%; min-height: 0; margin: 0 auto; padding: var(--space-3) var(--space-5); overflow: hidden; }
+#root>div:has(.duty-page)>main>div:has(.duty-page) { height: 100%; min-height: 0; }
+.main-preview-stack.duty-page { height: 100%; min-height: 0; grid-template-rows: auto auto auto minmax(0, 1fr); gap: .65rem; }
+.duty-page>.page-head { margin: 0; }
+.duty-status-area { display: grid; align-content: start; gap: .2rem; min-height: 0; }
+.duty-status-area>p { margin: 0; }
+.duty-workspace { height: 100%; min-height: 0; grid-template-columns: minmax(0, 1fr) 340px; align-items: stretch; }
+.duty-calendar-panel { min-height: 0; padding: .65rem; }
+.duty-calendar { height: 100%; min-height: 0; grid-template-rows: auto repeat(5, minmax(0, 1fr)); }
+.duty-day.ui-button { height: 100%; min-height: 0; overflow: hidden; padding: .35rem .4rem; }
+.duty-day-entries { grid-template-rows: repeat(3, minmax(0, auto)); align-content: start; gap: .12rem; max-height: 3.6rem; overflow: hidden; margin-top: var(--space-1); }
+.duty-entry { display: block; min-width: 0; overflow: hidden; font-size: .72rem; font-weight: 600; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.duty-entry--more { color: var(--color-muted); font-weight: 400; }
+.duty-editor { position: relative; top: auto; height: 100%; min-height: 0; max-height: 100%; overflow: auto; overscroll-behavior: contain; }
+.duty-text-import[open]~.duty-candidates { max-height: 120px; }
+@media (max-height: 760px) {
+  #root>div:has(.duty-page)>main { padding-block: var(--space-2); }
+  .main-preview-stack.duty-page { gap: .45rem; }
+  .duty-workspace { gap: .65rem; grid-template-columns: minmax(0, 1fr) 320px; }
+  .duty-calendar-panel { padding: .45rem; }
+  .duty-weekday { padding-block: .2rem; }
+  .duty-day.ui-button { padding: .2rem .3rem; }
+  .duty-editor { gap: .55rem; padding: var(--space-3); }
+  .duty-candidates { max-height: 150px; }
+  .duty-editor--month { gap: .4rem; padding: .6rem; }
+  .duty-editor--month .duty-candidates { max-height: 100px; }
+}
+@media (max-width: 900px) {
+  .duty-workspace,.duty-workspace--readonly { grid-template-columns: minmax(0, 1fr); }
+  .duty-workspace--readonly.duty-workspace--day { grid-template-columns: minmax(0, 1fr); }
+  .duty-editor { max-height: 42dvh; }
+  .duty-calendar-panel--month .duty-calendar { gap: .2rem; }
+}
+.main-preview-status-list { margin-top: var(--space-2); }
+.main-preview-status-list li { padding: .4rem 0; }
+.main-preview-group-grid { gap: var(--space-3); }
+.main-preview-status-row { gap: var(--space-3); }
+.personnel-counts { display: flex; gap: var(--space-6); align-items: center; padding: .65rem var(--space-4); border: 1px solid var(--color-divider); background: var(--color-surface); }
+.personnel-counts span { font-size: .875rem; } .personnel-counts strong { margin-left: var(--space-2); font-size: 1.2rem; }
+.personnel-summary>details { margin-top: var(--space-1); }
+.personnel-department { padding: var(--space-3); }
+.personnel-categories .count { border-radius: 3px; background: transparent; color: var(--color-muted); }
+
+
+/* Roster, personnel and duty share the same task-first app system. */
+.main-preview-stack { gap: var(--space-3); }
+.main-preview h2,.main-preview h3,.personnel-department h2,.duty-editor h2 { text-wrap: balance; }
+.main-preview-status-row .card,.main-preview-group-grid>.card { border: 0; border-top: 1px solid var(--color-divider); border-radius: 0; }
+.main-preview-status-row .card { gap: var(--space-2); padding: var(--space-4); }
+.main-preview-status-row strong { font-size: var(--text-section); font-weight: 600; }
+.main-preview-status-list li { gap: var(--space-4); padding-block: var(--space-2); }
+.main-preview-status-list li>span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.main-preview-group-grid { gap: var(--space-4); }
+.personnel-toolbar { gap: var(--space-3); padding: var(--space-2) var(--space-3); background: var(--color-neutral-bg); }
+.personnel-toolbar .field { gap: var(--space-1); }
+.personnel-counts { border: 0; border-bottom: 1px solid var(--color-divider); padding: var(--space-3) 0; gap: var(--space-6); background: transparent; }
+.personnel-counts span { color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.personnel-counts strong { font-size: var(--text-overview-stat); font-weight: 600; color: var(--color-text); }
+.personnel-counts .exception,.personnel-counts .exception strong { color: var(--color-warning); }
+.personnel-categories { gap: 0; border-bottom: 1px solid var(--color-divider); }
+.personnel-categories button { border-color: transparent; border-radius: 0; background: transparent; }
+.personnel-categories button[aria-pressed="true"] { border-color: transparent; border-bottom-color: var(--color-primary); background: transparent; box-shadow: inset 0 -1px var(--color-primary); }
+.personnel-categories .count { font-variant-numeric: tabular-nums; }
+.main-preview-stack .personnel-department { border: 0; background: transparent; padding: 0; margin-top: var(--space-2); }
+.personnel-department>.row-head { padding-block: var(--space-2); margin-bottom: var(--space-2); }
+.personnel-department>.row-head>.count { color: var(--color-muted); background: transparent; font-size: var(--text-small); }
+.personnel-department th:last-child { width: 24%; }
+[data-role="bnoc"] .personnel-department th:last-child { width: 128px; }
+.personnel-department td:nth-child(2) { font-weight: 600; }
+.personnel-group th { background: var(--color-surface); color: var(--color-muted); border-block: 1px solid var(--color-divider); padding-block: var(--space-2); font-weight: 600; }
+.main-preview-stack .personnel-editor { border: 0; border-top: 1px solid var(--color-divider); padding: var(--space-4); }
+.personnel-absence { font-size: var(--text-small); }
+.personnel-absence button { margin-left: var(--space-2); }
+.duty-toolbar { background: var(--color-neutral-bg); padding: var(--space-2); }
+.duty-view-tabs { gap: 0; }
+.duty-view-tabs .ui-button { border-color: transparent; border-radius: 0; background: transparent; }
+.duty-toolbar .duty-view-tabs .ui-button[aria-pressed="true"] { background: var(--color-surface); border-color: transparent; box-shadow: inset 0 -2px var(--color-primary); }
+.duty-page .duty-calendar-panel,.duty-page .duty-editor,.duty-page .duty-readonly-details { border: 0; border-radius: 0; }
+.duty-day.ui-button { border-radius: 0; }
+.duty-day.ui-button[aria-pressed="true"] { background: var(--color-info-bg); border-color: var(--color-primary); }
+.duty-date-group { border: 0; border-bottom: 1px solid var(--color-divider); border-radius: 0; padding: var(--space-3); background: transparent; }
+.duty-date-group h3 { color: var(--color-muted); font-size: var(--text-small); font-weight: 400; }
+.duty-date-group li { font-size: var(--text-body); font-weight: 600; }
+.duty-person>span strong { font-weight: 600; }
+.duty-day-number { font-variant-numeric: tabular-nums; }
+
+.duty-date-group .duty-unassigned { min-height: 1.5em; color: var(--color-muted); font-weight: 400; }
+.duty-daily-summary>.duty-date-groups { grid-template-columns: repeat(3,minmax(0,1fr)); }
+.duty-calendar-panel--week,.duty-calendar-panel--month { display: flex; flex-direction: column; gap: var(--space-2); }
+.duty-calendar-panel--week>.duty-calendar,.duty-calendar-panel--month>.duty-calendar { flex: 1 1 auto; height: auto; }
+.duty-officer-board { flex: 0 0 auto; background: var(--color-bg); padding: var(--space-2); }
+.duty-officer-board>h2 { margin: 0; color: var(--color-muted); font-size: var(--text-small); font-weight: 400; }
+.duty-officer-board .duty-date-groups { grid-template-columns: repeat(3,minmax(0,1fr)); gap: var(--space-2); }
+.duty-officer-board .duty-date-group { padding: var(--space-1) var(--space-2); border-bottom: 0; }
+.duty-date-group li { overflow-wrap: anywhere; }
+
+/* Keep the selected-day officer ledger compact; full lists remain keyboard-scrollable. */
+.duty-officer-board { padding: var(--space-1); }
+.duty-officer-board>h2 { line-height: 1.2; }
+.duty-officer-board .duty-date-group h3 { margin: 0; line-height: 1.2; }
+.duty-officer-board .duty-date-group ul { max-height: 1.4em; overflow-y: auto; font-size: var(--text-small); line-height: 1.4; overscroll-behavior: contain; }
+.duty-officer-board .duty-date-group li { font-size: inherit; line-height: inherit; }
+.duty-officer-board ul:focus-visible { outline-offset: 0; }
+.duty-calendar-panel--month .duty-day.ui-button { padding-block: 2px; }
+.duty-calendar-panel--month .duty-day-number { flex-shrink: 0; line-height: 1.1; }
+.duty-calendar-panel--month .duty-day-entries { display: block; flex-shrink: 0; margin-top: 2px; font-size: .72rem; height: 1.2em; min-height: 1.2em; max-height: 1.2em; }
+.duty-day-more { font-size: .72rem; font-weight: 400; color: var(--color-muted); }
+
+/* Expanded day details must scroll as content, never compress candidate rows under save. */
+.duty-workspace--week .duty-editor { grid-auto-rows: max-content; align-content: start; }

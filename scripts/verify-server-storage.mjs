@@ -10,7 +10,7 @@ const base = environment.BNOC_TEST_URL;
 const provider = environment.BNOC_MOCK_URL;
 assert.equal(base, 'http://127.0.0.1:8083', 'ONLY_SEPARATE_VERIFICATION_SERVER');
 const mode = process.argv[2];
-assert.ok(['concurrency', 'rollback', 'persistence'].includes(mode), 'Choose concurrency, rollback or persistence.');
+assert.ok(['concurrency', 'rollback', 'persistence','eligibility'].includes(mode), 'Choose concurrency, rollback, persistence or eligibility.');
 const evidence = process.env.BNOC_TEST_EVIDENCE_DIR ?? join(root, 'runtime/evidence/backend-implementation-20261013');
 await mkdir(evidence, { recursive: true });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -39,8 +39,13 @@ class Client {
   }
   async command(type, payload, target = {}, operationId = randomUUID()) { return this.call('POST', '/api/commands', { type, payload, ...target, operationId }); }
 }
+async function providerControl(payload) {
+  const secrets=JSON.parse(await readFile(join(runtimeRoot,'secrets.json'),'utf8'));
+  const response=await fetch(provider+'/control',{method:'POST',headers:{'Content-Type':'application/json','X-Mock-Key':secrets.mockSecret},body:JSON.stringify(payload)});
+  assert.equal(response.status,200,'MOCK_PROVIDER_CONTROL_ISOLATED_FROM_PRODUCT_DATABASE');
+}
 const success = result => { assert.equal(result.status, 200, result.json?.code); assert.equal(result.json.ok, true); return result.json; };
-const input = () => ({ category: '장비/체계', subcategories: { systemType: '인터넷', resourceType: 'PC', workType: '지원' }, detail: '지원 처리 검증', location: '요청 위치', contact: '내선 번호', attachments: [] });
+const input = () => ({ category: '장비/체계', subcategories: { systemType: '인터넷', resourceType: 'PC', workType: '지원' }, detail: '지원 처리 검증', location: '요청 위치', contact: '000-1234', attachments: [] });
 
 // This lock uses only a test-created request in bnoc_verify. No product fault endpoint.
 async function holdSQL(sql) {
@@ -64,18 +69,6 @@ async function holdRequest(number) {
   assert.match(number, /^\d+$/);
   return holdSQL(`SELECT request_number FROM bnoc_requests WHERE request_number='${number}' FOR UPDATE;`);
 }
-async function departmentManager(department = '무선반') {
-  const manager = await new Client().login('requester-secondary');
-  const admin = await new Client().login('access-admin');
-  const current = (await admin.get('/api/access-assignments')).items.find(item => item.subjectRef === manager.session.actor.id);
-  assert.ok(current, 'DESIGNATED_MANAGER_MUST_BE_AN_EXISTING_USER');
-  success(await admin.command('changeAccess', { subjectRef: current.subjectRef, role: 'requester', department, teamId: null, departmentManager: true, active: true }, { expectedRevision: current.revision }));
-  manager.session = await manager.get('/api/session');
-  assert.equal(manager.session.actor.department, department);
-  assert.equal(manager.session.actor.departmentManager, true);
-  return manager;
-}
-
 async function concurrency() {
   const [requester, bnoc, wireless, wired] = await Promise.all(['requester', 'bnoc', 'team-wireless', 'team-wired'].map(async subject => new Client().login(subject)));
   const saved = success(await requester.command('createRequest', input()));
@@ -87,7 +80,7 @@ async function concurrency() {
   try {
     const writes = request.workItems.map(work => (work.teamId === '무선반' ? wireless : wired).command('updateWork', { nextStatus: '완료' }, { requestNumber: request.requestNumber, workNumber: work.workNumber, expectedRevision: work.revision }));
     await pause(500);
-    waiting = Number((await runVerifySQL("SELECT COUNT(*) FROM INFORMATION_SCHEMA.PROCESSLIST WHERE ID<>CONNECTION_ID() AND USER='bnoc_verify' AND INFO LIKE 'SELECT%bnoc_requests%FOR UPDATE%';")).trim());
+    waiting = Number((await runVerifySQL("SELECT COUNT(*) FROM INFORMATION_SCHEMA.PROCESSLIST WHERE ID<>CONNECTION_ID() AND USER='bnoc_verify' AND (INFO LIKE 'SELECT%bnoc_requests%FOR UPDATE%' OR INFO LIKE '%bnoc_resource_locks%');")).trim());
     assert.ok(waiting >= 2, 'BOTH_CHANGES_MUST_WAIT_ON_CONTROLLED_REQUEST_LOCK');
     await release();
     responses = await Promise.all(writes);
@@ -123,32 +116,24 @@ async function concurrency() {
   assert.equal(current[0].status,race[0].status===200?'작업 중':'배정');
   observations.push({check:'DIRECT_ASSIGNMENT_START_RACE',httpStatuses:race.map(result=>result.status),currentDepartment:current[0].teamId,workState:current[0].status});
 
-  const manager = await departmentManager();
-  const department = manager.session.actor.department;
-  let date;
-  for (let day = 1; day <= 28; day++) {
-    const candidate = '2000-01-' + String(day).padStart(2, '0');
-    const data = await manager.get(`/api/personnel?date=${candidate}&department=${encodeURIComponent(department)}`);
-    if (!data.departments[0].submitted) { date = candidate; break; }
-  }
-  assert.ok(date, 'UNUSED_PAST_DATE_REQUIRED_WITHOUT_DELETING_RECORDS');
-  const key = `personnel:${department}:${date}`;
-  const unlock = await holdSQL(`INSERT INTO bnoc_resource_locks(resource_key) VALUES ('${key}') ON DUPLICATE KEY UPDATE resource_key=VALUES(resource_key); SELECT resource_key FROM bnoc_resource_locks WHERE resource_key='${key}' FOR UPDATE;`);
-  let personnelResults, personnelWaiting;
+  const directory=await bnoc.get('/api/personnel-roster?department='+encodeURIComponent('무선반'));
+  const directoryLock=await holdSQL("INSERT INTO bnoc_resource_locks(resource_key) VALUES ('personnel-directory') ON DUPLICATE KEY UPDATE resource_key=VALUES(resource_key); SELECT resource_key FROM bnoc_resource_locks WHERE resource_key='personnel-directory' FOR UPDATE;");
+  let rosterResults,rosterWaiting;
   try {
-    const writes = [1, 2].map(() => manager.command('saveDailyPersonnel', { department, date, entries: [] }, { expectedRevision: 0 }));
+    const writes=[1,2].map(index=>bnoc.command('saveCentralPerson',{department:'무선반',category:'병',rank:'상병',displayName:`동시 명부 검사 ${randomUUID()}`,serviceNumber:`CONCURRENCY-${randomUUID().replaceAll('-','')}`,internalPhone:'7654',active:true},{expectedRevision:directory.revision}));
     await pause(500);
-    personnelWaiting = Number((await runVerifySQL("SELECT COUNT(*) FROM INFORMATION_SCHEMA.PROCESSLIST WHERE ID<>CONNECTION_ID() AND USER='bnoc_verify' AND (INFO LIKE '%bnoc_resource_locks%' OR INFO LIKE 'SELECT%bnoc_subjects%FOR UPDATE%');")).trim());
-    assert.ok(personnelWaiting >= 2, 'BOTH_PERSONNEL_CHANGES_MUST_REMAIN_PENDING_BEFORE_RELEASE');
-    await unlock();
-    personnelResults = await Promise.all(writes);
-  } finally { await unlock(); }
-  const statuses = personnelResults.map(result => result.status).sort();
-  observations.push({ check: 'CONTROLLED_INNODB_PERSONNEL_VERSION', date, waitingTransactions: personnelWaiting, waitingOn: 'operational resource or actor lock', httpStatuses: statuses, expectedStale });
-  if (expectedStale) assert.deepEqual(statuses, [200, 200], 'STALE_OPERATIONAL_VERSION_MUST_BE_REPRODUCED');
+    const pendingSql="SELECT CONCAT(COALESCE(USER,''),'|',COALESCE(INFO,'')) FROM INFORMATION_SCHEMA.PROCESSLIST WHERE ID<>CONNECTION_ID() AND USER='bnoc_verify' AND INFO IS NOT NULL;";
+    const pendingInfo=(await runVerifySQL(pendingSql)).trim();
+    rosterWaiting=pendingInfo?pendingInfo.split('\n').length:0;
+    assert.ok(rosterWaiting>=2,`BOTH_CENTRAL_ROSTER_WRITES_MUST_WAIT_ON_DIRECTORY_LOCK: ${pendingInfo}`);
+    await directoryLock();rosterResults=await Promise.all(writes);
+  } finally {await directoryLock();}
+  const rosterStatuses=rosterResults.map(result=>result.status).sort();
+  observations.push({check:'CONTROLLED_INNODB_CENTRAL_ROSTER_VERSION',waitingTransactions:rosterWaiting,httpStatuses:rosterStatuses,expectedStale});
+  if(expectedStale) assert.deepEqual(rosterStatuses,[200,200],'STALE_DIRECTORY_VERSION_MUST_BE_REPRODUCED');
   else {
-    assert.deepEqual(statuses, [200, 409], 'SECOND_STALE_PERSONNEL_WRITE_MUST_CONFLICT');
-    assert.equal(personnelResults.find(result => result.status === 409).json.code, 'CONFLICT');
+    assert.deepEqual(rosterStatuses,[200,409],'SECOND_STALE_CENTRAL_ROSTER_WRITE_MUST_CONFLICT');
+    assert.equal(rosterResults.find(result=>result.status===409).json.code,'CONFLICT');
   }
 }
 
@@ -189,7 +174,6 @@ async function rollback() {
 
 async function persistence() {
   const [requester, bnoc, wireless] = await Promise.all(['requester', 'bnoc', 'team-wireless'].map(async subject => new Client().login(subject)));
-  const manager = await departmentManager();
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const plannedTitle = `서버 재시작 계획 작업 ${randomUUID()}`;
   const plannedCreate = await wireless.call('POST', '/api/planned-works', { operationId: randomUUID(), title: plannedTitle, firstWorkDate: today });
@@ -208,22 +192,78 @@ async function persistence() {
   const original=request.workItems[0];
   success(await bnoc.command('reassignAssignedWork',{teamIds:['유선반']},{requestNumber:request.requestNumber,workNumber:original.workNumber,expectedRevision:original.revision}));
   const notice = success(await bnoc.command('createDirective', { title: '업무 안내', body: '서버 재시작 보존 검증', attachmentRefs: [] }));
-  const department = manager.session.actor.department;
-  const roster = await manager.get('/api/personnel-roster?department=' + encodeURIComponent(department));
-  const before = { request: await bnoc.get('/api/requests/' + saved.requestNumber), history: await bnoc.get(`/api/requests/${saved.requestNumber}/history`), notice: await bnoc.get('/api/notices/' + notice.publicRef), roster, planned: plannedBefore };
-  await stopService('verification');
-  await startApplication(true);
-  await Promise.all([requester.login('requester'), bnoc.login('bnoc'), wireless.login('team-wireless'), manager.login('requester-secondary')]);
-  const plannedAfter = (await wireless.get(`/api/planned-works?workDate=${today}`)).inProgress.find(item => item.id === planned.plannedWorkId);
-  const after = { request: await bnoc.get('/api/requests/' + saved.requestNumber), history: await bnoc.get(`/api/requests/${saved.requestNumber}/history`), notice: await bnoc.get('/api/notices/' + notice.publicRef), roster: await manager.get('/api/personnel-roster?department=' + encodeURIComponent(department)), planned: plannedAfter };
-  assert.deepEqual(after, before, 'REQUEST_WORK_HISTORY_NOTICE_ROSTER_AND_PLANNED_WORK_MUST_SURVIVE_SERVER_RESTART');
-  const downloaded = await requester.call('GET', '/api/attachments/' + file.id);
-  assert.equal(downloaded.status, 200); assert.deepEqual(downloaded.bytes, content, 'ATTACHMENT_BYTES_MUST_SURVIVE_SERVER_RESTART');
-  observations.push({ check: 'SERVER_RESTART_PERSISTENCE', requestNumber: saved.requestNumber, plannedWorkId: planned.id, requestWorkHistoryNoticeRosterPlannedWorkUnchanged: true, attachmentBytesUnchanged: true, attachmentSha256: createHash('sha256').update(downloaded.bytes).digest('hex') });
+  const department='무선반';
+  const directory=await bnoc.get('/api/personnel-roster?department='+encodeURIComponent(department));
+  const person=success(await bnoc.command('saveCentralPerson',{department,category:'병',rank:'상병',displayName:`재시작 보존 ${randomUUID()}`,serviceNumber:`PERSIST-${randomUUID().replaceAll('-','')}`,internalPhone:'7654',active:true},{expectedRevision:directory.revision}));
+  const absenceDate=today.endsWith('-01')?`${today.slice(0,7)}-02`:`${today.slice(0,7)}-01`;
+  success(await bnoc.command('saveAbsence',{personRef:person.publicRef,absenceType:'출장',startDate:absenceDate,endDate:absenceDate},{expectedRevision:0}));
+  let dutyMonth='',dutyDate='';
+  for(let offset=0;offset<13&&!dutyDate;offset++){
+    const monthStart=new Date(`${today.slice(0,7)}-01T00:00:00Z`);monthStart.setUTCMonth(monthStart.getUTCMonth()+offset);
+    const candidateMonth=monthStart.toISOString().slice(0,7),schedule=await wireless.get(`/api/duty-schedules?month=${candidateMonth}&seat=team_night`);
+    const occupied=new Set((schedule.entries??[]).map(entry=>entry.date));
+    const days=new Date(Date.UTC(monthStart.getUTCFullYear(),monthStart.getUTCMonth()+1,0)).getUTCDate();
+    for(let day=1;day<=days;day++){
+      const candidateDate=`${candidateMonth}-${String(day).padStart(2,'0')}`;
+      if(candidateDate!==absenceDate&&!occupied.has(candidateDate)){dutyMonth=candidateMonth;dutyDate=candidateDate;break;}
+    }
+  }
+  assert.ok(dutyDate,'DUTY_SCHEDULE_TEST_MUST_USE_AN_UNOCCUPIED_DATE');
+  success(await wireless.command('saveDutySchedule',{month:dutyMonth,date:dutyDate,seat:'team_night',personRefs:[person.publicRef]},{expectedRevision:0}));
+  const roster=await bnoc.get('/api/personnel-roster?department='+encodeURIComponent(department));
+  const dutySchedule=await wireless.get(`/api/duty-schedules?month=${dutyMonth}&seat=team_night`);
+  let operationsBefore;
+  await providerControl({reset:true});
+  const operationsHealthy=await bnoc.get('/api/operations/status');
+  assert.equal(operationsHealthy.items.length,14,'OPERATIONS_STATUS_SOURCE_MUST_BE_STORED');
+  await providerControl({operations:{scenario:'error'}});
+  await pause(1500);
+  operationsBefore=await bnoc.get('/api/operations/status');
+  assert.equal(operationsBefore.collectionState,'failed','OPERATIONS_SOURCE_FAILURE_MUST_KEEP_STORED_SNAPSHOT');
+  const before = { request: await bnoc.get('/api/requests/' + saved.requestNumber), history: await bnoc.get(`/api/requests/${saved.requestNumber}/history`), notice: await bnoc.get('/api/notices/' + notice.publicRef), roster, dutySchedule, planned: plannedBefore };
+  try {
+    await stopService('verification');
+    await startApplication(true);
+    await Promise.all([requester.login('requester'), bnoc.login('bnoc'), wireless.login('team-wireless')]);
+    const plannedAfter = (await wireless.get(`/api/planned-works?workDate=${today}`)).inProgress.find(item => item.id === planned.id);
+    const after = { request: await bnoc.get('/api/requests/' + saved.requestNumber), history: await bnoc.get(`/api/requests/${saved.requestNumber}/history`), notice: await bnoc.get('/api/notices/' + notice.publicRef), roster: await bnoc.get('/api/personnel-roster?department=' + encodeURIComponent(department)), dutySchedule: await wireless.get(`/api/duty-schedules?month=${dutyMonth}&seat=team_night`), planned: plannedAfter };
+    assert.deepEqual(after, before, 'REQUEST_WORK_HISTORY_NOTICE_ROSTER_AND_PLANNED_WORK_MUST_SURVIVE_SERVER_RESTART');
+    const operationsAfter=await bnoc.get('/api/operations/status');
+    assert.deepEqual(operationsAfter.items,operationsBefore.items,'OPERATIONS_STATUS_VALUES_MUST_SURVIVE_SERVER_RESTART_AND_SOURCE_FAILURE');
+    assert.equal(operationsAfter.lastSuccess,operationsBefore.lastSuccess,'OPERATIONS_STATUS_LAST_SUCCESS_MUST_SURVIVE_SERVER_RESTART');
+    const downloaded = await requester.call('GET', '/api/attachments/' + file.id);
+    assert.equal(downloaded.status, 200); assert.deepEqual(downloaded.bytes, content, 'ATTACHMENT_BYTES_MUST_SURVIVE_SERVER_RESTART');
+    observations.push({ check: 'SERVER_RESTART_PERSISTENCE', requestNumber: saved.requestNumber, plannedWorkId: planned.id, requestWorkHistoryNoticePersonnelAbsenceDutySchedulePlannedWorkUnchanged: true, operationsStatusItemsAndLastSuccessUnchanged: true, attachmentBytesUnchanged: true, attachmentSha256: createHash('sha256').update(downloaded.bytes).digest('hex') });
+  } finally { await providerControl({reset:true}); }
+}
+
+async function eligibility() {
+  const [requester,bnoc,team]=await Promise.all(['requester','bnoc','team-wireless'].map(subject=>new Client().login(subject)));
+  const directory=await bnoc.get('/api/personnel-roster');
+  const person=success(await bnoc.command('saveCentralPerson',{department:'무선반',category:'병',rank:'상병',displayName:`잠금 검증 ${randomUUID()}`,serviceNumber:`LOCK-${randomUUID()}`,active:true},{expectedRevision:directory.revision}));
+  const ref=person.publicRef,year=6000+parseInt(randomUUID().slice(0,4),16)%3000,month=`${year}-01`,day=`${month}-10`;
+  const saved=success(await requester.command('createRequest',input()));
+  let detail=await bnoc.get('/api/requests/'+saved.requestNumber);
+  success(await bnoc.command('assignTeams',{teamIds:['무선반'],priority:'general'},{requestNumber:saved.requestNumber,expectedRevision:detail.revision}));
+  detail=await team.get('/api/requests/'+saved.requestNumber);const work=detail.workItems[0];
+  const absenceRef=randomUUID(),at=new Date().toISOString();
+  const unlock=await holdSQL(`INSERT INTO bnoc_resource_locks(resource_key) VALUES ('personnel-directory') ON DUPLICATE KEY UPDATE resource_key=VALUES(resource_key); SELECT resource_key FROM bnoc_resource_locks WHERE resource_key='personnel-directory' FOR UPDATE; INSERT INTO bnoc_absences(absence_ref,person_ref,absence_type,starts_on,ends_on,revision,recorded_by,recorded_at,updated_at) VALUES ('${absenceRef}','${ref}','휴가','${day}','${day}',1,'bnoc','${at}','${at}');`);
+  let dutyDone=false,workDone=false;
+  const duty=team.command('saveDutySchedule',{month,date:day,seat:'team_night',personRefs:[ref]},{expectedRevision:0}).then(result=>{dutyDone=true;return result;});
+  const assignment=team.command('updateWork',{nextStatus:'배정',assignedPersonRefs:[ref],scheduleIntervals:[{startsAt:`${day}T01:00:00Z`,endsAt:`${day}T02:00:00Z`}]},{requestNumber:saved.requestNumber,workNumber:work.workNumber,expectedRevision:work.revision}).then(result=>{workDone=true;return result;});
+  try {
+    await pause(400);
+    assert.equal(dutyDone,false,'DUTY_VALIDATION_MUST_WAIT_FOR_PERSONNEL_COMMIT');
+    assert.equal(workDone,false,'WORK_VALIDATION_MUST_WAIT_FOR_PERSONNEL_COMMIT');
+    await unlock();
+    const results=await Promise.all([duty,assignment]);
+    for(const result of results){assert.equal(result.status,400,'COMMITTED_ABSENCE_MUST_BLOCK_NEW_SELECTION');assert.equal(result.json.code,'VALIDATION');}
+    observations.push({check:'SHARED_PERSONNEL_LOCK_RECHECKS_ABSENCE_AFTER_COMMIT',dutyWaited:true,workWaited:true,httpStatuses:results.map(result=>result.status),personRef:ref});
+  } finally {await unlock();await Promise.allSettled([duty,assignment]);}
 }
 
 let status = 'failed', error = null;
-try { await ({ concurrency, rollback, persistence })[mode](); status = process.argv.includes('--expect-stale') ? 'reproduced' : 'passed'; }
+try { await ({ concurrency, rollback, persistence,eligibility })[mode](); status = process.argv.includes('--expect-stale') ? 'reproduced' : 'passed'; }
 catch (failure) { error = failure.message; process.exitCode = 1; }
 const jar = await readFile(join(root, 'backend/build/libs/bnoc-server-1.0.0.jar'));
 const service = JSON.parse(await readFile(join(runtimeRoot, 'services.json'), 'utf8')).verification;

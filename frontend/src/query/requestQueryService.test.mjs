@@ -24,3 +24,12 @@ test('SR-DEMO-030: caller input cannot spoof a more privileged actor', () => {
   assert.equal(query.getRequestDetail('108'), null);
   assert.equal(query.getRequestDetail({ role: 'bnoc' }, '108'), null);
 });
+
+test('request numbers keep numeric descending order despite new history and reuse filters before listing',()=>{
+  const state={requests:['9','100','10'].map(requestNumber=>({id:requestNumber,requestNumber,requesterActorId:'owner',registeredBy:requestNumber==='100'?'bnoc':'owner',registeredAt:'2026-10-01T00:00:00Z'})),workItems:[],history:[{targetId:'9',at:'2027-01-01T00:00:00Z'}]};
+  const query=new RequestQueryService({getActor:()=>({role:'requester',id:'owner'}),getSnapshot:()=>state});
+  assert.deepEqual(query.getRequestList().map(row=>row.requestNumber),['100','10','9']);
+  state.history.push({targetId:'10',at:'2028-01-01T00:00:00Z'});
+  assert.deepEqual(query.getRequestList().map(row=>row.requestNumber),['100','10','9']);
+  assert.deepEqual(query.getRequestList({reusableOnly:true}).map(row=>row.requestNumber),['10','9']);
+});

@@ -7,6 +7,9 @@ export interface Actor { id: string; role: Role; displayName: string; department
 export interface SessionContext { activeActorId: string }
 export interface MaintenanceTarget { department: string; rank: string; name: string; phone: string }
 export interface AttachmentMeta { id: string; fileName: string; size: number; type: string }
+export interface RequestIntakeItem { id:string; kind:string; workType:string; quantity:number; location:string; systemType?:string|null; phoneType?:string|null; symptom?:string|null; detail?:string|null; equipmentId?:string|null; errorCode?:string|null; destination?:string|null; attachmentIds:string[] }
+export interface GuidedIntakeItem extends RequestIntakeItem { systemType:string; phoneType:string; symptom:string; detail:string; equipmentId:string; errorCode:string; destination:string; answered:string[]; reviewed:boolean; splitSourceId:string|null; inheritedWorkType?:boolean; extraInformation?:boolean }
+export interface GuidedDraft { version:1; splitCount?:string; intent?:string; defaultWorkType?:string; mode:'equipment'|'meeting'; step:string; activeId:string|null; items:GuidedIntakeItem[]; quantities:Record<string,number>; order:string[]; history:{step:string;activeId:string|null;mode:'equipment'|'meeting';returnTo:string|null}[]; returnTo:string|null; meeting:{meetingType:string;videoPlatform:string;detail:string;location:string;attachmentIds?:string[]} }
 export interface Completion { completedBy: string; completedAt: string; memo?: string }
 export interface SchedulePreference { rank: 1 | 2; date: string; period: 'AM' | 'PM' }
 export interface WorkScheduleInterval { startsAt: string; endsAt: string }
@@ -18,7 +21,7 @@ export interface Request {
   registeredAt: string; revision: number
 }
 export interface WorkItem {
-  id: string; requestId: string; workNumber: string; teamId: string; status: WorkItemStatus; schedule?: string; memo?: string;
+  id: string; requestId: string; workNumber: string; teamId: string; departmentPhone?: string; status: WorkItemStatus; schedule?: string; memo?: string;
   returnReason?: string; completion?: Completion; replacesWorkItemId?: string;
   resolvedByWorkItemIds: string[]; origin?: 'assigned' | 'after-action'; revision: number
 }
@@ -40,14 +43,15 @@ export function priorityLabel(priority?: string | null) { return priority === 'g
 export interface DepartmentProgress { department: string; status: string; totalWorks: number; completedWorks: number; returnedWorks: number }
 export interface RequestProgress { currentDepartments: number; completedDepartments: number; totalWorks: number; completedWorks: number; returnedWorks: number; hadAssignment: boolean; departments: DepartmentProgress[] }
 export interface SearchMatch { source: 'request' | 'classification' | 'document'; attachmentRef?: string | null; text: string; blockIndex?: number | null; metadataIndex?: number | null }
-export interface RequestSummary { requestNumber: string; requesterDisplayText: string; category: string; status: RequestStatus; teamIds: string[]; progress?: RequestProgress; myTeamWorkStatus?: WorkItemStatus | '반환' | '미배정' | null; participation?: 'current' | 'past' | 'none'; afterAction?: boolean; updatedAt: string; priority?: Priority; matches?: SearchMatch[] }
+export interface RequestSummary { detailPreview?:string; location?:string; canReuse?: boolean; requestNumber: string; requesterDisplayText: string; category: string; status: RequestStatus; teamIds: string[]; progress?: RequestProgress; myTeamWorkStatus?: WorkItemStatus | '반환' | '미배정' | null; participation?: 'current' | 'past' | 'none'; afterAction?: boolean; updatedAt: string; priority?: Priority; matches?: SearchMatch[] }
 export interface HistoryView { at: string; actorLabel: string; field: string; summary: string; attachments?: AttachmentMeta[] }
 export interface WorkItemView {
-  workNumber: string; teamId: string; status: WorkItemStatus; schedule?: string; memo?: string;
+  workNumber: string; teamId: string; departmentPhone?: string; status: WorkItemStatus; schedule?: string; memo?: string;
   returnReason?: string; completion?: Completion; resolved: boolean; resolutionKind?: 'open' | 'reassigned' | 'withdrawn'; resolutionReason?: string; replacementWorkNumbers?: string[]; scheduleIntervals: WorkScheduleInterval[]; previousScheduleIntervals: WorkScheduleInterval[]; actualStartedAt?: string; editable: boolean; revision: number; assignedAt?: string;
-  assignedPersons?: RosterPerson[]; assignedPersonRefs?: string[]; origin?: 'assigned' | 'after-action'
+  assignedPersons?: (RosterPerson & { rank?: string | null; internalPhone?: string | null })[]; assignedPersonRefs?: string[]; origin?: 'assigned' | 'after-action'
 }
 export interface RequestDetail extends RequestSummary {
+  intakeVersion?:number|null; itemQuantities?:Record<string,number>|null; requestItems?:RequestIntakeItem[];
   canReuse?: boolean;
   detail: string; location: string; contact?: string; personalContact?: string | null; subcategories: Request['subcategories']; equipmentId?: string;
   maintenanceTarget?: MaintenanceTarget; schedulePreferences: SchedulePreference[]; documentRef?: string; registeredBy: string;
@@ -60,7 +64,7 @@ export interface AttachmentDocument { attachmentRef: string; fileName: string; s
 export interface ScheduleEntry { workNumber: string; teamId: string; request: { requestNumber: string }; scheduleIntervals?: WorkScheduleInterval[]; actualStartedAt?: string; completedAt?: string; status: WorkItemStatus; location: string; memo?: string; origin: 'assigned' | 'after-action' }
 export interface OverviewCounts { total: number; byStatus: Record<RequestStatus,number>; list: RequestSummary[] }
 export interface ServerSession { actor: Actor; teams: string[]; departments: string[]; csrfToken: string; sourceMode?: string; integrationMode?: string }
-export interface RosterPerson { personRef: string; displayName: string; active?: boolean }
+export interface RosterPerson { personRef: string; displayName: string; active?: boolean; department?: string; category?: '병' | '간부' | '군무원' | null; rank?: string | null; complete?: boolean; serviceNumber?: string | null; internalPhone?: string | null; absences?: { absenceRef: string; absenceType: string; startDate: string; endDate: string; revision: number }[] }
 export interface Roster { department: string; revision: number; entries: RosterPerson[] }
 export interface PlannedWork { id: string; plannedWorkId?: string; teamId: string; department?: string; title: string; status: '진행 중' | '완료'; firstWorkDate: string; completedDate?: string; revision: number; updatedAt?: string }
 export interface PlannedWorkList { workDate: string; inProgress: PlannedWork[]; completed: PlannedWork[] }

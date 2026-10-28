@@ -5,7 +5,7 @@ const evidence = process.env.BNOC_TEST_EVIDENCE_DIR ?? 'runtime/evidence/backend
 
 export default defineConfig({
   testDir: '.',
-  testMatch: 'server-ui.spec.ts',
+  testMatch: ['server-ui.spec.ts','reliability-ui.spec.ts','adaptive-intake.spec.ts','team-feedback.spec.ts'],
   timeout: 120000,
   expect: { timeout: 12000 },
   fullyParallel: false,

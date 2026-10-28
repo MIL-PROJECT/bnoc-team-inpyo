@@ -52,7 +52,7 @@ function readRuns(node: Node): Run[] {
     const bold=parent.bold || ['B','STRONG'].includes(child.tagName),underline=parent.underline || child.tagName==='U';
     const rawSize=child.style.fontSize?.replace('px','');const size=rawSize==='16'||rawSize==='20'||rawSize==='24'?Number(rawSize) as 16|20|24:parent.size;
     const rawColor=child.style.color?.replaceAll(' ','').toLowerCase();
-    const normalizedColor=rawColor==='rgb(29,78,216)'?'#1d4ed8':rawColor==='rgb(185,28,28)'?'#b91c1c':rawColor==='rgb(22,101,52)'?'#166534':rawColor;
+    const normalizedColor=rawColor==='var(--color-text)'?'default':rawColor==='rgb(29,78,216)'?'#1d4ed8':rawColor==='rgb(185,28,28)'?'#b91c1c':rawColor==='rgb(22,101,52)'?'#166534':rawColor;
     const color=colors.find(value=>value===normalizedColor) ?? parent.color;
     const style={bold,underline,size,color};
     if(child.tagName==='BR') push('\n',style); else child.childNodes.forEach(grandchild=>walk(grandchild,style));
@@ -107,8 +107,9 @@ function applyStyle(root:HTMLElement,property:'fontSize'|'color',value:string,sa
   if(!range || range.collapsed) return false;
   if(!root.contains(range.commonAncestorContainer) || directBlock(range.startContainer,root)!==directBlock(range.endContainer,root)) return false;
   const fragment=range.extractContents(),span=document.createElement('span');
+  fragment.querySelectorAll<HTMLElement>('[style]').forEach(element=>{element.style[property]='';});
   if(property==='fontSize' && value) span.style.fontSize=`${value}px`;
-  if(property==='color' && value!=='default') span.style.color=value;
+  if(property==='color') span.style.color=value==='default'?'var(--color-text)':value;
   span.append(fragment);range.insertNode(span);selection.removeAllRanges();const next=document.createRange();next.selectNodeContents(span);selection.addRange(next);
   return true;
 }

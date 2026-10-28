@@ -1,6 +1,7 @@
 package bnoc
 
 import com.fasterxml.jackson.module.kotlin.readValue
+import com.fasterxml.jackson.module.kotlin.convertValue
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.transaction.annotation.Isolation
@@ -21,18 +22,21 @@ class QueryService(val db:Database,val workflow:WorkflowService) {
     fun summary(r:RequestRecord,actor:Actor?=null):Map<String,Any?> {
         val allWorks=db.works(r.number)
         val progress=RequestStatus.summarize(r,allWorks)
-        val byDepartment=progress.departments.map { department ->
-            val teamWorks=progress.works.filter { it.teamId==department }
+        val visibleWorks=if(actor?.role=="requester")progress.works.filter { it.status!="반환" } else progress.works
+        val departments=visibleWorks.map { it.teamId }.distinct().sorted()
+        val byDepartment=departments.map { department ->
+            val teamWorks=visibleWorks.filter { it.teamId==department }
             mapOf("department" to department,"status" to RequestStatus.departmentStatus(teamWorks),"totalWorks" to teamWorks.size,"completedWorks" to teamWorks.count { it.status=="완료" },"returnedWorks" to teamWorks.count { it.status=="반환" })
         }
-        val summary=mapOf("requestNumber" to r.number,"requesterDisplayText" to r.requesterDisplayText,"category" to r.category,"status" to progress.requestStatus,"teamIds" to progress.departments,"progress" to mapOf("currentDepartments" to progress.departments.size,"completedDepartments" to progress.completedDepartments.size,"totalWorks" to progress.works.size,"completedWorks" to progress.works.count { it.status=="완료" },"returnedWorks" to progress.returnedWorks,"hadAssignment" to allWorks.any { it.origin=="assigned" && it.assignedAt!=null },"departments" to byDepartment),"afterAction" to (allWorks.isNotEmpty() && allWorks.all { it.origin=="after-action" }),"updatedAt" to r.updatedAt,"priority" to r.priority,"assignedAt" to r.assignedAt)
+        val canReuse=actor?.role=="requester" && r.requesterSubject==actor.id && r.registeredBy==actor.id
+        val summary=mapOf("canReuse" to canReuse,"requestNumber" to r.number,"requesterDisplayText" to r.requesterDisplayText,"category" to r.category,"status" to progress.requestStatus,"teamIds" to departments,"progress" to mapOf("currentDepartments" to departments.size,"completedDepartments" to byDepartment.count { it["status"]=="완료" },"totalWorks" to visibleWorks.size,"completedWorks" to visibleWorks.count { it.status=="완료" },"returnedWorks" to visibleWorks.count { it.status=="반환" },"hadAssignment" to allWorks.any { it.origin=="assigned" && it.assignedAt!=null },"departments" to byDepartment),"afterAction" to (allWorks.isNotEmpty() && allWorks.all { it.origin=="after-action" }),"updatedAt" to r.updatedAt,"priority" to r.priority,"assignedAt" to r.assignedAt)+(if(canReuse)mapOf("detailPreview" to r.detail.take(120),"location" to r.location) else emptyMap())
         val teamId=actor?.takeIf { it.role=="team" }?.teamId ?: return summary
         val ownWorks=progress.works.filter { it.teamId==teamId }
         val participation=if(ownWorks.isNotEmpty()) "current" else if(allWorks.any { it.teamId==teamId }) "past" else "none"
         return summary+mapOf("myTeamWorkStatus" to if(ownWorks.isEmpty()) null else RequestStatus.departmentStatus(ownWorks),"participation" to participation)
     }
     fun requesters(actor:Actor):List<Map<String,Any?>> {
-        if(actor.role!="bnoc") reject("FORBIDDEN")
+        if(actor.role !in listOf("bnoc","team")) reject("FORBIDDEN")
         return db.actors().asSequence().filter { it.active && it.role=="requester" }
             .map { mapOf("requesterRef" to it.subjectRef,"displayName" to it.displayName,"department" to it.department) }
             .toList()
@@ -40,12 +44,15 @@ class QueryService(val db:Database,val workflow:WorkflowService) {
     fun list(actor:Actor,filter:Map<String,String>):List<Map<String,Any?>> {
         validateFilter(filter)
         val q=normalize(filter["q"].orEmpty().trim())
-        return db.requests().filter { workflow.visible(actor,it) && matches(it,filter,actor) }.sortedWith(compareByDescending<RequestRecord> { Instant.parse(it.updatedAt) }.thenByDescending { it.number.toLong() }).mapNotNull { request ->
+        val reusableOnly=filter["reusableOnly"]=="true"
+        if(reusableOnly && actor.role!="requester")reject("FORBIDDEN")
+        return db.requests().filter { workflow.visible(actor,it) && (!reusableOnly || it.requesterSubject==actor.id && it.registeredBy==actor.id) && matches(it,filter,actor) }.sortedByDescending { it.number.toBigInteger() }.mapNotNull { request ->
             val base=summary(request,actor)
             if(q.isBlank()) base else searchMatches(request,q,actor).takeIf { it.isNotEmpty() }?.let { base+mapOf("matches" to it) }
         }
     }
     private fun validateFilter(filter:Map<String,String>) {
+        filter["reusableOnly"]?.let { if(it !in listOf("true","false")) reject("VALIDATION",mapOf("reusableOnly" to "불러오기 조건을 확인하세요.")) }
         listOf("from","to").forEach { filter[it]?.takeIf { value -> value.isNotBlank() }?.let { dateValue(it) } }
         if(filter.any { (key,value) -> key!="q" && value.length>500 }) reject("VALIDATION")
         if((filter["q"]?.trim()?.length ?: 0)>200) reject("VALIDATION",mapOf("q" to "검색어는 200자까지 입력하세요."))
@@ -57,9 +64,14 @@ class QueryService(val db:Database,val workflow:WorkflowService) {
         val registered=Instant.parse(r.registeredAt).atZone(seoul).toLocalDate().toString()
         return (value("from").isBlank() || registered>=value("from")) && (value("to").isBlank() || registered<=value("to")) &&
             (value("status").isBlank() || r.status in value("status").split(',')) && (value("category").isBlank() || r.category==value("category")) &&
-            (value("teamId").isBlank() || db.works(r.number).any { it.teamId==value("teamId") }) && (value("location").isBlank() || r.location.contains(value("location"))) &&
+            (value("teamId").isBlank() || db.works(r.number).any { it.teamId==value("teamId") }) && (value("location").isBlank() || (r.intake?.items?.any{it.location.contains(value("location"))}?:r.location.contains(value("location")))) && classificationMatches(r,f) &&
             (value("requestNumber").isBlank() || r.number.contains(value("requestNumber"))) && (value("requesterDeptOrName").isBlank() || actor.role!="bnoc" || r.requesterDisplayText.contains(value("requesterDeptOrName"))) &&
             (value("priority").isBlank() || if(value("priority")=="unclassified") r.priority==null else r.priority==value("priority"))
+    }
+    private fun classificationMatches(request:RequestRecord,filter:Map<String,String>):Boolean {
+        fun match(values:Map<String,String?>)=listOf("systemType","resourceType","workType").all{key->filter[key].isNullOrBlank()||filter[key]==values[key]}
+        return request.intake?.items?.any{match(mapOf("systemType" to it.systemType,"resourceType" to it.kind,"workType" to it.workType))}
+            ?: match(request.subcategories+mapOf("workType" to (request.subcategories["workType"]?:request.subcategories["meetingType"])))
     }
     fun documentSearchStatus(actor:Actor,filter:Map<String,String>):Map<String,Any?> {
         validateFilter(filter)
@@ -120,6 +132,7 @@ class QueryService(val db:Database,val workflow:WorkflowService) {
         add("classification",request.category)
         request.subcategories.forEach { (key,value) -> add("classification","$key: $value") }
         request.equipmentId?.let { add("classification",it) }
+        request.intake?.items?.forEach{add("classification",IntakePolicy.describe(it))}
         return matches
     }
     fun requireRequest(actor:Actor,number:String):RequestRecord {
@@ -129,14 +142,17 @@ class QueryService(val db:Database,val workflow:WorkflowService) {
     }
     fun detail(actor:Actor,number:String):Map<String,Any?> {
         val request=requireRequest(actor,number)
-        val works=db.works(number).map { w ->
+        val works=db.works(number).filter { actor.role!="requester" || (it.resolutionKind=="open" && it.status!="반환") }.map { w ->
             val common=mutableMapOf<String,Any?>("workNumber" to w.number,"teamId" to w.teamId,"status" to w.status,"scheduleIntervals" to w.scheduleIntervals,"previousScheduleIntervals" to w.previousScheduleIntervals,"actualStartedAt" to w.actualStartedAt,"revision" to w.revision,"resolved" to (w.resolutionKind!="open"),"resolutionKind" to w.resolutionKind,"resolutionReason" to w.resolutionReason,"replacementWorkNumbers" to w.replacementWorkNumbers,"editable" to (request.status !in listOf("취소","기각") && actor.role=="team" && actor.teamId==w.teamId && w.origin!="after-action" && w.resolutionKind=="open"),"assignedAt" to w.assignedAt,"origin" to w.origin)
+            if(w.resolutionKind=="open" && w.status!="반환")common["departmentPhone"]=db.rows("SELECT phone FROM bnoc_department_contacts WHERE department=?",w.teamId).firstOrNull()?.get("phone")
             if(actor.role=="bnoc" || (actor.role=="team" && actor.teamId==w.teamId)) {
                 common["memo"]=w.memo;common["returnReason"]=w.returnReason
                 common["assignedPersonRefs"]=w.assignedPersonRefs
-                common["assignedPersons"]=w.assignedPersonRefs.mapNotNull { ref -> db.rows("SELECT display_name FROM bnoc_roster WHERE person_ref=?",ref).firstOrNull()?.let { mapOf("personRef" to ref,"displayName" to it["display_name"]) } }
+                common["assignedPersons"]=w.assignedPersonRefs.mapNotNull { ref -> db.rows("SELECT r.display_name,p.rank_name,p.internal_phone FROM bnoc_roster r LEFT JOIN bnoc_personnel_profiles p ON p.person_ref=r.person_ref WHERE r.person_ref=?",ref).firstOrNull()?.let { mapOf("personRef" to ref,"displayName" to it["display_name"],"rank" to it["rank_name"]) } }
                 common["completion"]=w.completion?.let { c -> c.filterKeys { it!="completedBy" }+mapOf("completedBy" to (db.actor(c["completedBy"].orEmpty())?.displayName ?: "담당자")) }
                 common["completionActor"]=w.completion?.get("completedBy")?.let { db.actor(it)?.displayName ?: "담당자" }
+            } else if(actor.role=="requester" && request.requesterSubject==actor.id) {
+                common["assignedPersons"]=w.assignedPersonRefs.mapNotNull { ref -> db.rows("SELECT r.display_name,p.rank_name,p.internal_phone FROM bnoc_roster r LEFT JOIN bnoc_personnel_profiles p ON p.person_ref=r.person_ref WHERE r.person_ref=?",ref).firstOrNull()?.let { mapOf("displayName" to it["display_name"],"rank" to it["rank_name"],"internalPhone" to it["internal_phone"]) } }
             }
             common
         }
@@ -145,20 +161,20 @@ class QueryService(val db:Database,val workflow:WorkflowService) {
         val maySeePersonalContact=actor.role in listOf("requester","bnoc") || (actor.role=="team" && request.status !in listOf("취소","기각") && db.works(number).any { it.teamId==actor.teamId && it.origin=="assigned" && it.resolutionKind=="open" && it.status in listOf("배정","작업 중","완료") })
         val view=summary(request,actor)+mapOf("detail" to request.detail,"location" to request.location,"contact" to if(actor.role in listOf("requester","bnoc")) request.contact else null,"subcategories" to request.subcategories,"equipmentId" to request.equipmentId,"maintenanceTarget" to if(actor.role=="bnoc") request.maintenanceTarget else null,"schedulePreferences" to request.schedulePreferences,"documentRef" to request.documentRef,"registeredBy" to (db.actor(request.registeredBy)?.displayName ?: "담당자"),"registeredAt" to request.registeredAt,"revision" to request.revision,"workItems" to works,"attachments" to request.attachments,"history" to emptyList<Any>(),"canEdit" to workflow.canEdit(actor,request),"canCancel" to (actor.role=="requester" && request.requesterSubject==actor.id && request.status !in listOf("취소","기각")),"canAssign" to (actor.role=="bnoc" && request.status in listOf("대기","문서 대기") && works.isEmpty()),"canReject" to (actor.role=="bnoc" && request.status in listOf("대기","문서 대기") && works.isEmpty()),"canAddTeams" to canAddTeams,"canChangePriority" to (actor.role=="bnoc" && request.status !in listOf("취소","기각")),"rejectionReason" to if(actor.role in listOf("requester","bnoc") && request.status=="기각") request.rejectionReason else null,"rejectedAt" to if(actor.role in listOf("requester","bnoc") && request.status=="기각") request.rejectedAt else null)
         val canReuse=actor.role=="requester" && request.requesterSubject==actor.id && request.registeredBy==actor.id
-        return view+mapOf("canReuse" to canReuse)+(if(maySeePersonalContact) mapOf("personalContact" to request.personalContact) else emptyMap())
+        return view+mapOf("canReuse" to canReuse,"intakeVersion" to request.intake?.version,"itemQuantities" to request.intake?.quantities,"requestItems" to request.intake?.let{db.json.convertValue<List<Map<String,Any?>>>(it.items)}.orEmpty())+(if(maySeePersonalContact) mapOf("personalContact" to request.personalContact) else emptyMap())
     }
     fun history(actor:Actor,number:String):List<Map<String,Any?>> {
         requireRequest(actor,number)
         val works=db.works(number).filter { actor.role!="team" || it.teamId==actor.teamId }.map { it.number }
         return db.rows("SELECT * FROM bnoc_history WHERE request_number=? ORDER BY recorded_at DESC,history_id DESC",number).filter { row ->
             val field=row["field_name"] as String;val work=row["work_number"] as? String
-            (work==null || work in works) && (actor.role!="requester" || (work==null && field in listOf("등록","상태","기각 사유","detail","location","contact","schedulePreferences","documentRef","attachments","일반·긴급"))) && (actor.role!="team" || field!="contact")
+            (work==null || work in works) && (actor.role!="requester" || (work==null && field in listOf("등록","상태","기각 사유","detail","location","contact","schedulePreferences","documentRef","attachments","일반·긴급","requestItems"))) && (actor.role!="team" || field!="contact")
         }.map { row ->
             val subject=row["actor_subject"] as String;val field=row["field_name"] as String
             val label=when(field) {
                 "scheduledAt","schedulePreferences" -> "희망 일정";"schedule","scheduleIntervals" -> "작업 일정"
                 "detail" -> "내용";"location" -> "위치";"contact" -> "연락처"
-                "documentRef" -> "문서 참조정보";"attachments" -> "첨부파일";"memo" -> "작업 메모"
+                "documentRef" -> "문서 참조정보";"attachments" -> "첨부파일";"memo" -> "작업 메모";"requestItems" -> "요청 대상"
                 else -> field
             }
             fun render(value:Any?):String {
@@ -186,11 +202,22 @@ class QueryService(val db:Database,val workflow:WorkflowService) {
     fun notifications(actor:Actor):List<Map<String,Any?>> = db.rows("SELECT notification_id,event_name,request_number,work_number,recorded_at,is_read FROM bnoc_notifications WHERE recipient_subject=? ORDER BY recorded_at DESC,notification_id DESC",actor.id).filter { row -> db.request(row["request_number"] as String)?.let { workflow.visible(actor,it) } ?: false }.map { mapOf("notificationId" to it["notification_id"],"event" to it["event_name"],"relatedRequestId" to it["request_number"],"relatedWorkItemId" to it["work_number"],"at" to it["recorded_at"],"read" to it["is_read"]) }
     fun unseenNotifications(actor:Actor):Map<String,Any?> = mapOf("unseen" to notifications(actor).count { it["read"]==false })
     fun schedule(actor:Actor,filter:Map<String,String>):Map<String,Any> {
-        if(actor.role !in listOf("team","bnoc")) reject("FORBIDDEN")
+        if(actor.role !in listOf("team","bnoc","requester","admin")) reject("FORBIDDEN")
         fun boundary(value:String)=if(value.matches(Regex("\\d{4}-\\d{2}-\\d{2}"))) LocalDate.parse(dateValue(value)).atStartOfDay(seoul).toInstant() else Instant.parse(instantValue(value)!!)
         val from=filter["from"]?.takeIf { it.isNotBlank() }?.let { boundary(it) } ?: LocalDate.now(seoul).atStartOfDay(seoul).toInstant()
         val to=filter["to"]?.takeIf { it.isNotBlank() }?.let { boundary(it) } ?: from.plusSeconds(86400)
         if(!to.isAfter(from) || to.isAfter(from.plusSeconds(730L*86400))) reject("VALIDATION",mapOf("to" to "조회 기간을 확인하세요."))
+        val firstDate=from.atZone(seoul).toLocalDate();val lastDate=to.minusNanos(1).atZone(seoul).toLocalDate()
+        val plans=db.plannedWorks().filter { plan ->
+            if(plan.completedDate==null) !LocalDate.parse(plan.firstWorkDate).isAfter(lastDate) else {
+                val completed=LocalDate.parse(plan.completedDate)
+                !completed.isBefore(firstDate) && !completed.isAfter(lastDate)
+            }
+        }.map { plan ->
+            mapOf<String,Any?>("source" to "planned","plannedWorkId" to plan.id,"title" to plan.title,"teamId" to plan.teamId,
+                "status" to if(plan.status=="in_progress") "진행 중" else "완료","firstWorkDate" to plan.firstWorkDate,"completedDate" to plan.completedDate)
+        }
+        if(actor.role in listOf("requester","admin")) return mapOf("entries" to emptyList<Any>(),"completedRecords" to emptyList<Any>(),"unscheduled" to emptyList<Any>(),"plans" to plans,"from" to from.toString(),"to" to to.toString())
         val valid=db.allWorks().filter { (actor.role=="bnoc" || it.teamId==actor.teamId) && it.resolutionKind=="open" && db.request(it.requestNumber)?.status !in listOf("취소","기각") && (it.origin=="assigned" || (it.origin=="after-action" && it.status=="완료")) }
         fun entry(w:WorkRecord):Map<String,Any?> {
             val request=db.request(w.requestNumber)!!
@@ -209,7 +236,7 @@ class QueryService(val db:Database,val workflow:WorkflowService) {
             .sortedWith(compareBy<WorkRecord> { if(it.origin=="after-action") it.actualStartedAt ?: "" else it.scheduleIntervals.firstOrNull()?.startsAt ?: it.completion?.get("completedAt") ?: "" }.thenBy { it.number })
             .map { entry(it) }
         val unscheduled=valid.filter { work -> work.origin=="assigned" && work.status in listOf("배정","작업 중") && work.scheduleIntervals.isEmpty() }.map { entry(it) }
-        return mapOf("entries" to scheduled,"completedRecords" to completedRecords,"unscheduled" to unscheduled,"from" to from.toString(),"to" to to.toString())
+        return mapOf("entries" to scheduled,"completedRecords" to completedRecords,"unscheduled" to unscheduled,"plans" to plans,"from" to from.toString(),"to" to to.toString())
     }
     fun overview(actor:Actor,filter:Map<String,String>):Map<String,Any> {
         if(actor.role!="bnoc") reject("FORBIDDEN")
@@ -219,7 +246,7 @@ class QueryService(val db:Database,val workflow:WorkflowService) {
     fun shared(actor:Actor,filter:Map<String,String>):Map<String,Any> {
         validateFilter(filter)
         val requests=db.requests().associateBy { it.number }
-        fun match(work:WorkRecord,r:RequestRecord):Boolean=(filter["teamId"].isNullOrBlank() || work.teamId==filter["teamId"]) && (filter["status"].isNullOrBlank() || work.status in filter["status"]!!.split(',')) && (filter["category"].isNullOrBlank() || r.category==filter["category"]) && (filter["systemType"].isNullOrBlank() || r.subcategories["systemType"]==filter["systemType"]) && (filter["workType"].isNullOrBlank() || (r.subcategories["workType"] ?: r.subcategories["meetingType"])==filter["workType"]) && (filter["priority"].isNullOrBlank() || if(filter["priority"]=="unclassified") r.priority==null else r.priority==filter["priority"]) && (filter["requestNumber"].isNullOrBlank() || r.number==filter["requestNumber"])
+        fun match(work:WorkRecord,r:RequestRecord):Boolean=(filter["teamId"].isNullOrBlank() || work.teamId==filter["teamId"]) && (filter["status"].isNullOrBlank() || work.status in filter["status"]!!.split(',')) && (filter["category"].isNullOrBlank() || r.category==filter["category"]) && classificationMatches(r,filter) && (filter["priority"].isNullOrBlank() || if(filter["priority"]=="unclassified") r.priority==null else r.priority==filter["priority"]) && (filter["requestNumber"].isNullOrBlank() || r.number==filter["requestNumber"])
         val all=db.allWorks()
         val valid=all.filter { work -> val r=requests[work.requestNumber]!!;r.status !in listOf("취소","기각") && work.resolutionKind=="open" && work.origin=="assigned" && match(work,r) }
         val afterActionWorks=all.filter { work ->
@@ -263,7 +290,7 @@ class QueryService(val db:Database,val workflow:WorkflowService) {
             "all" -> workRows(selectedAssigned,true)+plannedRows
             else -> workRows(selectedAssigned)
         }
-        val unassignedRows=requests.values.filter { r -> r.status in listOf("대기","문서 대기") && all.none { it.requestNumber==r.number && it.origin=="assigned" && it.resolutionKind=="open" } && (filter["category"].isNullOrBlank() || filter["category"]==r.category) && (filter["systemType"].isNullOrBlank() || filter["systemType"]==r.subcategories["systemType"]) && (filter["workType"].isNullOrBlank() || filter["workType"]==(r.subcategories["workType"] ?: r.subcategories["meetingType"])) && (filter["priority"].isNullOrBlank() || if(filter["priority"]=="unclassified") r.priority==null else filter["priority"]==r.priority) && filter["teamId"].isNullOrBlank() && filter["status"].isNullOrBlank() && (filter["requestNumber"].isNullOrBlank() || r.number==filter["requestNumber"]) }
+        val unassignedRows=requests.values.filter { r -> r.status in listOf("대기","문서 대기") && all.none { it.requestNumber==r.number && it.origin=="assigned" && it.resolutionKind=="open" } && (filter["category"].isNullOrBlank() || filter["category"]==r.category) && classificationMatches(r,filter) && (filter["priority"].isNullOrBlank() || if(filter["priority"]=="unclassified") r.priority==null else filter["priority"]==r.priority) && filter["teamId"].isNullOrBlank() && filter["status"].isNullOrBlank() && (filter["requestNumber"].isNullOrBlank() || r.number==filter["requestNumber"]) }
         val unassignedItems=unassignedRows.sortedWith(compareByDescending<RequestRecord> { Instant.parse(it.registeredAt) }.thenByDescending { it.number.toLong() }).map { r -> mapOf("requestNumber" to r.number,"category" to r.category,"status" to r.status,"priority" to r.priority,"canOpenDetail" to workflow.visible(actor,r)) }
         val items=if(bucket=="unassigned") unassignedItems else workItems
         val byDepartment=db.teams.map { team ->

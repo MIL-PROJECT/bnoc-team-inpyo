@@ -116,15 +116,17 @@ export async function startApplication(verification = false) {
   const port = verification ? 8083 : 8081;
   const jar = join(root, 'backend/build/libs/bnoc-server-1.0.0.jar');
   if (!await exists(jar)) throw new Error('Application JAR missing. Run npm run server:build.');
+  const artifactSha256=createHash('sha256').update(await readFile(jar)).digest('hex');
+  if(verification && (await manifest()).verification?.artifactSha256!==artifactSha256) await stopService('verification');
   const environment = {
     BNOC_PORT: String(port), BNOC_PUBLIC_URL: `http://127.0.0.1:${port}`,
     BNOC_DB_URL: `jdbc:mysql://127.0.0.1:3307/${verification ? 'bnoc_verify' : 'bnoc'}?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul`,
     BNOC_DB_USER: verification ? 'bnoc_verify' : 'bnoc_app', BNOC_DB_PASSWORD: verification ? secrets.verifyPassword : secrets.appPassword,
     BNOC_MOCK_SECRET: secrets.mockSecret, BNOC_PROVIDER_URL: 'http://127.0.0.1:8082', BNOC_INTEGRATION_MODE: 'competition',
     BNOC_FILE_ROOT: join(runtimeRoot, verification ? 'verify-attachments' : 'attachments'),
-    ...(verification ? { BNOC_GPS_POLL_MS: '1000', BNOC_CPCON_POLL_MS: '1000', BNOC_GPS_TIMEOUT_MS: '1000', BNOC_CPCON_TIMEOUT_MS: '1000' } : {})
+    ...(verification ? { BNOC_GPS_POLL_MS: '1000', BNOC_CPCON_POLL_MS: '1000', BNOC_OPERATIONS_POLL_MS: '1000', BNOC_GPS_TIMEOUT_MS: '1000', BNOC_CPCON_TIMEOUT_MS: '1000', BNOC_OPERATIONS_TIMEOUT_MS: '1000' } : {})
   };
-  const entry = await launch(verification ? 'verification' : 'application', 'java', ['-jar', jar], environment, jar + '', { artifactSha256: createHash('sha256').update(await readFile(jar)).digest('hex') });
+  const entry = await launch(verification ? 'verification' : 'application', 'java', ['-jar', jar], environment, jar + '', { artifactSha256 });
   await waitUntil(() => running(entry) && apiReady(`http://127.0.0.1:${port}/api/session`), 'BNOC application');
   return { url: `http://127.0.0.1:${port}`, pid: entry.pid, mode: 'competition' };
 }
@@ -156,7 +158,7 @@ async function main() {
   if (action === 'verify-stop') return stopService('verification');
   if (action === 'test-api' || action === 'test-ui') {
     const env = { ...process.env, ...await testEnvironment() };
-    return action === 'test-api' ? command(process.execPath, ['--test', 'e2e/server-api.test.mjs'], { env, stdio: 'inherit' }) : command('npx', ['playwright', 'test', '--config=e2e/server-playwright.config.ts'], { env, stdio: 'inherit' });
+    return action === 'test-api' ? command(process.execPath, ['--test', 'e2e/server-api.test.mjs', ...process.argv.slice(3)], { env, stdio: 'inherit' }) : command('npx', ['playwright', 'test', '--config=e2e/server-playwright.config.ts', ...process.argv.slice(3)], { env, stdio: 'inherit' });
   }
   if (action === 'status') return console.log(JSON.stringify(await status(), null, 2));
   throw new Error('Unknown runtime action.');

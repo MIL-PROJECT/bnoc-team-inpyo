@@ -29,7 +29,7 @@ class RequestRejectionContractTest {
         workflow.execute(actor,Command(type,UUID.randomUUID().toString(),number,expectedRevision=revision,payload=payload))
     private fun create():String = workflow.execute(requester,Command("createRequest",UUID.randomUUID().toString(),payload=mapOf(
         "category" to "장비/체계","subcategories" to mapOf("systemType" to "인터넷","resourceType" to "PC","workType" to "지원"),
-        "detail" to "요청 내용","location" to "행정실","contact" to "군내 1234"
+        "detail" to "요청 내용","location" to "행정실","contact" to "1234"
     ))).requestNumber!!
 
     @Test fun `BNOC rejects unassigned request and records reason actor time history and requester notice`() {

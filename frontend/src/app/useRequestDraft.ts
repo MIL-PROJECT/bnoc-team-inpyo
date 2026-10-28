@@ -2,6 +2,7 @@ import {useEffect,useRef,useState} from 'react';
 import type {Actor} from '../types';
 import type {RequestInput} from '../screens/RequestRegistrationForm';
 import {errorMessage} from './useResource';
+import {validGuidedDraft} from './intakeModel.mjs';
 
 type Draft = {id:string;revision:number;savedAt:string;input:RequestInput};
 type DraftState = {draft:Draft|null;revision:number};
@@ -18,8 +19,9 @@ function decode(value:unknown,empty:RequestInput):DraftState {
   if(state.draft===null)return {draft:null,revision:state.revision};
   const draft=state.draft;
   if(!draft||typeof draft.id!=='string'||draft.id.length!==36||draft.revision!==state.revision||!Number.isFinite(Date.parse(draft.savedAt))||!draft.input||typeof draft.input!=='object'||Array.isArray(draft.input))throw new Error('임시저장 내용을 확인하지 못했습니다.');
-  const input={...empty,...draft.input};
+  const input={...empty,...draft.input,guidedDraft:draft.input.guidedDraft??null};
   if(Object.keys(input).some(key=>!(key in empty))||Object.entries(empty).some(([key,initial])=>key!=='attachments'&&typeof input[key as keyof RequestInput]!==typeof initial)||!Array.isArray(input.attachments)||input.attachments.some(file=>!file||typeof file.id!=='string'||typeof file.fileName!=='string'||typeof file.type!=='string'||!Number.isFinite(file.size)))throw new Error('임시저장 입력의 형식을 확인하지 못했습니다.');
+  if(input.guidedDraft!==null&&!validGuidedDraft(input.guidedDraft))throw new Error('임시저장 질문 정보를 확인하지 못했습니다.');
   return {draft:{...draft,input},revision:state.revision};
 }
 export function useRequestDraft({actor,input,empty,api,onRestore,onSaved}:{actor:Actor;input:RequestInput;empty:RequestInput;api:RequestDraftApi;onRestore:(input:RequestInput)=>void;onSaved:()=>void}) {

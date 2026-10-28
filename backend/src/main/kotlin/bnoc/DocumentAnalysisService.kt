@@ -95,11 +95,12 @@ class DocumentAnalysisService(
         val limit=limitValue ?: 50
         if(offset<0 || limit !in 1..100 || offset>1_000_000) reject("VALIDATION",mapOf("offset" to "문서 위치를 확인하세요."))
         val attachment=authorizedAttachment(actor,ref)
+        val temporary=attachment["resource_ref"]==null
         val excluded=attachment["content_analysis_excluded"]==true
-        if(excluded || !isAnalyzedDocument(attachment["file_name"] as String)) return mapOf(
-            "attachmentRef" to ref,"fileName" to attachment["file_name"],"status" to if(excluded) "excluded" else "unsupported","processedRange" to null,
+        if(temporary || excluded || !isAnalyzedDocument(attachment["file_name"] as String)) return mapOf(
+            "attachmentRef" to ref,"fileName" to attachment["file_name"],"status" to if(temporary) "temporary" else if(excluded) "excluded" else "unsupported","processedRange" to null,
             "blocks" to emptyList<Any>(),"offset" to offset,"limit" to limit,"totalBlocks" to 0,
-            "metadata" to emptyList<Any>(),"source" to if(excluded) "excluded" else "unsupported","parserVersion" to parserVersion,"errorCode" to null,"canRetry" to false
+            "metadata" to emptyList<Any>(),"source" to if(temporary) "temporary" else if(excluded) "excluded" else "unsupported","parserVersion" to parserVersion,"errorCode" to null,"canRetry" to false
         )
         val row=db.rows("SELECT * FROM bnoc_document_analysis WHERE attachment_ref=?",ref).firstOrNull()
         val currentParser=row?.get("parser_version")==parserVersion
@@ -254,8 +255,11 @@ class DocumentAnalysisService(
     }
 
     private fun authorizedAttachment(actor:Actor,ref:String):Map<String,Any?> {
-        val row=db.rows("SELECT * FROM bnoc_attachments WHERE attachment_ref=? AND resource_kind='request' AND resource_ref IS NOT NULL",ref).firstOrNull() ?: reject("NOT_FOUND")
-        query.requireRequest(actor,row["resource_ref"] as String)
+        val row=db.rows("SELECT * FROM bnoc_attachments WHERE attachment_ref=? AND resource_kind='request'",ref).firstOrNull() ?: reject("NOT_FOUND")
+        val resource=row["resource_ref"] as? String
+        if(resource==null) {
+            if(row["owner_subject"]!=actor.id || row["was_linked"]!=false) reject("NOT_FOUND")
+        } else query.requireRequest(actor,resource)
         return row
     }
 

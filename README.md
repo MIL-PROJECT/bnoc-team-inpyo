@@ -53,6 +53,8 @@ npm run team:down
 
 신청서 임시저장은 신규 신청/BNOC 대리 등록 화면에서 `임시저장`을 누른 마지막 성공본을 서버에 보관한다. 창을 닫거나 다시 로그인한 뒤 같은 계정·역할로 `임시저장 불러오기`를 선택한다. 이후 편집은 다시 저장해야 하며 자동 복원하지 않는다. 업로드 완료 뒤 임시저장에 포함된 첨부만 함께 보존한다. 정식 등록 성공 시 해당 초안을 소비하고, `임시저장 삭제`는 현재 화면 입력을 남긴 채 저장본을 지운다. v15 구조 변경은 서버 시작 시 기존 DB에 적용하며 DB/첨부 초기화는 필요 없다. [초안 계약](docs/spec/개발명세서.md#request-draft-contract-20261025).
 
+부서 대표전화는 관리자 계정의 `부서별 작업 현황 > 부서 대표전화 관리`에서 수정한다. v17은 부서별 대표번호·버전을 비파괴 추가하며 기존 번호를 덮어쓰지 않는다. 초기 `000-1001`~`000-1005`는 사용자가 승인한 임시 시연 번호다. 서버 재시작 뒤에도 정정한 번호가 유지된다. 신청 전 본인 업로드 파일의 원본 미리보기와 신규 전화 입력의 숫자/- 제한은 [최신 계약](docs/spec/개발명세서.md#team-feedback-20261028)을 따른다.
+
 - [ ] **화면·업무 코드 변경:** [코드를 받는 시점과 여러 기능 작업](#team-git-sync)에 따라 main을 갱신하거나 자기 기능 브랜치에 최신 main을 병합한다. 개발 서버가 켜져 있으면 자동 반영·백엔드 재시작을 기다리고, 꺼져 있으면 `npm run team:up`으로 시작한다. 기존 Docker 이미지·DB를 사용한다.
 - [ ] **DB 테이블·열 변경:** AI가 구조 변경 명령인 마이그레이션도 함께 커밋한다. 받은 코드의 백엔드가 재시작할 때 자기 DB에 변경을 적용한다. 현재 시작 코드는 [Database.kt](backend/src/main/kotlin/bnoc/Database.kt)의 테이블·열 생성과 변경 이력을 사용한다. 기존 테이블의 형식 변경·삭제에는 그에 맞는 명시적 변경 코드가 필요하다. AI는 빈 DB와 기존 자료가 있는 DB에서 적용·자료 보존을 확인한다. GitHub로 공유하는 것은 구조 변경 코드이며 각 PC의 실제 DB 자료는 별도로 유지한다.
 - [ ] **라이브러리·프레임워크·Java·Node.js 등 변경:** 현재 개발환경에서는 `npm run team:up`으로 필요한 도구 이미지·의존성을 갱신한다. 기존 빌드 캐시를 재사용한다.
@@ -124,9 +126,13 @@ npm run team:down
 
 React 화면과 API를 하나의 Spring Boot JAR에서 제공한다. 요청·작업·이력·알림·명부·병력·야간 근무·공지는 MySQL에 저장하며 첨부 내용은 비공개 파일 경로에 보관한다. 서버 세션과 현재 권한을 검사한다. 사용자 화면은 역할명으로 로그인하며 명부는 비어 있는 상태에서 부서 담당자가 입력한다. 자체 회원가입·가짜 이름·합성 계급·임시 단계는 사용하지 않는다.
 
-현재 공개 시연 주소: **[BNOC 업무·부대 운영](https://services-local-impressive-roy.trycloudflare.com)**. 최신 기능 JAR 반영 후 공개 화면 HTTP 200, 익명 세션 HTTP 401, 실행 패키지 해시 일치를 확인했다. 컴퓨터·MySQL·서버·터널이 실행 중일 때 이용하는 임시 주소다. 상시 호스팅 완료는 아니다. 현재 주소와 실행 상태는 `npm run server:public-status`로 확인한다. 실제 로그인은 기존 계정이 필요하다.
+현재 공개 시연 주소: **[BNOC 업무·부대 운영](https://profession-hip-make-ruling.trycloudflare.com)**. 최신 기능 JAR 반영 후 공개 화면 HTTP 200, 익명 세션 HTTP 401, 실행 패키지 해시 일치를 확인했다. 컴퓨터·MySQL·서버·터널이 실행 중일 때 이용하는 임시 주소다. 상시 호스팅 완료는 아니다. 현재 주소와 실행 상태는 `npm run server:public-status`로 확인한다. 실제 로그인은 기존 계정이 필요하다.
 
 2026-10-14 로그인·상단·인증 창·GPS/CPCON의 구현 설명을 제거하고 같은 공개 주소에 반영했다. 최신 [실행 결과](docs/records/개발진행.md)는 이번 표시 검사와 이전 전체 업무 검증을 구별한다.
+
+### CD 오프라인 시연 (Windows x64)
+
+대회 기본 조건을 위한 배포 경로다. 네트워크가 연결된 준비 PC에서 `npm run server:build` 후 `npm run offline:package`를 실행해 CD용 폴더를 만든다. **출력의 `CD package created:` 뒤에 표시된 릴리스 폴더 전체만 CD에 복사한다.** CD 없이 팀원 Windows PC에서 사전 시험할 때는 같은 릴리스 폴더 전체를 ZIP으로 묶어 Drive로 전달할 수 있다. 대상 PC에서 ZIP을 먼저 풀고 그 안의 `START-DEMO.cmd`를 실행한다. 릴리스 폴더 루트에는 실행·종료·데이터 위치·PC방 초기화 주의를 담은 `USER-GUIDE.txt`도 포함한다. 패키지에는 포터블 Java 17·Node.js 22·MySQL 8.4, Microsoft Visual C++ x64 재배포 설치 파일, 서버 JAR·모의 제공자가 들어간다. 실행기는 필요한 압축을 로컬 사용자 경로에 풀고 DB·모의 제공자·업무 서버의 실제 준비 상태를 확인해 브라우저를 연다. 대상 PC에 인터넷·Docker·개발 도구는 요구하지 않는다. VC++ 런타임이 없으면 패키지 안 설치 파일을 해시와 Microsoft Authenticode 서명/발행자로 확인한 뒤 실행하며 UAC/관리자 승인이 필요할 수 있다. 검증 실패나 승인 거부 시 서버는 시작하지 않는다. PC방 등 공용 PC는 실행 정책, 관리자 승인, 재부팅 시 사용자 데이터 초기화 여부가 달라 사전 검증이 필요하다. DB·첨부·비밀은 CD가 아닌 해당 PC의 `%LOCALAPPDATA%\BNOC-Demo\data\<releaseId>`에 남는다. 종료는 `STOP-DEMO.cmd`를 사용한다. Windows 버전·CPU·권한·CD 용량과 실제 오프라인 PC 기동은 아직 미확인이다. 웹 주소는 `http://127.0.0.1:18081`이다.
 
 `a10bb49`의 [기존 공개 정적 데모](https://bnoc-operations.allsoft1004.chatgpt.site)는 과거 배포본이다. 이번 JVM/DB 제품을 그 주소에 배포하지 않았다. 로컬 실행의 기본 주소는 `http://127.0.0.1:8081`이다.
 
@@ -144,7 +150,7 @@ npm run server:status
 
 제품은 8081, 별도 모의 제공자는 8082, 이 프로젝트의 MySQL은 3307에서 실행한다. 시작 실행기가 자기 서비스를 백그라운드로 유지한다. 새로고침과 업무 서버 재시작이 DB·첨부를 초기화하지 않는다. 비밀·DB·첨부·프로세스 기록은 Git에서 제외한 `.local/bnoc-runtime/`에 보관하며 기존 3306 DB를 사용하지 않는다. 종료는 `npm run server:stop`이다.
 
-공개 시연 실행기는 `npm run server:public-start`다. 공식 [cloudflared](https://developers.cloudflare.com/tunnel/downloads/)를 `.local/dependencies/cloudflared/cloudflared`에 준비하고 위 도구·JAR을 사용한다. 별도 8085 서버·8086 모의 제공자·`bnoc_public_demo` DB·`.local/bnoc-public/attachments`를 사용하며 기존 제품·검증 DB를 복제하지 않는다. 브라우저 로그인도 공개 서비스의 `/identity`를 사용한다. MySQL·컴퓨터·공개 서버·터널이 실행 중이어야 접속하며 터널을 새로 시작하면 주소가 바뀐다. 상태/현재 URL은 `npm run server:public-status`, 저장을 유지한 서버 재시작은 `npm run server:public-restart`, 공개 서비스만 종료하려면 `npm run server:public-stop`이다. 이는 상시 호스팅이 아니다.
+공개 시연 실행기는 `npm run server:public-start`다. 공식 [cloudflared](https://developers.cloudflare.com/tunnel/downloads/)를 `.local/dependencies/cloudflared/cloudflared`에 준비하고 위 도구·JAR을 사용한다. 별도 8085 서버·8086 모의 제공자·`bnoc_public_demo` DB·`.local/bnoc-public/attachments`를 사용하며 기존 제품·검증 DB를 복제하지 않는다. 브라우저 로그인도 공개 서비스의 `/identity`를 사용한다. MySQL·컴퓨터·공개 서버·터널이 실행 중이어야 접속하며 터널을 새로 시작하면 주소가 바뀐다. 상태/현재 URL은 `npm run server:public-status`로 확인한다. 공개 실행은 JAR의 SHA별 보관 파일을 사용하므로 다음 빌드가 실행 파일을 덮어쓰지 않는다. 손상된 보관 파일은 실행하지 않는다. `node --test scripts/bnoc-public.test.mjs`로 원본 빌드 교체/새 SHA/손상 거절을 검사한다. 저장을 유지한 서버 재시작은 `npm run server:public-restart`, 공개 서비스만 종료하려면 `npm run server:public-stop`이다. 이는 상시 호스팅이 아니다.
 
 로그인에서 역할을 선택해 요청자·BNOC·작업반·부서 담당자·권한 관리자 흐름을 확인한다. 역할 변경은 로그아웃 후 다시 로그인한다. 추가 부서는 `BNOC_DEPARTMENTS`의 쉼표 구분 목록으로 서버 시작 시 등록하고 권한 관리 화면에서 부서 담당자를 지정한다.
 

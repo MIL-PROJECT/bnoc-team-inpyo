@@ -46,3 +46,9 @@ export function calendarRange(value, mode) {
   const nextDate = date.toISOString().slice(0, 10);
   return { from: localInputToUtc(firstDate + 'T00:00'), to: localInputToUtc(nextDate + 'T00:00'), firstDate, lastDate: moveDate(nextDate, -1) };
 }
+
+export function displayDate(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '날짜 확인 불가' : seoulDate(date);
+}

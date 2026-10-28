@@ -89,7 +89,17 @@ const mutations = [
     name: 'backend-meeting-form-content-privacy', kind: 'backend', file: 'backend/src/main/kotlin/bnoc/WorkflowService.kt',
     anchor: 'if(excluded) ids.forEach { db.jdbc.update("UPDATE bnoc_attachments SET content_analysis_excluded=TRUE WHERE attachment_ref=?",it) }',
     injected: 'if(false && excluded) ids.forEach { db.jdbc.update("UPDATE bnoc_attachments SET content_analysis_excluded=TRUE WHERE attachment_ref=?",it) }',
-    assertion: 'MEETING_SUPPORT_ATTACHMENT_CONTENT_MUST_STAY_EXCLUDED', suite: 'bnoc.DocumentAnalysisContractTest'
+    assertion: 'MEETING_SUPPORT_ATTACHMENT_CONTENT_MUST_STAY_EXCLUDED', suite: 'bnoc.DocumentAnalysisContractTest',
+    expectedFailureCount: 2,
+    testPatterns: [
+      'bnoc.DocumentAnalysisContractTest.DOCX original preview requires an authorized linked file and never enables server analysis',
+      'bnoc.DocumentAnalysisContractTest.meeting support original preview preserves bytes without parsing searching or reprocessing'
+    ],
+    baselineLabel: 'normal-meeting-form-content-privacy',
+    expectedFailedTestNames: [
+      'DOCX original preview requires an authorized linked file and never enables server analysis()',
+      'meeting support original preview preserves bytes without parsing searching or reprocessing()'
+    ]
   },
   {
     name: 'frontend-login-origin', kind: 'frontend', file: 'frontend/src/api/loginProof.mjs',
@@ -111,13 +121,13 @@ function copy(label) {
   return directory;
 }
 
-function run(label, kind, directory, assertion = null, suiteOverride = null) {
+function run(label, kind, directory, assertion = null, suiteOverride = null, expectedFailureCount = 1, expectedFailedTestNames = null, testPatterns = [], minimumTests = 5, baselineLabel = null) {
   const start = performance.now();
   const serverTest = kind !== 'frontend';
   const suite = suiteOverride ?? { backend: 'bnoc.WorkflowContractTest', planned: 'bnoc.PlannedWorkContractTest', auth: 'bnoc.ExternalBoundaryTest', proxy: 'bnoc.PublicIdentityProxyTest' }[kind];
   const command = serverTest ? gradle : process.execPath;
   const args = serverTest
-    ? ['-p', 'backend', 'test', '--tests', suite, '--offline', '--no-daemon']
+    ? ['-p', 'backend', 'test', ...(testPatterns.length ? testPatterns.flatMap(pattern => ['--tests', pattern]) : ['--tests', suite]), '--offline', '--no-daemon']
     : ['--test', '--test-reporter=spec', ...files(join(directory, 'frontend/src')).filter(path => path.endsWith('.test.mjs'))];
   const result = spawnSync(command, args, { cwd: directory, encoding: 'utf8', timeout: 180000, env: { ...process.env, GRADLE_USER_HOME: join(root, '.local/gradle') } });
   const log = (result.stdout ?? '') + (result.stderr ?? '');
@@ -125,6 +135,7 @@ function run(label, kind, directory, assertion = null, suiteOverride = null) {
   assert.equal(result.error, undefined, `${label}: runner error`);
   assert.equal(result.signal, null, `${label}: terminated`);
   let tests, passed, failed, diagnostic = log;
+  let failedTestNames = [];
   if (serverTest) {
     const xmlPath = join(directory, `backend/build/test-results/test/TEST-${suite}.xml`);
     assert.ok(existsSync(xmlPath), `${label}: missing executed test report`);
@@ -132,9 +143,13 @@ function run(label, kind, directory, assertion = null, suiteOverride = null) {
     writeFileSync(join(output, label + '.xml'), diagnostic);
     tests = Number(diagnostic.match(/<testsuite[^>]*\btests="(\d+)"/)?.[1]);
     failed = Number(diagnostic.match(/<testsuite[^>]*\bfailures="(\d+)"/)?.[1]);
+    failedTestNames = [...diagnostic.matchAll(/<testcase\b([^>]*)>([\s\S]*?)<\/testcase>/g)]
+      .filter(([, , body]) => /<failure\b/.test(body))
+      .map(([, attributes]) => attributes.match(/\bname="([^"]*)"/)?.[1])
+      .filter(Boolean);
     assert.equal(Number(diagnostic.match(/<testsuite[^>]*\bskipped="(\d+)"/)?.[1]), 0);
     assert.equal(Number(diagnostic.match(/<testsuite[^>]*\berrors="(\d+)"/)?.[1]), 0);
-    assert.ok(tests >= 5, `${label}: selected server contract tests must execute`);
+    assert.ok(tests >= minimumTests, `${label}: selected server contract tests must execute`);
     passed = tests - failed;
   } else {
     const count = key => Number(log.match(new RegExp(`^.*?\\b${key} (\\d+)\\s*$`, 'm'))?.[1]);
@@ -143,11 +158,12 @@ function run(label, kind, directory, assertion = null, suiteOverride = null) {
     assert.equal(count('cancelled') + count('skipped') + count('todo'), 0);
   }
   if (assertion) {
-    const baseline = results.find(result => result.suite === suite && result.assertion === null);
+    const baseline = (baselineLabel && results.find(result => result.label === baselineLabel)) ?? results.find(result => result.suite === suite && result.assertion === null);
     assert.ok(baseline, `${label}: selected suite has a normal baseline`);
     assert.equal(tests, baseline.tests, `${label}: test count changed between copies`);
     assert.notEqual(result.status, 0, `${label}: incorrect code passed`);
-    assert.equal(failed, 1, `${label}: selected defect must cause one assertion failure`);
+    assert.equal(failed, expectedFailureCount, `${label}: selected defect caused an unexpected number of assertion failures`);
+    if (expectedFailedTestNames) assert.deepEqual(failedTestNames.sort(), [...expectedFailedTestNames].sort(), `${label}: selected defect caused failures outside the expected tests`);
     assert.ok(diagnostic.includes(assertion), `${label}: intended assertion did not fail`);
     assert.doesNotMatch(diagnostic, /SyntaxError|ERR_MODULE_NOT_FOUND|Compilation failed|OutOfMemoryError/);
     if (serverTest) assert.match(diagnostic, /type="org\.opentest4j\.AssertionFailedError"/);
@@ -155,7 +171,7 @@ function run(label, kind, directory, assertion = null, suiteOverride = null) {
     assert.equal(result.status, 0, `${label}: normal copy failed`);
     assert.equal(passed, tests);
   }
-  results.push({ label, kind, assertion, exitCode: result.status, tests, passed, failed, elapsedMs: Math.round(performance.now() - start), log: label + '.log', ...(serverTest ? { xml: label + '.xml', suite } : {}) });
+  results.push({ label, kind, assertion, exitCode: result.status, tests, passed, failed, ...(serverTest && failedTestNames.length ? { failedTestNames } : {}), elapsedMs: Math.round(performance.now() - start), log: label + '.log', ...(serverTest ? { xml: label + '.xml', suite } : {}) });
 }
 
 let status = 'failed', failure = null;
@@ -164,13 +180,18 @@ try {
   const meetingPrivacyOnly = process.argv.includes('--meeting-form-privacy-only');
   const assignmentScheduleOnly = process.argv.includes('--assignment-schedule-only');
   const normal = copy('normal');
-  if (meetingPrivacyOnly) run('normal-document-analysis', 'backend', normal, null, 'bnoc.DocumentAnalysisContractTest');
+  if (meetingPrivacyOnly) {
+    const privacyMutation=mutations.find(item=>item.name==='backend-meeting-form-content-privacy');
+    run('normal-document-analysis', 'backend', normal, null, 'bnoc.DocumentAnalysisContractTest');
+    run(privacyMutation.baselineLabel, 'backend', normal, null, privacyMutation.suite, 1, null, privacyMutation.testPatterns, 2);
+  }
   else if (assignmentScheduleOnly) run('normal-backend', 'backend', normal, null, 'bnoc.WorkflowContractTest');
   else {
     run('normal-backend', 'backend', normal);
     run('normal-planned', 'planned', normal);
     run('normal-operations', 'backend', normal, null, 'bnoc.OperationsContractTest');
     run('normal-document-analysis', 'backend', normal, null, 'bnoc.DocumentAnalysisContractTest');
+    run('normal-meeting-form-content-privacy', 'backend', normal, null, 'bnoc.DocumentAnalysisContractTest', 1, null, mutations.find(item => item.name === 'backend-meeting-form-content-privacy').testPatterns, 2);
     run('normal-auth', 'auth', normal);
     run('normal-proxy', 'proxy', normal);
     run('normal-frontend', 'frontend', normal);
@@ -190,7 +211,7 @@ try {
     writeFileSync(join(output, mutation.name + '.patch'), diff.stdout);
     mutation.sourceSha256 = hash(join(root, mutation.file));
     mutation.mutatedSha256 = hash(path);
-    run(mutation.name, mutation.kind, directory, mutation.assertion, mutation.suite ?? null);
+    run(mutation.name, mutation.kind, directory, mutation.assertion, mutation.suite ?? null, mutation.expectedFailureCount ?? 1, mutation.expectedFailedTestNames ?? null, mutation.testPatterns ?? [], mutation.testPatterns?.length ? 2 : 5, mutation.baselineLabel ?? null);
   }
   status = 'passed';
 } catch (error) {

@@ -1,6 +1,6 @@
 import { request as apiRequest, test, expect, type Page, type TestInfo } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { docxFixture, previewPng, previewPdf } from './document-preview-fixture.mjs';
 
@@ -80,9 +80,20 @@ async function saveDraftApi(page:ApiSurface,input:Record<string,unknown>,revisio
 }
 const draftInput=(detail:string)=>({category:'장비/체계',systemType:'인터넷',resourceType:'PC',workType:'지원',detail,location:'업무 위치',contact:'000-0000',attachments:[]});
 async function draftSaved(page:Page) {await expect(page.getByRole('status').filter({hasText:'신청서를 임시저장했습니다.'})).toBeVisible();}
+async function revealNavItem(page:Page,name:string) {
+  const nav=page.getByRole('navigation',{name:'주 메뉴'});
+  const workItems=['내 신청','신청 관리','관련 신청','대리 등록','작업 신청','요청 현황(BNOC)','선조치 후보고','계획 정비'];
+  const groupName=workItems.includes(name)?'업무':['공지게시판','알림함'].includes(name)?'소통':['권한 관리'].includes(name)?'관리':'부대 현황';
+  const groups=nav.locator('.nav-group');
+  let group=groups.nth(0);
+  for(let index=0;index<await groups.count();index++){const candidate=groups.nth(index);if((await candidate.locator('summary').innerText()).includes(groupName)){group=candidate;break;}}
+  if(await group.getAttribute('open')===null) await group.locator('summary').click();
+  return group.locator('.nav-group__panel').getByRole('button',{name,exact:true});
+}
+async function navItem(page:Page,name:string) { await (await revealNavItem(page,name)).click(); }
 async function draftKeyboard(page:Page,name:string) {
   const button=page.getByRole('button',{name,exact:true});await expect(button).toBeEnabled();
-  await page.getByRole('button',{name:'작업 신청',exact:true}).focus();
+  await (await revealNavItem(page,'작업 신청')).focus();
   for(let step=0;step<30;step++){await page.keyboard.press('Tab');if(await button.evaluate(element=>element===document.activeElement))break;}
   await expect(button).toBeFocused();await page.keyboard.press('Enter');
 }
@@ -138,7 +149,7 @@ async function switchWithPopup(page: Page, subject: string) {
   await page.getByRole('button', { name: '로그아웃', exact: true }).click();
   await loginWithPopup(page, subject);
 }
-async function fields(page: Page, text: string) {
+async function legacyFields(page: Page, text: string) {
   await page.getByRole('combobox', { name: '체계 종류', exact: true }).selectOption('인트라넷');
   await page.getByRole('combobox', { name: '자원 유형', exact: true }).selectOption('PC');
   await page.getByRole('combobox', { name: '작업 유형', exact: true }).selectOption('지원');
@@ -159,6 +170,97 @@ async function fields(page: Page, text: string) {
   expect(await location.evaluate(element => element.matches(':placeholder-shown'))).toBe(false);
   await page.getByLabel('요청자 군내전화번호', { exact: true }).fill('000-0000');
 }
+// FR-056 / UC-028: registration reveals one question; after-action keeps the legacy fields.
+const question=(page:Page)=>page.getByRole('region',{name:'현재 질문',exact:true});
+async function fields(page:Page,text:string,stop:'review'|'itemReview'|'detail'='review') {
+  await question(page).getByRole('button',{name:'지원',exact:true}).click();
+  await question(page).getByRole('button',{name:'장비 지원',exact:true}).click();
+  await page.getByRole('button',{name:'컴퓨터 추가',exact:true}).click();
+  await page.getByRole('button',{name:'선택한 대상 계속',exact:true}).click();
+  await page.getByLabel('어디에 있나요?',{exact:true}).fill('요청 위치');
+  await question(page).getByRole('button',{name:'다음',exact:true}).click();
+  await page.getByLabel('어떤 도움이 필요한가요?',{exact:true}).fill(text);
+  if(stop==='detail')return;
+  await question(page).getByRole('button',{name:'다음',exact:true}).click();
+  await guidedReady(page);
+  if(await page.getByRole('heading',{name:'신청 내용을 확인해 주세요',exact:true}).isVisible()){
+    await guidedExtra(page,'망·체계');await question(page).getByRole('button',{name:'인트라넷',exact:true}).click();
+    if(stop==='itemReview')await guidedItemReview(page);else await guidedReady(page);
+  }
+}
+
+async function guidedReady(page:Page) {
+  if(await page.getByRole('button',{name:'이 대상 확인 완료',exact:true}).isVisible())await page.getByRole('button',{name:'이 대상 확인 완료',exact:true}).click();
+  const contact=page.getByLabel('요청자 군내전화번호',{exact:true});
+  if(await contact.isVisible()){
+    if(!(await contact.inputValue()).trim())await contact.fill('000-0000');
+    await question(page).getByRole('button',{name:'다음',exact:true}).click();
+  }
+}
+async function guidedItemReview(page:Page) {
+  if(!await page.getByRole('button',{name:'이 대상 확인 완료',exact:true}).isVisible())await page.getByRole('button',{name:/단계 대상 정보$/}).click();
+  await expect(page.getByRole('button',{name:'이 대상 확인 완료',exact:true})).toBeVisible();
+}
+async function guidedExtra(page:Page,field:string) {
+  await guidedItemReview(page);
+  const extra=question(page).locator('details.intake-optional-information');
+  if(await extra.getAttribute('open')===null)await extra.locator('summary').click();
+  await question(page).getByRole('button',{name:field+' 수정',exact:true}).click();
+}
+async function guidedDetail(page:Page,text:string,ready=true) {
+  if(!await page.getByLabel('어떤 도움이 필요한가요?',{exact:true}).isVisible()){
+    await guidedItemReview(page);
+    await question(page).getByRole('button',{name:'내용 수정',exact:true}).click();
+  }
+  await page.getByLabel('어떤 도움이 필요한가요?',{exact:true}).fill(text);
+  if(ready){await question(page).getByRole('button',{name:'다음',exact:true}).click();await guidedReady(page);}
+}
+async function expectGuidedDetail(page:Page,text:string,summary=`컴퓨터 지원 1대 / 요청 위치 / 인트라넷 / ${text}`){
+  // Restoration can replace a current input with its answer list. Retry the view,
+  // but keep exact value equality in every view, including a frozen final review.
+  await expect(async()=>{
+    const shown=await question(page).evaluateAll(sections=>{
+      const section=sections[0];if(!section)return null;
+      const input=section.querySelector<HTMLTextAreaElement>('textarea[aria-label="어떤 도움이 필요한가요?"]');
+      if(input)return {view:'input',value:input.value};
+      const row=[...section.querySelectorAll('.intake-answer-list > div')].find(row=>row.querySelector('dt')?.textContent==='내용');
+      if(row)return {view:'answer',value:row.querySelector('dd')?.textContent};
+      const summary=section.querySelector('.intake-summary-detail');
+      return summary?{view:'summary',value:summary.textContent}:null;
+    });
+    expect(shown,'current detail value is present').not.toBeNull();
+    expect(shown!.value).toBe(text);
+    if(shown!.view==='summary')for(const value of summary.split(' / ').slice(1))await expect(question(page).locator('.intake-summary').first()).toContainText(value);
+  }).toPass({timeout:12000});
+}
+async function expectGuidedEmpty(page:Page){
+  await expect(page.getByRole('heading',{name:'무엇을 신청할까요?',exact:true})).toBeVisible();
+  await expect(page.locator('.guided-intake').getByRole('textbox')).toHaveCount(0);
+  await expect(page.locator('.intake-choices button')).toHaveText(['고장','신설','지원','기타']);
+  await expect(page.locator('.intake-targets')).toHaveCount(0);
+}
+async function guidedAttachments(page:Page){
+  await guidedItemReview(page);
+  const section=question(page).locator('details').filter({has:page.locator('summary').filter({hasText:'사진·문서 첨부'})});
+  if(await section.getAttribute('open')===null)await section.locator('summary').click();
+  return page.getByLabel('이 대상의 첨부파일',{exact:true});
+}
+async function guidedOptional(page:Page){
+  if(!await page.getByLabel('요청자 군내전화번호',{exact:true}).isVisible())await page.getByRole('button',{name:/단계 연락처$/}).click();
+  const section=question(page).locator('details').filter({has:page.locator('summary').filter({hasText:'희망 일정·추가 연락처·정비대상자'})});
+  if(await section.getAttribute('open')===null)await section.locator('summary').click();
+}
+async function guidedMeeting(page:Page,text:string,location='회의 위치'){
+  await question(page).getByRole('button',{name:'지원',exact:true}).click();
+  await question(page).getByRole('button',{name:'회의 지원',exact:true}).click();
+  await question(page).getByRole('button',{name:'화상회의',exact:true}).click();
+  await question(page).getByRole('button',{name:'KJCCS',exact:true}).click();
+  await page.getByLabel('어떤 지원이 필요한가요?',{exact:true}).fill(text);
+  await question(page).getByRole('button',{name:'다음',exact:true}).click();
+  await page.getByLabel('회의 장소는 어디인가요?',{exact:true}).fill(location);
+  await question(page).getByRole('button',{name:'다음',exact:true}).click();
+}
+const draftDetail=(value:any)=>value.draft.input.guidedDraft?.items[0]?.detail??value.draft.input.detail;
 async function noOverflow(page: Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'PC_DOCUMENT_MUST_NOT_OVERFLOW').toBeTruthy();
 }
@@ -178,6 +280,17 @@ async function humanHistory(page: Page, prioritySummary: string, assignedAt: str
 }
 async function screenshot(page: Page, info: TestInfo, label: string) {
   const file = path.resolve(evidence, `server-${info.project.name}-${label}.png`);
+  const height=await page.evaluate(()=>document.documentElement.scrollHeight);
+  if(info.project.name.startsWith('firefox-')&&height>32000) {
+    const width=page.viewportSize()!.width,parts=[];
+    for(let y=0;y<height;y+=16000) {
+      const part=file.replace(/\.png$/,`-part-${parts.length+1}.png`),clip={x:0,y,width,height:Math.min(16000,height-y)};
+      await page.screenshot({path:part,fullPage:true,clip});parts.push({path:part,clip});
+      await info.attach(`${label}-part-${parts.length}`,{path:part,contentType:'image/png'});
+    }
+    const manifest=file.replace(/\.png$/,'.json');await writeFile(manifest,JSON.stringify({reason:'Firefox screenshot height limit32767',height,width,parts},null,2));
+    await info.attach(label,{path:manifest,contentType:'application/json'});return;
+  }
   await page.screenshot({ path: file, fullPage: true });
   await info.attach(label, { path: file, contentType: 'image/png' });
 }
@@ -199,28 +312,27 @@ test.afterEach(async ({ page }, info) => {
 test('draft: incomplete input and completed uploads survive closing and logging in, with explicit keyboard restore',async({page,context},info)=>{
   await resetRequestDraft(page);const count=(await apiRead(page,'/api/requests?size=100')).total;
   const text=`미완성 초안 ${info.project.name} ${randomUUID()}`;
-  await page.goto('/new');await page.getByLabel('요청 내용·증상',{exact:true}).fill(text);
+  await page.goto('/new');await fields(page,text);await guidedOptional(page);
   await page.getByRole('checkbox',{name:'정비대상자가 요청자와 다름',exact:true}).check();
   await page.getByLabel('정비대상자 이름',{exact:true}).fill('작성 중 대상');
   await page.getByRole('checkbox',{name:'정비대상자가 요청자와 다름',exact:true}).uncheck();
-  await page.getByText('선택 정보',{exact:true}).click();await page.getByLabel('2지망 날짜',{exact:true}).fill('2026-10-30');
+  await page.getByLabel('2지망 날짜',{exact:true}).fill('2026-10-30');
   const fileName=`draft-${info.project.name}.txt`;
-  await page.getByLabel('첨부파일',{exact:true}).setInputFiles({name:fileName,mimeType:'text/plain',buffer:Buffer.from('persistent draft bytes')});
+  await (await guidedAttachments(page)).setInputFiles({name:fileName,mimeType:'text/plain',buffer:Buffer.from('persistent draft bytes')});
   await expect(page.getByRole('button',{name:fileName+' 첨부 제외',exact:true})).toBeVisible();
   await draftKeyboard(page,'임시저장');await draftSaved(page);
   expect((await apiRead(page,'/api/requests?size=100')).total).toBe(count,'DRAFT_SAVE_MUST_NOT_REGISTER_A_REQUEST');
   const saved=(await apiRead(page,'/api/request-draft')).data;
   expect(saved.draft.input.preference2Date).toBe('2026-10-30');expect(saved.draft.input.preference2Period).toBe('');
+  expect(saved.draft.input.guidedDraft.step).toBe('itemReview');expect(draftDetail(saved)).toBe(text);
   const session=(await apiRead(page,'/api/session')).data;
   expect((await page.request.post('/api/auth/logout',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},data:{}})).status()).toBe(200);
   await page.close();const restored=await context.newPage();const errors:string[]=[];restored.on('pageerror',error=>errors.push(error.message));
   try{
-    await apiLogin(restored,'requester');await restored.goto('/new');
-    await expect(restored.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('');
-    await draftKeyboard(restored,'임시저장 불러오기');
-    await expect(restored.getByLabel('요청 내용·증상',{exact:true})).toHaveValue(text);
-    await expect(restored.getByRole('button',{name:fileName+' 첨부 제외',exact:true})).toBeVisible();
-    await restored.getByText('선택 정보',{exact:true}).click();
+    await apiLogin(restored,'requester');await restored.goto('/new');await expectGuidedEmpty(restored);
+    await draftKeyboard(restored,'임시저장 불러오기');await expectGuidedDetail(restored,text);
+    await guidedAttachments(restored);await expect(restored.getByRole('button',{name:fileName+' 첨부 제외',exact:true})).toBeVisible();
+    await guidedReady(restored);await guidedOptional(restored);
     await expect(restored.getByLabel('1지망 날짜',{exact:true})).toHaveValue('');await expect(restored.getByLabel('2지망 날짜',{exact:true})).toHaveValue('2026-10-30');
     await expect(restored.getByLabel('2지망 오전·오후',{exact:true})).toHaveValue('');
     await restored.getByRole('checkbox',{name:'정비대상자가 요청자와 다름',exact:true}).check();await expect(restored.getByLabel('정비대상자 이름',{exact:true})).toHaveValue('작성 중 대상');
@@ -228,8 +340,8 @@ test('draft: incomplete input and completed uploads survive closing and logging 
     expect(await restored.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     expect(await restored.evaluate(value=>Object.values(localStorage).join('').includes(value)||Object.values(sessionStorage).join('').includes(value),text)).toBe(false);
     await screenshot(restored,info,'persistent-request-draft');
-    await restored.getByLabel('요청 내용·증상',{exact:true}).fill(text+' 미저장 변경');
-    expect((await apiRead(restored,'/api/request-draft')).data.draft.input.detail).toBe(text,'UNSAVED_EDITS_MUST_NOT_CHANGE_SERVER_DRAFT');
+    await guidedDetail(restored,text+' 미저장 변경',false);
+    expect(draftDetail((await apiRead(restored,'/api/request-draft')).data)).toBe(text,'UNSAVED_EDITS_MUST_NOT_CHANGE_SERVER_DRAFT');
     expect(errors).toEqual([]);
   }finally{await resetRequestDraft(restored);await restored.close();}
 });
@@ -240,48 +352,317 @@ test('draft: current writer owns a BNOC draft and restoration or deletion requir
     await resetRequestDraft(inspector,'bnoc');const empty=await resetRequestDraft(page);
     await saveDraftApi(page,draftInput('요청자의 마지막 저장본'),empty.revision);
     await apiLogin(inspector,'requester-secondary');expect((await apiRead(inspector,'/api/request-draft')).data.draft).toBeNull();
-    await apiLogin(page,'bnoc');await page.goto('/new');await page.getByLabel('요청 내용·증상',{exact:true}).fill('BNOC가 작성 중인 대리 신청');
+    await apiLogin(page,'bnoc');await page.goto('/new');await fields(page,'BNOC가 작성 중인 대리 신청','detail');
     await expect(page.getByRole('button',{name:'임시저장',exact:true})).toBeEnabled();await page.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(page);
-    expect((await apiRead(page,'/api/request-draft')).data.draft.input.detail).toBe('BNOC가 작성 중인 대리 신청');
+    expect(draftDetail((await apiRead(page,'/api/request-draft')).data)).toBe('BNOC가 작성 중인 대리 신청');
     await apiLogin(page,'requester');await page.goto('/new');
-    await expect(page.getByRole('button',{name:'임시저장 불러오기',exact:true})).toBeEnabled();
-    await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('');
-    await page.getByLabel('요청 내용·증상',{exact:true}).fill('현재 작성 중인 내용');
-    page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();
-    await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('현재 작성 중인 내용');
-    page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();
-    await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('요청자의 마지막 저장본');
+    await expect(page.getByRole('button',{name:'임시저장 불러오기',exact:true})).toBeEnabled();await expectGuidedEmpty(page);
+    await fields(page,'현재 작성 중인 내용','detail');
+    page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expectGuidedDetail(page,'현재 작성 중인 내용');
+    page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expectGuidedDetail(page,'요청자의 마지막 저장본');
     page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'임시저장 삭제',exact:true}).click();
-    await expect(page.getByRole('status').filter({hasText:'임시저장한 신청서를 삭제했습니다.'})).toBeVisible();
-    await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('요청자의 마지막 저장본');
+    await expect(page.getByRole('status').filter({hasText:'임시저장한 신청서를 삭제했습니다.'})).toBeVisible();await expectGuidedDetail(page,'요청자의 마지막 저장본');
     expect((await apiRead(page,'/api/request-draft')).data.draft).toBeNull();
-    await apiLogin(inspector,'bnoc');expect((await apiRead(inspector,'/api/request-draft')).data.draft.input.detail).toBe('BNOC가 작성 중인 대리 신청');
+    await apiLogin(inspector,'bnoc');expect(draftDetail((await apiRead(inspector,'/api/request-draft')).data)).toBe('BNOC가 작성 중인 대리 신청');
     await apiLogin(inspector,'team-wireless');expect((await inspector.request.get('/api/request-draft')).status()).toBe(403);
   }finally{await resetRequestDraft(inspector);await resetRequestDraft(inspector,'bnoc');await inspector.request.dispose();}
+});
+
+test('main functions: operations status, central personnel, absences and duty views use live APIs',async({page},info)=>{
+  const localDate=(offset=0)=>{
+    const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).map(part=>[part.type,part.value]));
+    const date=new Date(`${parts.year}-${parts.month}-${parts.day}T00:00:00Z`);date.setUTCDate(date.getUTCDate()+offset);return date.toISOString().slice(0,10);
+  };
+  const today=localDate(),tomorrow=localDate(1),month=today.slice(0,7),suffix=randomUUID().slice(0,8);
+  const soldierName=`검수병${suffix}`,officerName=`검수간부${suffix}`,inactiveName=`비활성간부${suffix}`;
+  await providerControl(page,{reset:true});await apiLogin(page,'bnoc');
+  const createPerson=async(displayName:string,category:'병'|'간부',rank:string,active=true,department=wire)=>{
+    const directory=(await apiRead(page,'/api/personnel-roster')).data;
+    const saved=await command(page,'saveCentralPerson',{department,category,rank,displayName,serviceNumber:`QA-${randomUUID()}`,internalPhone:'7654',active},{expectedRevision:directory.revision});
+    return saved.publicRef as string;
+  };
+  const soldierRef=await createPerson(soldierName,'병','상병');
+  const officerRef=await createPerson(officerName,'간부','대위');
+  await createPerson(inactiveName,'간부','소위',false);
+  const otherTeamName=`다른부서 인원 ${suffix}`;
+  const otherTeamRef=await createPerson(otherTeamName,'병','상병',true,'유선반');
+  await command(page,'saveAbsence',{personRef:soldierRef,absenceType:'휴가',startDate:today,endDate:today},{expectedRevision:0});
+
+  await page.goto('/operations-status');
+  await expect(page.getByRole('heading',{name:'정보통신 운용현황'})).toBeVisible();
+  await expect(page.getByText('전송망 운용태세')).toBeVisible();
+  await expect(page.getByRole('heading',{name:'통신시설'})).toBeVisible();
+  await expect(page.getByText('주 통신실')).toBeVisible();
+  await screenshot(page,info,'main-operations-status');
+
+  await page.goto('/personnel');
+  const summary=page.getByRole('region',{name:'일일 병력 현황'});
+  await expect(summary).toContainText('총원');await expect(summary).toContainText('현재원');await expect(summary).toContainText('결원');
+  await expect(page.getByRole('row').filter({hasText:soldierName})).toContainText('휴가');
+  await page.goto('/roster');
+  await page.getByRole('row').filter({hasText:soldierName}).getByRole('button',{name:`휴가 ${today} 부재 수정`}).click();
+  await expect(page.getByRole('heading',{name:'부재 기간 수정'})).toBeVisible();
+  await page.getByLabel('시작일').fill(tomorrow);
+  await page.getByLabel('종료일').fill(tomorrow);
+  await page.locator('form.personnel-editor').getByRole('button',{name:'수정',exact:true}).click();
+  await expect(page.getByRole('status').filter({hasText:'부재 기간을 수정했습니다.'})).toBeVisible();
+  const roster=(await apiRead(page,`/api/personnel-roster?department=${encodeURIComponent(wire)}`)).data.entries.find((item:{personRef:string})=>item.personRef===soldierRef);
+  expect(roster.absences[0].startDate).toBe(tomorrow);
+  expect(roster.absences[0].endDate).toBe(tomorrow);
+  // Keep the evidence focused as the isolated test directory accumulates records.
+  await page.getByRole('searchbox',{name:'인원 검색',exact:true}).fill(soldierName);
+  await screenshot(page,info,'main-personnel-roster');
+  await page.getByRole('searchbox',{name:'인원 검색',exact:true}).fill('');
+
+  await page.route('**/api/personnel-roster*',async route=>{
+    const response=await route.fetch();const body=await response.json();
+    const existing=body.data.entries.find((item:{personRef:string})=>item.personRef===officerRef);
+    existing.category=null;existing.rank=null;existing.complete=false;existing.serviceNumber=null;
+    await route.fulfill({response,json:body});
+  });
+  await page.reload();
+  await page.getByRole('row').filter({hasText:officerName}).getByRole('button',{name:'정보 입력'}).click();
+  const personEditor=page.locator('form.personnel-editor');
+  await expect(personEditor.locator('select').nth(0)).toHaveValue('');await expect(personEditor.locator('select').nth(1)).toHaveValue('');
+  expect(await page.locator('form.personnel-editor').evaluate((form:HTMLFormElement)=>form.checkValidity())).toBe(false);
+  await page.locator('form.personnel-editor').getByRole('button',{name:'취소'}).click();
+  await page.unroute('**/api/personnel-roster*');
+
+  await page.goto('/night-duty');
+  await expect(page.getByRole('heading',{name:'당직 야간근무 현황'})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'금일 근무 편성'})).toBeVisible();
+  await expect(page.getByRole('checkbox',{name:new RegExp(soldierName)})).toHaveCount(0);
+  await expect(page.getByRole('checkbox',{name:new RegExp(inactiveName)})).toBeDisabled();
+  await page.locator('details.duty-text-import summary').click();
+  await page.getByLabel('근무자 목록').fill(`${today.replaceAll('-','')} 대위 ${officerName}`);
+  await page.getByRole('button',{name:'입력한 근무자 추가'}).click();
+  await expect(page.getByRole('form',{name:'근무 편성'}).getByText(`대위 ${officerName}`,{exact:true})).toBeVisible();
+  await page.reload();await expect(page.getByRole('form',{name:'근무 편성'}).getByText(`대위 ${officerName}`,{exact:true})).toBeVisible();
+
+  await apiLogin(page,'team-wireless');await page.goto('/night-duty');
+  await expect(page.getByLabel('근무 자리')).toHaveCount(0);
+  await expect(page.getByRole('checkbox',{name:new RegExp(soldierName)})).toBeVisible();
+  await expect(page.getByRole('checkbox',{name:new RegExp(inactiveName)})).toBeDisabled();
+  await page.locator('details.duty-text-import summary').click();
+  await page.getByLabel('근무자 목록').fill(`${today.replaceAll('-','')} 상병 ${otherTeamName}`);
+  await page.getByRole('button',{name:'입력한 근무자 추가'}).click();
+  const dutyError=page.getByRole('alert').filter({hasText:'입력값을 확인하세요.'});
+  await expect(dutyError).toBeVisible();
+  const errorBox=await dutyError.boundingBox();
+  expect(errorBox&&errorBox.y+errorBox.height<=900,'monthly duty validation must stay in the viewport').toBeTruthy();
+  const dutyViewport=await page.evaluate(()=>({height:window.innerHeight,scrollHeight:document.scrollingElement?.scrollHeight,calendarBottom:document.querySelector('.duty-calendar-panel')?.getBoundingClientRect().bottom,editorBottom:document.querySelector('.duty-editor')?.getBoundingClientRect().bottom}));
+  expect(dutyViewport.scrollHeight).toBeLessThanOrEqual(dutyViewport.height);
+  expect(dutyViewport.calendarBottom).toBeLessThanOrEqual(dutyViewport.height);
+  expect(dutyViewport.editorBottom).toBeLessThanOrEqual(dutyViewport.height);
+  await screenshot(page,info,'monthly-duty-cross-team-error');
+  const rejectedSchedules=(await apiRead(page,`/api/duty-schedules?month=${month}`)).data.entries as {people:{personRef:string}[]}[];
+  expect(rejectedSchedules.some(entry=>entry.people.some(person=>person.personRef===otherTeamRef))).toBe(false,'invalid cross-team input must not partially save');
+  await page.getByLabel('근무자 목록').fill(`${today.replaceAll('-','')} 상병 ${soldierName}`);
+  await page.getByRole('button',{name:'입력한 근무자 추가'}).click();
+  await expect(page.getByRole('form',{name:'근무 편성'}).getByText(`상병 ${soldierName}`,{exact:true})).toBeVisible();
+
+  // Unmount the previous team's editor before changing identity. The requester
+  // has no mounted app until observation begins, so its first render is covered.
+  await page.goto('about:blank');
+  await apiLogin(page,'requester');
+  let rosterReads=0;const viewerWrites:string[]=[];
+  page.on('request',request=>{const url=new URL(request.url());if(url.pathname==='/api/personnel-roster'&&request.method()==='GET')rosterReads++;if(url.pathname.startsWith('/api/')&&request.method()!=='GET')viewerWrites.push(`${request.method()} ${url.pathname}`);});
+  await page.goto('/night-duty');
+  await expect(page.getByRole('heading',{name:'금일 근무 편성'})).toBeVisible();
+  await expect(page.getByText(`대위 ${officerName}`,{exact:true})).toBeVisible();
+  await expect(page.getByText(`상병 ${soldierName}`,{exact:true})).toBeVisible();
+  await expect(page.getByRole('form',{name:'근무 편성'})).toHaveCount(0);
+  expect(rosterReads,'requester schedule view must not fetch the central roster').toBe(0);
+  expect(viewerWrites,'requester schedule view must not write data').toEqual([]);
+  await page.goto('/roster');
+  await expect(page.getByRole('heading',{name:'접근 권한이 없습니다'})).toBeVisible();
+});
+
+test('monthly duty screen adds selected members across dates, replaces one date, and replays a lost save',async({page})=>{
+  await apiLogin(page,'bnoc');
+  const suffix=randomUUID().slice(0,8);let month='';
+  for(let attempt=0;attempt<10;attempt++) {
+    const token=randomUUID().slice(0,8),year=2000+parseInt(token.slice(0,4),16)%7000,candidate=`${year}-${String(1+parseInt(token.slice(4),16)%12).padStart(2,'0')}`;
+    const entries=(await apiRead(page,`/api/duty-schedules?month=${candidate}&seat=duty_officer`)).data.entries;
+    if(!entries.some((entry:{date:string})=>entry.date===`${candidate}-10`||entry.date===`${candidate}-11`)){month=candidate;break;}
+  }
+  expect(month,'the fixture must use two empty officer dates without overwriting an existing schedule').not.toBe('');
+  const firstDate=`${month}-10`,secondDate=`${month}-11`;
+  const createOfficer=async(name:string)=>{
+    const directory=(await apiRead(page,'/api/personnel-roster')).data;
+    const saved=await command(page,'saveCentralPerson',{department:wire,category:'간부',rank:'대위',displayName:name,serviceNumber:`QA-${randomUUID()}`,internalPhone:'7654',active:true},{expectedRevision:directory.revision});
+    return saved.publicRef as string;
+  };
+  const firstName=`합성 A ${suffix}`,secondName=`합성 B ${suffix}`,addedName=`합성 C ${suffix}`;
+  const first=await createOfficer(firstName),second=await createOfficer(secondName),added=await createOfficer(addedName);
+  await command(page,'saveDutySchedule',{month,date:firstDate,seat:'duty_officer',personRefs:[first]},{expectedRevision:0});
+  await command(page,'saveDutySchedule',{month,date:secondDate,seat:'duty_officer',personRefs:[second]},{expectedRevision:0});
+
+  let firstAttempt:Record<string,unknown>|undefined;let retryAttempt:Record<string,unknown>|undefined;let dropped=false;
+  await page.route('**/api/commands',async route=>{
+    const body=JSON.parse(route.request().postData()||'{}') as Record<string,unknown>;
+    if(body.type==='saveDutyScheduleBatch'&&!dropped){const response=await route.fetch();expect(response.status(),'first batch must commit before its response is dropped').toBe(200);firstAttempt=body;dropped=true;await route.abort('failed');return;}
+    if(body.type==='saveDutyScheduleBatch'&&dropped&&!retryAttempt)retryAttempt=body;
+    await route.continue();
+  });
+  await page.goto('/night-duty');
+  await expect(page.getByRole('heading',{name:'당직 야간근무 현황'})).toBeVisible();
+  await expect(page.getByText('불러오는 중…',{exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'월',exact:true}).click();
+  const waitForDutyRefresh=()=>page.waitForResponse(response=>{const url=new URL(response.url());return url.pathname==='/api/duty-schedules'&&url.searchParams.get('month')===month&&response.ok();});
+  const monthRefresh=waitForDutyRefresh();
+  await page.getByLabel('대상 월').fill(month);
+  await monthRefresh;
+  await expect(page.getByText('불러오는 중…')).toHaveCount(0);
+  await expect(page.getByRole('region',{name:`${month} 월간 근무자`})).toBeVisible();
+  await page.getByRole('button',{name:`${firstDate} 근무자 보기`}).click();
+  await expect(page.getByText('불러오는 중…')).toHaveCount(0);
+  await expect(page.getByRole('checkbox',{name:new RegExp(firstName)})).toBeChecked();
+  await page.getByRole('button',{name:'여러 날짜 편성'}).click();
+  await page.getByRole('checkbox',{name:new RegExp(firstName)}).check();
+  await expect(page.getByText('불러오는 중…')).toHaveCount(0);
+  await page.getByRole('button',{name:`${secondDate} 근무자 보기`}).click();
+  await expect(page.getByText('불러오는 중…')).toHaveCount(0);
+  await expect(page.getByRole('checkbox',{name:new RegExp(firstName)})).toBeChecked();
+  const addedCheckbox=page.getByRole('checkbox',{name:new RegExp(addedName)});
+  await expect(addedCheckbox).toBeVisible();await addedCheckbox.check();
+  const editor=page.getByRole('form',{name:'근무 편성'});
+  const batchSave=editor.getByRole('button',{name:'2일 야간근무표 저장'});
+  await batchSave.click();
+  await expect(page.locator('.duty-status-area').getByRole('alert')).toContainText('저장 결과를 확인하지 못했습니다');
+  const expiredSession=(await apiRead(page,'/api/session')).data;
+  expect((await page.request.post('/api/auth/logout',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':expiredSession.csrfToken},data:{}})).status()).toBe(200);
+  await batchSave.click();await expect(page.getByRole('dialog',{name:'로그인 만료',exact:true})).toBeVisible();
+  const reloadedDuty=waitForDutyRefresh();await loginWithPopup(page,'bnoc');await reloadedDuty;await expect(page.getByRole('dialog',{name:'로그인 만료',exact:true})).toHaveCount(0);
+  await batchSave.click();
+  await expect(page.locator('.duty-status-area .duty-feedback')).toContainText('2일 저장');
+  expect(retryAttempt?.operationId).toBe(firstAttempt?.operationId,'LOST_DUTY_RESPONSE_MUST_REUSE_OPERATION_ID');
+  expect(retryAttempt?.payload).toEqual(firstAttempt?.payload,'LOST_DUTY_RESPONSE_MUST_REUSE_INPUT_AND_VERSIONS');
+  const sentEntries=(firstAttempt?.payload as {entries?:{date:string;personRefs:string[]}[]}|undefined)?.entries;
+  expect(sentEntries?.map(entry=>[entry.date,[...entry.personRefs].sort()])).toEqual([[firstDate,[first,added].sort()],[secondDate,[first,added].sort()]],'MULTI_DATE_SCREEN_MUST_SEND_THE_INTENDED_SHARED_SELECTION');
+  let schedules=(await apiRead(page,`/api/duty-schedules?month=${month}&seat=duty_officer`)).data.entries;
+  const refs=(date:string)=>schedules.find((item:{date:string})=>item.date===date).people.map((person:{personRef:string})=>person.personRef);
+  expect(new Set(refs(firstDate))).toEqual(new Set([first,added]));
+  expect(new Set(refs(secondDate))).toEqual(new Set([second,first,added]));
+  expect(refs(secondDate)).toHaveLength(3);
+});
+
+test('personnel summary ignores late date responses and binds count to its requested date',async({page})=>{
+  const dates=(()=>{const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).map(part=>[part.type,part.value]));const today=`${parts.year}-${parts.month}-${parts.day}`;const next=new Date(`${today}T00:00:00Z`);next.setUTCDate(next.getUTCDate()+1);return [today,next.toISOString().slice(0,10)] as const;})();
+  const [today,tomorrow]=dates;let releaseOld!:()=>void;let startedOld!:()=>void;
+  const oldGate=new Promise<void>(resolve=>{releaseOld=resolve;});const oldStarted=new Promise<void>(resolve=>{startedOld=resolve;});
+  await apiLogin(page,'bnoc');
+  await page.route('**/api/personnel?*',async route=>{
+    const date=new URL(route.request().url()).searchParams.get('date')||'';
+    if(date===today){startedOld();await oldGate;}
+    const marker=date===today?101:202;
+    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({ok:true,queriedAt:new Date().toISOString(),data:{date,total:marker,current:marker,absent:0,departments:[{department:wire,total:marker,current:marker,absent:0,byAbsenceType:{}}]}})});
+  });
+  try{
+    await page.goto('/personnel');await oldStarted;
+    await page.getByLabel('기준일').fill(tomorrow);
+    const latest=page.getByRole('region',{name:`${tomorrow} 일일 병력 현황`});
+    await expect(latest).toContainText('202');
+    releaseOld();
+    await expect(latest).toContainText('202');
+    await expect(page.getByRole('region',{name:`${today} 일일 병력 현황`})).toHaveCount(0);
+  }finally{releaseOld();}
+});
+
+test('roster and absence forms replay committed saves with the same operation and input',async({page})=>{
+  await apiLogin(page,'bnoc');
+  const captured=new Map<string,Record<string,unknown>>(),retried=new Map<string,Record<string,unknown>>(),dropped=new Set<string>();
+  await page.route('**/api/commands',async route=>{
+    const body=JSON.parse(route.request().postData()||'{}') as Record<string,unknown>;const type=String(body.type);
+    if(['saveCentralPerson','saveAbsence'].includes(type)&&!dropped.has(type)){
+      const response=await route.fetch();expect(response.status(),`${type} must commit before response loss`).toBe(200);captured.set(type,body);dropped.add(type);await route.abort('failed');return;
+    }
+    if(dropped.has(type)&&!retried.has(type))retried.set(type,body);
+    await route.continue();
+  });
+  await page.goto('/roster');await page.getByRole('button',{name:'인원 등록'}).click();
+  const editor=page.locator('form.personnel-editor').first();const name=`재시도 합성 인원 ${randomUUID().slice(0,8)}`;
+  await editor.getByLabel('구분').selectOption('병');await editor.getByLabel('계급·직급').selectOption('상병');await editor.getByLabel('이름').fill(name);
+  await editor.getByLabel('소속 부서').selectOption(wire);await editor.getByLabel('군번').fill(`QA-${randomUUID()}`);
+  await editor.getByRole('button',{name:'저장',exact:true}).click();await expect(editor.getByRole('alert')).toContainText('저장 결과를 확인하지 못했습니다');
+  await editor.getByRole('button',{name:'저장 결과 다시 확인',exact:true}).click();await expect(page.getByRole('status')).toContainText(`${name} 등록됨`);
+  const roster=(await apiRead(page,`/api/personnel-roster?department=${encodeURIComponent(wire)}`)).data.entries.filter((person:{displayName:string})=>person.displayName===name);
+  expect(roster).toHaveLength(1);expect(retried.get('saveCentralPerson')?.operationId).toBe(captured.get('saveCentralPerson')?.operationId);
+  expect(retried.get('saveCentralPerson')?.payload).toEqual(captured.get('saveCentralPerson')?.payload);
+  expect(retried.get('saveCentralPerson')?.expectedRevision).toBe(captured.get('saveCentralPerson')?.expectedRevision);
+
+  await page.getByRole('button',{name:'부재 등록'}).click();const absenceEditor=page.locator('form.personnel-editor').last();await absenceEditor.getByLabel('대상 부서').selectOption(wire);
+  await absenceEditor.getByLabel('인원').selectOption(roster[0].personRef);await absenceEditor.getByLabel('시작일').fill('2026-10-10');await absenceEditor.getByLabel('종료일').fill('2026-10-10');
+  await absenceEditor.getByRole('button',{name:'등록',exact:true}).click();await expect(absenceEditor.getByRole('alert')).toContainText('저장 결과를 확인하지 못했습니다');
+  await absenceEditor.getByRole('button',{name:'저장 결과 다시 확인',exact:true}).click();await expect(page.getByRole('status')).toContainText('부재 기간을 등록했습니다.');
+  expect(retried.get('saveAbsence')?.operationId).toBe(captured.get('saveAbsence')?.operationId);
+  expect(retried.get('saveAbsence')?.payload).toEqual(captured.get('saveAbsence')?.payload);
+  expect(retried.get('saveAbsence')?.expectedRevision).toBe(captured.get('saveAbsence')?.expectedRevision);
+  const finalRoster=(await apiRead(page,`/api/personnel-roster?department=${encodeURIComponent(wire)}`)).data.entries.find((person:{personRef:string})=>person.personRef===roster[0].personRef);
+  expect(finalRoster.absences).toHaveLength(1);
+});
+
+test('a team can remove an existing assignee who later becomes inactive',async({page})=>{
+  const name=`기존 배정 ${randomUUID().slice(0,8)}`,serviceNumber=`QA-${randomUUID()}`;
+  await apiLogin(page,'bnoc');
+  let directory=(await apiRead(page,'/api/personnel-roster')).data;
+  const created=await command(page,'saveCentralPerson',{department:wire,category:'병',rank:'상병',displayName:name,serviceNumber,internalPhone:'7654',active:true},{expectedRevision:directory.revision});
+  const personRef=created.publicRef as string;
+  const requestNumber=await seed(page,'비활성 담당자 해제 확인',[wire]);
+  await apiLogin(page,'team-wireless');
+  let detail=(await apiRead(page,`/api/requests/${requestNumber}`)).data;
+  let work=detail.workItems.find((item:{teamId:string})=>item.teamId===wire);
+  await command(page,'updateWork',{nextStatus:work.status,assignedPersonRefs:[personRef]},{requestNumber,workNumber:work.workNumber,expectedRevision:work.revision});
+  await apiLogin(page,'bnoc');directory=(await apiRead(page,'/api/personnel-roster')).data;
+  await command(page,'saveCentralPerson',{personRef,department:wire,category:'병',rank:'상병',displayName:name,serviceNumber,internalPhone:'7654',active:false},{expectedRevision:directory.revision});
+  await apiLogin(page,'team-wireless');await page.goto(`/requests/${requestNumber}`);
+  await expect(page.getByRole('heading',{name:'현재 배정 · 명부 확인 필요'})).toBeVisible();
+  await expect(page.locator('.work-execution').getByText('불러오는 중…',{exact:true})).toHaveCount(0);
+  const assigned=page.getByRole('checkbox',{name:new RegExp(name)});
+  await expect(assigned).toBeChecked();await expect(assigned).toBeEnabled();await assigned.click();
+  await expect(page.getByRole('heading',{name:'현재 배정 · 명부 확인 필요'})).toHaveCount(0);
+  await page.getByRole('button',{name:'상태 저장',exact:true}).click();
+  await expect(page.getByRole('status').filter({hasText:'상태·일정·담당 인원을 저장했습니다.'})).toBeVisible();
+  detail=(await apiRead(page,`/api/requests/${requestNumber}`)).data;
+  work=detail.workItems.find((item:{teamId:string})=>item.teamId===wire);
+  expect(work.assignedPersonRefs).toEqual([]);
+});
+
+test('administrator calendar displays planned work without assigned work details',async({page})=>{
+  const dateParts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).map(part=>[part.type,part.value]));
+  const date=`${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+  const title=`관리자 계획 달력 ${randomUUID().slice(0,8)}`;
+  await apiLogin(page,'team-wireless');
+  const session=(await apiRead(page,'/api/session')).data;
+  const created=await page.request.post('/api/planned-works',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},data:{operationId:randomUUID(),title,firstWorkDate:date}});
+  expect(created.status()).toBe(200);
+  await apiLogin(page,'access-admin');await page.goto('/schedule');
+  await expect(page.getByRole('heading',{name:'정비 달력'})).toBeVisible();
+  await expect(page.locator('.calendar-planned-list').getByText(title,{exact:true}).first()).toBeVisible();
+  await expect(page.getByText(/기간 내 예정 작업 0건/)).toBeVisible();
+  await expect(page.locator('.calendar-item').filter({hasText:title}).first()).toBeVisible();
 });
 
 test('draft: two tabs reject stale writes and recover after deletion without losing the current input',async({page,context})=>{
   const empty=await resetRequestDraft(page);const first=await saveDraftApi(page,draftInput('공통 시작 초안'),empty.revision);
   const before=(await apiRead(page,'/api/requests?size=100')).total;
-  await page.goto('/new');await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('공통 시작 초안');
+  await page.goto('/new');await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expectGuidedDetail(page,'공통 시작 초안');
   const other=await context.newPage();
   try{
-    await other.goto('/new');await other.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expect(other.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('공통 시작 초안');
-    await page.getByLabel('요청 내용·증상',{exact:true}).fill('먼저 저장한 탭');await page.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(page);
-    await other.getByLabel('요청 내용·증상',{exact:true}).fill('충돌 뒤에도 유지할 입력');await other.getByRole('button',{name:'임시저장',exact:true}).click();
-    await expect(other.getByRole('alert')).toContainText('다른 화면에서 임시저장이 변경');await expect(other.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('충돌 뒤에도 유지할 입력');
+    await other.goto('/new');await other.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expectGuidedDetail(other,'공통 시작 초안');
+    await guidedDetail(page,'먼저 저장한 탭');await page.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(page);
+    await guidedDetail(other,'충돌 뒤에도 유지할 입력');await other.getByRole('button',{name:'임시저장',exact:true}).click();
+    await expect(other.getByRole('alert')).toContainText('다른 화면에서 임시저장이 변경');await expectGuidedDetail(other,'충돌 뒤에도 유지할 입력','컴퓨터 지원 1대 / 업무 위치 / 인터넷 / 충돌 뒤에도 유지할 입력');
     other.once('dialog',dialog=>dialog.accept());await other.getByRole('button',{name:'임시저장 삭제',exact:true}).click();await expect(other.getByRole('alert')).toContainText('다른 화면에서');
     const denied=other.waitForResponse(response=>new URL(response.url()).pathname==='/api/commands'&&response.request().method()==='POST');
     await other.getByRole('button',{name:'신청 등록',exact:true}).click();expect((await denied).status()).toBe(409);
-    expect((await apiRead(page,'/api/requests?size=100')).total).toBe(before);
-    expect((await apiRead(page,'/api/request-draft')).data.draft.input.detail).toBe('먼저 저장한 탭');
+    expect((await apiRead(page,'/api/requests?size=100')).total).toBe(before);expect(draftDetail((await apiRead(page,'/api/request-draft')).data)).toBe('먼저 저장한 탭');
     const current=(await apiRead(page,'/api/request-draft')).data;const session=(await apiRead(page,'/api/session')).data;
     expect((await page.request.delete('/api/request-draft',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},data:{role:'requester',expectedRevision:current.revision,operationId:randomUUID()}})).status()).toBe(200);
     other.once('dialog',dialog=>dialog.accept());await other.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();
-    await expect(other.getByRole('status').filter({hasText:'임시저장한 신청서가 없습니다.'})).toBeVisible();
-    await expect(other.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('충돌 뒤에도 유지할 입력');
+    await expect(other.getByRole('status').filter({hasText:'임시저장한 신청서가 없습니다.'})).toBeVisible();await expectGuidedDetail(other,'충돌 뒤에도 유지할 입력','컴퓨터 지원 1대 / 업무 위치 / 인터넷 / 충돌 뒤에도 유지할 입력');
     await expect(other.getByRole('button',{name:'임시저장',exact:true})).toBeEnabled();await other.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(other);
-    const recreated=(await apiRead(other,'/api/request-draft')).data;expect(recreated.draft.id).not.toBe(first.draft.id);expect(recreated.draft.input.detail).toBe('충돌 뒤에도 유지할 입력');
+    const recreated=(await apiRead(other,'/api/request-draft')).data;expect(recreated.draft.id).not.toBe(first.draft.id);expect(draftDetail(recreated)).toBe('충돌 뒤에도 유지할 입력');
     const posted=other.waitForResponse(response=>new URL(response.url()).pathname==='/api/commands'&&response.request().method()==='POST');await other.getByRole('button',{name:'신청 등록',exact:true}).click();expect((await posted).status()).toBe(200);
     expect((await apiRead(other,'/api/request-draft')).data.draft).toBeNull();
   }finally{await resetRequestDraft(other);await other.close();}
@@ -292,50 +673,51 @@ test('draft: a lost save and same-account reauthentication keep the same draft o
   const sent:Record<string,unknown>[]=[];page.on('request',request=>{if(new URL(request.url()).pathname==='/api/request-draft'&&request.method()==='PUT')sent.push(request.postDataJSON());});
   let lost=false;await page.route('**/api/request-draft',async route=>{if(route.request().method()!=='PUT'||lost)return route.continue();lost=true;expect((await route.fetch()).status()).toBe(200);await route.abort('failed');});
   await page.getByRole('button',{name:'임시저장',exact:true}).click();await expect(page.getByRole('alert')).toContainText('같은 제출');
-  await expect(page.getByLabel('요청 내용·증상',{exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'신청 등록',exact:true})).toBeDisabled();
+  await expect(page.getByRole('button',{name:'2단계 대상 선택',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'4단계 연락처',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'이전',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'신청 등록',exact:true})).toBeDisabled();
   const committed=(await apiRead(page,'/api/request-draft')).data;
   await page.unroute('**/api/request-draft');await page.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(page);
   expect((await apiRead(page,'/api/request-draft')).data.revision).toBe(committed.revision);expect(sent[0]).toEqual(sent[1]);
-  await page.getByLabel('요청 내용·증상',{exact:true}).fill('같은 계정 재인증 뒤 임시저장');
+  await guidedDetail(page,'같은 계정 재인증 뒤 임시저장');
   const session=(await apiRead(page,'/api/session')).data;expect((await page.request.post('/api/auth/logout',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},data:{}})).status()).toBe(200);
   await page.getByRole('button',{name:'임시저장',exact:true}).click();await expect(page.getByRole('dialog',{name:'로그인 만료',exact:true})).toBeVisible();
   await loginWithPopup(page,'requester');await expect(page.getByRole('dialog',{name:'로그인 만료',exact:true})).toHaveCount(0);
-  await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('같은 계정 재인증 뒤 임시저장');
+  await expectGuidedDetail(page,'같은 계정 재인증 뒤 임시저장');
   await page.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(page);
-  expect(sent.at(-1)).toEqual(sent.at(-2));expect((await apiRead(page,'/api/request-draft')).data.draft.input.detail).toBe('같은 계정 재인증 뒤 임시저장');
+  expect(sent.at(-1)).toEqual(sent.at(-2));expect(draftDetail((await apiRead(page,'/api/request-draft')).data)).toBe('같은 계정 재인증 뒤 임시저장');
   await resetRequestDraft(page);
 });
 
 test('draft: a meeting may be saved incomplete but restored files are required and consumed with formal registration',async({page},info)=>{
-  await resetRequestDraft(page);await page.goto('/new');
-  await page.getByLabel('요청 유형',{exact:true}).selectOption('회의 지원');await page.getByLabel('회의 유형',{exact:true}).selectOption('화상회의');await page.getByLabel('화상회의 방식',{exact:true}).selectOption('KJCCS');
-  await page.getByLabel('요청 내용·증상',{exact:true}).fill('임시저장 회의');await page.getByLabel('작업 위치',{exact:true}).fill('회의 위치');await page.getByLabel('요청자 군내전화번호',{exact:true}).fill('000-0000');
+  await resetRequestDraft(page);await page.goto('/new');await guidedMeeting(page,'임시저장 회의');
   await page.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(page);
-  await page.getByRole('button',{name:'신청 등록',exact:true}).click();await expect(page.getByRole('alert')).toContainText('필수 회의 지원 의뢰서를 첨부하세요.');
+  await expect(question(page).getByRole('button',{name:'다음',exact:true})).toBeDisabled();
+  await expect(page.getByRole('button',{name:'신청 등록',exact:true})).toHaveCount(0);
+  const incomplete=(await apiRead(page,'/api/request-draft')).data;expect(incomplete.draft.input.guidedDraft.meeting.meetingType).toBe('화상회의');expect(incomplete.draft.input.attachments).toEqual([]);
   const bytes=await readFile('frontend/src/preview/fixtures/support.hwp'),name=`draft-meeting-${info.project.name}.hwp`;
   await page.getByLabel('화상회의 지원 의뢰서',{exact:true}).setInputFiles({name,mimeType:'application/octet-stream',buffer:bytes});await expect(page.getByRole('button',{name:name+' 첨부 제외',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'임시저장',exact:true}).click();await draftSaved(page);const saved=(await apiRead(page,'/api/request-draft')).data;
-  await page.reload();await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expect(page.getByLabel('회의 유형',{exact:true})).toHaveValue('화상회의');await expect(page.getByRole('button',{name:name+' 첨부 제외',exact:true})).toBeVisible();
+  await page.reload();await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expect(page.getByRole('heading',{name:'회의 지원 의뢰서를 첨부해 주세요',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:name+' 첨부 제외',exact:true})).toBeVisible();
+  await question(page).getByRole('button',{name:'다음',exact:true}).click();await guidedReady(page);
   const response=page.waitForResponse(result=>new URL(result.url()).pathname==='/api/commands'&&result.request().method()==='POST');await page.getByRole('button',{name:'신청 등록',exact:true}).click();
   const received=await response;expect(received.status()).toBe(200);const result=await received.json();expect(received.request().postDataJSON().payload.draftRef.id).toBe(saved.draft.id);
-  const detail=(await apiRead(page,`/api/requests/${result.requestNumber}`)).data;expect(detail.attachments[0].id).toBe(saved.draft.input.attachments[0].id);expect(detail.status).toBe('대기');expect(detail.workItems).toEqual([]);
+  const detail=(await apiRead(page,`/api/requests/${result.requestNumber}`)).data;expect(detail.attachments[0].id).toBe(saved.draft.input.attachments[0].id);expect(detail.status).toBe('대기');expect(detail.workItems).toEqual([]);expect(detail.subcategories).toEqual({meetingType:'화상회의',videoPlatform:'KJCCS'});
   expect((await apiRead(page,'/api/request-draft')).data.draft).toBeNull();const downloaded=await page.request.get(`/api/attachments/${detail.attachments[0].id}`);expect(downloaded.status()).toBe(200);expect(await downloaded.body()).toEqual(bytes);
 });
 
 test('draft: saved drafts never overwrite request reuse automatically and late saves cannot transfer across accounts',async({page})=>{
   const inspector={request:await apiRequest.newContext({baseURL:base})};await resetRequestDraft(inspector,'bnoc');const empty=await resetRequestDraft(page);await saveDraftApi(page,draftInput('명시적으로 불러올 저장본'),empty.revision);
   const number=await seed(page,'과거 요청에서 불러온 내용');await page.goto(`/requests/${number}`);await page.getByRole('button',{name:'새 요청으로 불러오기',exact:true}).click();
-  await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('과거 요청에서 불러온 내용');await expect(page.getByRole('button',{name:'임시저장 불러오기',exact:true})).toBeEnabled();
-  page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('과거 요청에서 불러온 내용');
-  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('명시적으로 불러올 저장본');
+  await expectGuidedDetail(page,'과거 요청에서 불러온 내용');await expect(page.getByRole('button',{name:'임시저장 불러오기',exact:true})).toBeEnabled();
+  page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expectGuidedDetail(page,'과거 요청에서 불러온 내용');
+  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'임시저장 불러오기',exact:true}).click();await expectGuidedDetail(page,'명시적으로 불러올 저장본');
   let release:()=>void=()=>{},started:()=>void=()=>{};const held=new Promise<void>(resolve=>{release=resolve;}),captured=new Promise<void>(resolve=>{started=resolve;});let heldRequest:import('@playwright/test').Request|undefined;
   await page.route('**/api/request-draft',async route=>{if(route.request().method()!=='PUT')return route.continue();heldRequest=route.request();const response=await route.fetch();expect(response.status()).toBe(200);started();await held;await route.fulfill({response});});
   try{
-    await page.getByLabel('요청 내용·증상',{exact:true}).fill('이전 계정의 늦은 임시저장');await page.getByRole('button',{name:'임시저장',exact:true}).click();await captured;
-    page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'로그아웃',exact:true}).click();await loginWithPopup(page,'bnoc');await page.getByRole('button',{name:'대리 등록',exact:true}).click();await expect(page.getByRole('button',{name:'임시저장',exact:true})).toBeEnabled();
+    await guidedDetail(page,'이전 계정의 늦은 임시저장',false);await page.getByRole('button',{name:'임시저장',exact:true}).click();await captured;
+    page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'로그아웃',exact:true}).click();await loginWithPopup(page,'bnoc');await navItem(page,'대리 등록');await expect(page.getByRole('button',{name:'임시저장',exact:true})).toBeEnabled();
     const arrived=page.waitForResponse(response=>response.request()===heldRequest);release();await(await arrived).finished();await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
-    await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('');expect((await apiRead(page,'/api/request-draft')).data.draft).toBeNull();
-    await apiLogin(inspector,'requester');expect((await apiRead(inspector,'/api/request-draft')).data.draft.input.detail).toBe('이전 계정의 늦은 임시저장');
+    await expectGuidedEmpty(page);expect((await apiRead(page,'/api/request-draft')).data.draft).toBeNull();
+    await apiLogin(inspector,'requester');expect(draftDetail((await apiRead(inspector,'/api/request-draft')).data)).toBe('이전 계정의 늦은 임시저장');
   }finally{release();await page.unroute('**/api/request-draft');await resetRequestDraft(inspector);await resetRequestDraft(inspector,'bnoc');await inspector.request.dispose();}
 });
 
@@ -344,7 +726,7 @@ test('draft: an unknown formal submission freezes draft actions until the origin
   const submissions:Record<string,unknown>[]=[];let number='';
   await page.route('**/api/commands',async route=>{submissions.push(route.request().postDataJSON());if(submissions.length===1){const response=await route.fetch();expect(response.status()).toBe(200);number=(await response.json()).requestNumber;await route.abort('failed');}else if(submissions.length===2)await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({code:'SAVE_FAILED',message:'처리를 확인하지 못했습니다. 같은 제출 번호로 다시 확인하세요.'})});else await route.continue();});
   await page.getByRole('button',{name:'신청 등록',exact:true}).click();await expect(page.getByRole('alert')).toBeVisible();
-  for(const label of ['임시저장','임시저장 불러오기','임시저장 삭제'])await expect(page.getByRole('button',{name:label,exact:true})).toBeDisabled();await expect(page.getByLabel('요청 내용·증상',{exact:true})).toBeDisabled();
+  for(const label of ['임시저장','임시저장 불러오기','임시저장 삭제'])await expect(page.getByRole('button',{name:label,exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'2단계 대상 선택',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'4단계 연락처',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'이전',exact:true})).toBeDisabled();
   await page.getByRole('button',{name:'신청 등록',exact:true}).click();await expect(page.getByRole('alert')).toContainText('같은 제출 번호');await expect(page.getByRole('button',{name:'임시저장',exact:true})).toBeDisabled();
   await page.getByRole('button',{name:'신청 등록',exact:true}).click();await expect(page.getByRole('heading',{name:'신청 상세',exact:true})).toBeVisible();
   expect(new URL(page.url()).pathname).toBe(`/requests/${number}`);expect(submissions).toHaveLength(3);expect(submissions[1]).toEqual(submissions[0]);expect(submissions[2]).toEqual(submissions[0]);
@@ -362,7 +744,8 @@ test('an ordinary HWP attachment opens as original pages and keeps extraction as
   expect(uploaded.status()).toBe(200);
   const attachment = (await uploaded.json()).data;
   const unlinkedSource = await page.request.get(`/api/attachments/${attachment.id}/render-source`);
-  expect(unlinkedSource.status()).toBe(404, 'UNLINKED_HWP_RENDER_SOURCE_MUST_BE_HIDDEN');
+  expect(unlinkedSource.status()).toBe(200, 'OWNER_UNLINKED_HWP_PREVIEW_ALLOWED');
+  expect((await unlinkedSource.body()).equals(bytes)).toBeTruthy();
   const created = await command(page, 'createRequest', { ...requestPayload('HWP 원본 페이지 보기'), attachments: [{ id: attachment.id }] });
   await expect.poll(async () => (await (await page.request.get(`/api/attachments/${attachment.id}/document`)).json()).data.status, { timeout: 30000 }).toBe('ready');
   const source = await page.request.get(`/api/attachments/${attachment.id}/render-source`);
@@ -418,19 +801,21 @@ test('reuse a closed own request as an unsaved new application without copying i
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/\/new$/);
   await expect(page.getByRole('status').filter({hasText:'새 신청 초안'})).toContainText(String(created.requestNumber));
-  await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue(originalText);
-  await expect(page.getByLabel('작업 위치',{exact:true})).toHaveValue('반복 업무 위치');
-  await expect(page.getByLabel('체계 종류',{exact:true})).toHaveValue('인트라넷');
+  await expectGuidedDetail(page,originalText);
+  await expect(question(page).locator('.intake-answer-list').first()).toContainText('반복 업무 위치');
+  await question(page).locator('details.intake-optional-information summary').click();
+  await expect(question(page).locator('details.intake-optional-information')).toContainText('인트라넷');
+  await guidedReady(page);await guidedOptional(page);
   await expect(page.getByLabel('요청자 개인전화번호',{exact:true})).toHaveValue('000-0000-0000');
-  await page.getByText('선택 정보',{exact:true}).click();
   await expect(page.getByLabel('1지망 날짜',{exact:true})).toHaveValue('');
   await expect(page.getByLabel('2지망 날짜',{exact:true})).toHaveValue('');
   await expect(page.getByRole('button',{name:'과거-첨부.txt 첨부 제외',exact:true})).toHaveCount(0);
   expect((await apiRead(page,'/api/requests?size=100')).total).toBe(count,'LOADING_DRAFT_MUST_NOT_CREATE_REQUEST');
-  await expect(page.getByLabel('요청 내용·증상',{exact:true})).toBeVisible();
+  await guidedReady(page);
+  await expectGuidedDetail(page,originalText,`컴퓨터 지원 1대 / 반복 업무 위치 / 인트라넷 / ${originalText} / 공통 장비`);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await screenshot(page,info,'reuse-closed-request-draft');
-  await page.getByLabel('요청 내용·증상',{exact:true}).fill(originalText+' 새 신청');
+  await guidedDetail(page,originalText+' 새 신청');
   const submitted=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/commands'&&response.request().method()==='POST');
   const submitButton=page.getByRole('button',{name:'신청 등록',exact:true});
   for(let step=0;step<30;step++){
@@ -449,25 +834,28 @@ test('reuse a closed own request as an unsaved new application without copying i
 });
 
 test('reuse respects unsaved navigation cancellation and clears its draft after leaving', async ({ page }) => {
+  const respondToNextDialog=async(action:()=>Promise<unknown>,accept:boolean)=>{
+    const dialogEvent=page.waitForEvent('dialog');
+    const actionPromise=action();
+    const dialog=await dialogEvent;
+    if(accept) await dialog.accept(); else await dialog.dismiss();
+    await actionPromise;
+  };
   const number=await seed(page,'저장된 원본 내용');
   await apiLogin(page,'requester');await page.goto(`/requests/${number}`);
   await page.getByRole('button',{name:'내용 수정',exact:true}).click();
   await page.getByLabel('내용',{exact:true}).fill('아직 저장하지 않은 상세 편집');
-  page.once('dialog',dialog=>dialog.dismiss());
-  await page.getByRole('button',{name:'새 요청으로 불러오기',exact:true}).click();
+  await respondToNextDialog(()=>page.getByRole('button',{name:'새 요청으로 불러오기',exact:true}).click(),false);
   await expect(page).toHaveURL(new RegExp('/requests/'+number+'$'));
   await expect(page.getByLabel('내용',{exact:true})).toHaveValue('아직 저장하지 않은 상세 편집');
-  page.once('dialog',dialog=>dialog.accept());
-  await page.getByRole('button',{name:'새 요청으로 불러오기',exact:true}).click();
+  await respondToNextDialog(()=>page.getByRole('button',{name:'새 요청으로 불러오기',exact:true}).click(),true);
   await expect(page).toHaveURL(/\/new$/);
-  await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('저장된 원본 내용');
-  page.once('dialog',dialog=>dialog.dismiss());
-  await page.getByRole('button',{name:'내 신청',exact:true}).click();
+  await expectGuidedDetail(page,'저장된 원본 내용');
+  await respondToNextDialog(()=>navItem(page,'내 신청'),false);
   await expect(page).toHaveURL(/\/new$/);
-  page.once('dialog',dialog=>dialog.accept());
-  await page.getByRole('button',{name:'내 신청',exact:true}).click();
-  await page.getByRole('button',{name:'작업 신청',exact:true}).click();
-  await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('');
+  await respondToNextDialog(()=>navItem(page,'내 신청'),true);
+  await navItem(page,'작업 신청');
+  await expectGuidedEmpty(page);
   await expect(page.getByRole('status').filter({hasText:'새 신청 초안'})).toHaveCount(0);
 });
 
@@ -482,15 +870,15 @@ test('reuse does not transfer a stale response or an owned proxy request into a 
   await page.route(`**/api/requests/${number}`,async route=>{if(holding)return route.continue();holding=true;heldRequest=route.request();const response=await route.fetch();started();await held;return route.fulfill({response});});
   await page.getByRole('button',{name:'새 요청으로 불러오기',exact:true}).click();
   await requested;
-  await page.getByRole('button',{name:'내 신청',exact:true}).click();
+  await navItem(page,'내 신청');
   await page.goBack();
   await expect(page.getByRole('button',{name:'새 요청으로 불러오기',exact:true})).toBeVisible();
   const arrived=page.waitForResponse(response=>response.request()===heldRequest);
   release();await (await arrived).finished();
   await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
   await expect(page,'RETURNING_TO_SAME_ROUTE_MUST_NOT_ACCEPT_OLD_REUSE_RESPONSE').toHaveURL(new RegExp('/requests/'+number+'$'));
-  await page.getByRole('button',{name:'작업 신청',exact:true}).click();
-  await expect(page.getByLabel('요청 내용·증상',{exact:true})).toHaveValue('');
+  await navItem(page,'작업 신청');
+  await expectGuidedEmpty(page);
   await page.unroute(`**/api/requests/${number}`);
   await apiLogin(page,'bnoc');
   const requester=(await apiRead(page,'/api/requesters')).data.find((item:{requesterRef:string})=>item.requesterRef===owner.actor.id);
@@ -507,21 +895,18 @@ test('reuse of a video meeting still requires a new attachment before submitting
   const uploaded=await page.request.post('/api/attachments?resourceKind=request',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},multipart:{file:{name:'이전회의.hwp',mimeType:'application/octet-stream',buffer:bytes}}});
   expect(uploaded.status()).toBe(200);const file=(await uploaded.json()).data;
   const created=await command(page,'createRequest',{category:'회의 지원',subcategories:{meetingType:'화상회의',videoPlatform:'KJCCS'},detail:'반복 회의 지원',location:'회의실',contact:'000-0000',attachments:[{id:file.id}]});
-  await page.goto(`/requests/${created.requestNumber}`);
-  await page.getByRole('button',{name:'새 요청으로 불러오기',exact:true}).click();
-  await expect(page.getByLabel('회의 유형',{exact:true})).toHaveValue('화상회의');
-  await expect(page.getByLabel('화상회의 방식',{exact:true})).toHaveValue('KJCCS');
+  await page.goto(`/requests/${created.requestNumber}`);await page.getByRole('button',{name:'새 요청으로 불러오기',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'어떤 회의인가요?',exact:true})).toBeVisible();
+  await question(page).getByRole('button',{name:'화상회의',exact:true}).click();await question(page).getByRole('button',{name:'KJCCS',exact:true}).click();
+  await expect(page.getByLabel('어떤 지원이 필요한가요?',{exact:true})).toHaveValue('반복 회의 지원');await question(page).getByRole('button',{name:'다음',exact:true}).click();
+  await expect(page.getByLabel('회의 장소는 어디인가요?',{exact:true})).toHaveValue('회의실');await question(page).getByRole('button',{name:'다음',exact:true}).click();
   let posted=0;page.on('request',request=>{if(new URL(request.url()).pathname==='/api/commands'&&request.method()==='POST')posted++;});
-  await page.getByRole('button',{name:'신청 등록',exact:true}).click();
-  await expect(page.getByRole('alert')).toContainText('필수 회의 지원 의뢰서를 첨부하세요.');
+  await expect(question(page).getByRole('button',{name:'다음',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'신청 등록',exact:true})).toHaveCount(0);
   expect(posted).toBe(0,'COPIED_MEETING_MUST_REQUIRE_A_NEW_ATTACHMENT');
-  const input=page.getByLabel('화상회의 지원 의뢰서',{exact:true});
-  await input.setInputFiles({name:'새회의.hwp',mimeType:'application/octet-stream',buffer:bytes});
-  await expect(page.getByRole('button',{name:'새회의.hwp 첨부 제외',exact:true})).toBeVisible();
-  const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/commands'&&r.request().method()==='POST');
-  await page.getByRole('button',{name:'신청 등록',exact:true}).click();
-  const result=await response;expect(result.status()).toBe(200);
-  expect(result.request().postDataJSON().payload.attachments[0].id).not.toBe(file.id);
+  const input=page.getByLabel('화상회의 지원 의뢰서',{exact:true});await input.setInputFiles({name:'새회의.hwp',mimeType:'application/octet-stream',buffer:bytes});
+  await expect(page.getByRole('button',{name:'새회의.hwp 첨부 제외',exact:true})).toBeVisible();await question(page).getByRole('button',{name:'다음',exact:true}).click();await guidedReady(page);
+  const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/commands'&&r.request().method()==='POST');await page.getByRole('button',{name:'신청 등록',exact:true}).click();
+  const result=await response;expect(result.status()).toBe(200);expect(result.request().postDataJSON().payload.attachments[0].id).not.toBe(file.id);expect(result.request().postDataJSON().payload.subcategories).toEqual({meetingType:'화상회의',videoPlatform:'KJCCS'});
 });
 
 test('an HWP search result opens the matching document directly', async ({ page }, info) => {
@@ -667,7 +1052,7 @@ test('original DOCX preview renders paragraphs and tables with no external docum
     const uploaded = await page.request.post('/api/attachments?resourceKind=request', { headers: { Origin: new URL(base).origin, 'X-CSRF-Token': session.csrfToken }, multipart: { file: { name, mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: bytes } } });
     expect(uploaded.status()).toBe(200);
     const file = (await uploaded.json()).data;
-    expect((await page.request.get(`/api/attachments/${file.id}/render-source`)).status()).toBe(404);
+    expect((await page.request.get(`/api/attachments/${file.id}/render-source`)).status()).toBe(200);
     const created = await command(page,'createRequest',{...requestPayload('원본 DOCX 미리보기'),...(meeting?{category:'회의 지원',subcategories:{meetingType:'일반회의'}}:{}),attachments:[{id:file.id}]});
     expect((await (await page.request.get(`/api/attachments/${file.id}/render-source`)).body()).equals(bytes)).toBeTruthy();
     await page.goto(`/requests/${created.requestNumber}`);
@@ -717,95 +1102,40 @@ test('meeting PDF and image originals open while a broken DOCX gives a download 
   }
 });
 
-test('PC completeness: missing type choices show server group errors and focus the first invalid choice', async ({ page }, info) => {
-  await apiLogin(page, 'requester');
-  await page.goto('/new');
-  await page.getByRole('combobox', { name: '요청 유형', exact: true }).selectOption('장비/체계');
-  await page.getByRole('textbox', { name: /^요청 내용·증상(?:\s|$)/ }).fill('유형 선택 오류 안내 확인');
-  await page.getByLabel('작업 위치', { exact: true }).fill('요청 위치');
-  await page.getByLabel('요청자 군내전화번호', { exact: true }).fill('000-0000');
-  const rejected = page.waitForResponse(response => new URL(response.url()).pathname === '/api/commands' && response.request().method() === 'POST');
-  await page.getByRole('button', { name: '신청 등록', exact: true }).click();
-  const rejectedResponse = await rejected;
-  expect(rejectedResponse.status()).toBe(400);
-  expect((await rejectedResponse.json()).fieldErrors.subcategories).toBeTruthy();
-  const firstType = page.getByRole('combobox', { name: /^체계 종류(?:\s|$)/ });
-  await expect(firstType, 'SUBCATEGORY_ERROR_MUST_REACH_MISSING_CHOICE').toHaveAttribute('aria-invalid','true');
-  await expect(firstType, 'FIRST_MISSING_CHOICE_MUST_RECEIVE_FOCUS').toBeFocused();
-  await expect(page.getByRole('textbox', { name: /^요청 내용·증상(?:\s|$)/ })).toHaveValue('유형 선택 오류 안내 확인');
-  await screenshot(page, info, 'type-errors');
-  // macOS native option menus do not commit ArrowDown through headless automation.
-  // Keep native choice values and server assertions; verify focus, Tab and Enter separately.
-  await firstType.selectOption('인트라넷');
-  await expect(firstType).toHaveValue('인트라넷');
-  await page.keyboard.press('Tab');
-  const resource = page.getByRole('combobox', { name: /^자원 유형(?:\s|$)/ });
-  await expect(resource).toBeFocused();
-  await resource.selectOption('PC');
-  await expect(resource).toHaveValue('PC');
-  await page.keyboard.press('Tab');
-  const workType = page.getByRole('combobox', { name: /^작업 유형(?:\s|$)/ });
-  await expect(workType).toBeFocused();
-  await workType.selectOption('지원');
-  await expect(workType).toHaveValue('지원');
-  const submit = page.getByRole('button', { name: '신청 등록', exact: true });
-  for (let i = 0; i < 12 && !await submit.evaluate(button => button === document.activeElement); i++) await page.keyboard.press('Tab');
-  await expect(submit).toBeFocused();
-  const saved = page.waitForResponse(response => new URL(response.url()).pathname === '/api/commands' && response.request().method() === 'POST');
-  await page.keyboard.press('Enter');
-  expect((await saved).status()).toBe(200);
-  await expect(page.getByRole('heading', { name: '신청 상세', exact: true })).toBeVisible();
-  const number = new URL(page.url()).pathname.split('/').at(-1)!;
-  expect((await apiRead(page, `/api/requests/${number}`)).data.detail).toBe('유형 선택 오류 안내 확인');
-  await expect(page.getByRole('status').filter({ hasText: `요청 ${number}을 등록했습니다.` })).toBeVisible();
-  await page.getByRole('button', { name: '내용 수정', exact: true }).click();
-  const editedDetail = page.getByRole('textbox', { name: '내용', exact: true });
-  await editedDetail.fill('');
-  const editExample = '예: 인트라넷 PC 지원 작업이라면 필요한 지원 내용과 희망 시점을 적어주세요.';
-  await expect(editedDetail).toHaveAttribute('placeholder', editExample);
-  expect(await editedDetail.evaluate(element => element.matches(':placeholder-shown'))).toBe(true);
-  await editedDetail.fill('유형 선택 후 수정 중');
-  expect(await editedDetail.evaluate(element => element.matches(':placeholder-shown'))).toBe(false);
-  await expect(editedDetail).toHaveValue('유형 선택 후 수정 중');
-  const editedLocation = page.getByRole('textbox', { name: '위치', exact: true });
-  await editedLocation.fill('');
-  await expect(editedLocation).toHaveAttribute('placeholder', '예: 건물 층 부서명 등 작업 위치를 적어주세요.');
-  expect(await editedLocation.evaluate(element => element.matches(':placeholder-shown'))).toBe(true);
-  await editedLocation.fill('수정 위치');
-  expect(await editedLocation.evaluate(element => element.matches(':placeholder-shown'))).toBe(false);
-  await expect(editedLocation).toHaveValue('수정 위치');
-  await expect(page.getByRole('status').filter({ hasText: `요청 ${number}을 등록했습니다.` })).toHaveCount(0);
-  await expect(page.getByRole('status').filter({ hasText: '저장하지 않은 변경' })).toBeVisible();
+test('PC completeness: progressive questions preserve input and unknown technical choices reach saved items', async ({ page }, info) => {
+  await apiLogin(page,'requester');await page.goto('/new');await expectGuidedEmpty(page);
+  await expect(page.getByRole('button',{name:'신청 등록',exact:true})).toHaveCount(0);
+  const malformed=await page.request.post('/api/commands',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':(await apiRead(page,'/api/session')).data.csrfToken},data:{type:'createRequest',operationId:randomUUID(),payload:{...requestPayload('구형 누락 분류 검증'),subcategories:{systemType:'',resourceType:'',workType:''}}}});
+  expect(malformed.status()).toBe(400);expect((await malformed.json()).fieldErrors.subcategories).toBeTruthy();
+  await question(page).getByRole('button',{name:'지원',exact:true}).click();await question(page).getByRole('button',{name:'장비 지원',exact:true}).click();
+  await page.getByRole('button',{name:'컴퓨터 추가',exact:true}).focus();await page.keyboard.press('Enter');await page.getByRole('button',{name:'선택한 대상 계속',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'어디에 있나요?',exact:true})).toBeFocused();
+  await page.getByLabel('어디에 있나요?',{exact:true}).fill('요청 위치');await question(page).getByRole('button',{name:'다음',exact:true}).click();
+  const detail=page.getByLabel('어떤 도움이 필요한가요?',{exact:true});await detail.fill('유형 선택 오류 안내 확인');
+  await page.getByRole('button',{name:'이전',exact:true}).click();await question(page).getByRole('button',{name:'다음',exact:true}).click();await expect(detail).toHaveValue('유형 선택 오류 안내 확인');
+  await question(page).getByRole('button',{name:'다음',exact:true}).click();await guidedReady(page);
+  await screenshot(page,info,'progressive-technical-unknown');
+  const submit=page.getByRole('button',{name:'신청 등록',exact:true});await submit.focus();await page.keyboard.press('Enter');await expect(page.getByRole('heading',{name:'신청 상세',exact:true})).toBeVisible();
+  const number=new URL(page.url()).pathname.split('/').at(-1)!;const saved=(await apiRead(page,`/api/requests/${number}`)).data;
+  expect(saved.requestItems[0].detail).toBe('유형 선택 오류 안내 확인');expect(saved.requestItems[0].systemType??null).toBeNull();expect(saved.requestItems[0].equipmentId??null).toBeNull();
+  await expect(page.getByRole('status').filter({hasText:`요청 ${number}을 등록했습니다.`})).toBeVisible();
+  await page.getByRole('button',{name:'내용 수정',exact:true}).click();await guidedDetail(page,'유형 선택 후 수정 중');
+  await guidedItemReview(page);await question(page).getByRole('button',{name:'위치 수정',exact:true}).click();await page.getByLabel('어디에 있나요?',{exact:true}).fill('수정 위치');await question(page).getByRole('button',{name:'다음',exact:true}).click();await guidedReady(page);
+  await expectGuidedDetail(page,'유형 선택 후 수정 중','컴퓨터 지원 1대 / 수정 위치 / 유형 선택 후 수정 중');await expect(question(page)).toContainText('수정 위치');
+  await expect(page.getByRole('status').filter({hasText:`요청 ${number}을 등록했습니다.`})).toHaveCount(0);await expect(page.getByRole('status').filter({hasText:'저장하지 않은 변경'})).toBeVisible();
 });
 
-test('request form provides meeting-specific placeholders and hides them after input', async ({ page }) => {
-  await apiLogin(page, 'requester');
-  await page.goto('/new');
-  await page.getByRole('combobox', { name: '요청 유형', exact: true }).selectOption('회의 지원');
-  await page.getByRole('combobox', { name: '회의 유형', exact: true }).selectOption('화상회의');
-  const videoPlatform = page.getByRole('combobox', { name: '화상회의 방식', exact: true });
-  await expect(videoPlatform).toHaveAttribute('aria-required', 'true');
-  await expect(videoPlatform.locator('option')).toHaveText(['선택', 'KJCCS', 'AFCCS', '웹미팅']);
-  await videoPlatform.selectOption('KJCCS');
-  const meetingForm = page.getByLabel('화상회의 지원 의뢰서', { exact: true });
-  await expect(meetingForm).toHaveAttribute('aria-required', 'true');
-  const detail = page.getByRole('textbox', { name: /^요청 내용·증상(?:\s|$)/ });
-  await expect(detail).toHaveAttribute('placeholder', '예: 화상회의 지원이 필요합니다. 회의 일시, 접속 방식, 필요한 장비나 연결 지원을 적어주세요.');
-  await detail.fill('화상회의 접속 지원 요청');
-  expect(await detail.evaluate(element => element.matches(':placeholder-shown'))).toBe(false);
-  const location = page.getByLabel('작업 위치', { exact: true });
-  await expect(location).toHaveAttribute('placeholder', '예: 건물 층 부서명 등 작업 위치를 적어주세요.');
-  await location.fill('본관 회의실');
-  expect(await location.evaluate(element => element.matches(':placeholder-shown'))).toBe(false);
-  await expect(detail).toHaveValue('화상회의 접속 지원 요청');
-  await page.getByRole('button', { name: '신청 등록', exact: true }).click();
-  await expect(page.getByText('회의 지원 의뢰서를 1개 이상 첨부하세요.', { exact: true })).toBeVisible();
-  await page.getByLabel('요청자 군내전화번호', { exact: true }).fill('1234');
-  await meetingForm.setInputFiles({ name:'support-form.txt', mimeType:'text/plain', buffer:Buffer.from('synthetic meeting support form') });
-  await page.getByRole('button', { name: '신청 등록', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '신청 상세', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '내용 수정', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'support-form.txt 첨부 제외', exact: true })).toBeDisabled();
+test('request form reveals meeting questions and requires its support form before registration', async ({ page }) => {
+  await apiLogin(page,'requester');await page.goto('/new');await question(page).getByRole('button',{name:'지원',exact:true}).click();await question(page).getByRole('button',{name:'회의 지원',exact:true}).click();await question(page).getByRole('button',{name:'화상회의',exact:true}).click();
+  await expect(question(page).getByRole('button')).toHaveText(['KJCCS','AFCCS','웹미팅']);await question(page).getByRole('button',{name:'KJCCS',exact:true}).click();
+  const detail=page.getByLabel('어떤 지원이 필요한가요?',{exact:true});await detail.fill('화상회의 접속 지원 요청');await question(page).getByRole('button',{name:'다음',exact:true}).click();
+  const location=page.getByLabel('회의 장소는 어디인가요?',{exact:true});await location.fill('본관 회의실');await page.getByRole('button',{name:'이전',exact:true}).click();await expect(detail).toHaveValue('화상회의 접속 지원 요청');await question(page).getByRole('button',{name:'다음',exact:true}).click();await expect(location).toHaveValue('본관 회의실');await question(page).getByRole('button',{name:'다음',exact:true}).click();
+  const meetingForm=page.getByLabel('화상회의 지원 의뢰서',{exact:true});await expect(meetingForm).toHaveAttribute('aria-required','true');await expect(question(page).getByRole('button',{name:'다음',exact:true})).toBeDisabled();
+  await expect(page.getByRole('button',{name:'신청 등록',exact:true})).toHaveCount(0);
+  await meetingForm.setInputFiles({name:'support-form.txt',mimeType:'text/plain',buffer:Buffer.from('synthetic meeting support form')});await expect(page.getByRole('button',{name:'support-form.txt 첨부 제외',exact:true})).toBeVisible();
+  await question(page).getByRole('button',{name:'다음',exact:true}).click();await page.getByLabel('요청자 군내전화번호',{exact:true}).fill('1234');await guidedReady(page);
+  await page.getByRole('button',{name:'신청 등록',exact:true}).click();await expect(page.getByRole('heading',{name:'신청 상세',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'내용 수정',exact:true}).click();await expect(page.getByRole('button',{name:'support-form.txt 첨부 제외',exact:true})).toBeDisabled();
 });
 
 test('BNOC unassigned requests distinguish query errors and paginate', async ({ page }) => {
@@ -846,11 +1176,10 @@ test('PC completeness: edited and failed searches preserve the actual successful
   await page.getByText('상세 조회 조건', { exact: true }).click();
   await page.getByRole('button', { name: '검색', exact: true }).click();
   const context = page.locator('.query-context');
-  await expect(context).toContainText(`요청 번호: ${number}`);
-  await expect(context).toContainText('위치: 요청 위치');
-  await expect(context).not.toContainText('확인 시각:');
+  await expect(context).toHaveCount(0);
+  await expect(page.getByLabel('요청 번호', { exact: true })).toHaveValue(number);
+  await expect(page.getByLabel('위치', { exact: true })).toHaveValue('요청 위치');
   await expect(page.getByRole('button', { name: number, exact: true })).toBeVisible();
-  const successful = await context.innerText();
   const requests: string[] = [];
   page.on('request', request => { if (request.method() === 'GET' && new URL(request.url()).pathname === '/api/requests') requests.push(request.url()); });
   await page.getByText('상세 조회 조건', { exact: true }).click();
@@ -864,20 +1193,23 @@ test('PC completeness: edited and failed searches preserve the actual successful
   await page.getByRole('button', { name: '검색', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('새 조건 조회에 실패했습니다.');
   await expect(context).toContainText('마지막 성공 결과');
-  await expect(context).toContainText(successful.replace('조회 결과','마지막 성공 결과'));
+  await expect(context).toContainText(`요청 번호: ${number}`);
+  await expect(context).toContainText('위치: 요청 위치');
   await expect(context).not.toContainText('999999999');
   await expect(page.getByRole('button', { name: number, exact: true })).toBeVisible();
   await expect(page.getByText('요청 1건', { exact: true })).toBeVisible();
   await screenshot(page, info, 'preserved-query-context');
   await page.unroute('**/api/requests?**');
   await page.getByRole('button', { name: '다시 조회', exact: true }).click();
-  await expect(context).toContainText('요청 번호: 999999999');
-  await expect(context).not.toContainText('마지막 성공 결과');
+  await expect(context).toHaveCount(0);
+  await expect(page.getByLabel('요청 번호', { exact: true })).toHaveValue('999999999');
   await expect(page.getByText('요청 0건', { exact: true })).toBeVisible();
   await page.getByText('상세 조회 조건', { exact: true }).click();
   const longLocation = 'W'.repeat(200);
   await page.getByLabel('위치', { exact: true }).fill(longLocation);
   await page.getByRole('button', { name: '검색', exact: true }).click();
+  await expect(context).toHaveCount(0);
+  await page.getByLabel('요청 번호', { exact: true }).fill('999999998');
   await expect(context).toContainText(`위치: ${longLocation}`);
   await noOverflow(page);
   await apiLogin(page, 'bnoc');
@@ -886,7 +1218,8 @@ test('PC completeness: edited and failed searches preserve the actual successful
   const applied = page.waitForResponse(response => new URL(response.url()).pathname === '/api/overview' && new URL(response.url()).searchParams.get('teamId') === wire);
   await page.getByRole('combobox', { name: '작업반', exact: true }).selectOption(wire);
   expect((await applied).status()).toBe(200);
-  await expect(context).toContainText(`작업반: ${wire}`);
+  await expect(context).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: '작업반', exact: true })).toHaveValue(wire);
   await expect(page.getByRole('button', { name: '검색', exact: true })).toHaveCount(0);
 });
 
@@ -901,13 +1234,12 @@ test('SR-BE-001,004,005,006,010,011,012,013,015,019,028,031,033,034: real login,
   await loginWithPopup(page, 'requester');
   await page.goto('/new');
   await expect(page.getByRole('heading', { name: '작업 신청', exact: true })).toBeVisible();
-  await page.getByText('선택 정보', { exact: true }).click();
-  await expect(page.getByText('예: 장비명이나 알고 있는 식별정보. 모르면 비워도 됩니다.', { exact: true })).toBeVisible();
-  await expect(page.getByText('예: 관련 공문 제목이나 문서번호. 없으면 비워도 됩니다.', { exact: true })).toBeVisible();
-  await fields(page, `브라우저 지원 ${info.project.name}`);
+  await expectGuidedEmpty(page);
+  await fields(page, `브라우저 지원 ${info.project.name}`);await guidedOptional(page);
   await page.getByLabel('1지망 날짜', { exact: true }).fill('2026-10-20');
   await page.getByLabel('1지망 오전·오후', { exact: true }).selectOption('AM');
-  await page.getByLabel('첨부파일', { exact: true }).setInputFiles({ name: '저장자료.txt', mimeType: 'text/plain', buffer: Buffer.from('브라우저 파일 저장 확인') });
+  await (await guidedAttachments(page)).setInputFiles({ name: '저장자료.txt', mimeType: 'text/plain', buffer: Buffer.from('브라우저 파일 저장 확인') });
+  await expect(page.getByRole('button',{name:'저장자료.txt 첨부 제외',exact:true})).toBeVisible();await guidedReady(page);
   await page.getByRole('button', { name: '신청 등록', exact: true }).click();
   await expect(page.getByRole('heading', { name: '신청 상세', exact: true })).toBeVisible();
   const number = new URL(page.url()).pathname.split('/').at(-1)!;
@@ -1076,8 +1408,8 @@ test('SR-BE-020: unseen count sits on the notifications tab and identical accoun
   await page.route('**/api/notifications/unseen', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ queriedAt: new Date().toISOString(), data: { unseen: 4 } }) }));
   await page.goto('/requests');
   const nav = page.getByRole('navigation', { name: '주 메뉴' });
-  const tab = nav.getByRole('button', { name: /^알림함/ });
-  await expect(tab.locator('.nav-badge')).toHaveText('4');
+  const communicationGroup=nav.locator('.nav-group').filter({hasText:'알림함'});
+  await expect(communicationGroup.locator('summary .nav-badge')).toHaveText('4');
   await expect(page.getByRole('button', { name: /새 알림/ })).toHaveCount(0);
   await expect(page.locator('header .identity strong')).toHaveText(session.actor.displayName);
   await expect(page.locator('header .identity small')).toHaveCount(0);
@@ -1144,7 +1476,7 @@ test('SR-BE-023,036: shared work report shows aggregate and per-department compl
   await expect(department).toContainText('반환 1건 포함');
   await expect(page.getByText(/확인 시각|집계 기준 시각/)).toHaveCount(0);
   await expect(page.getByText('작업 10건', { exact: true })).toBeVisible();
-  await expect(page.locator('.table-wrap tbody tr')).toHaveCount(10);
+  await expect(page.locator('.shared-work-detail tbody tr')).toHaveCount(10);
   await noOverflow(page);
   await screenshot(page, info, 'shared-work-overview');
   const remainingResponse = page.waitForResponse(response => {
@@ -1155,7 +1487,7 @@ test('SR-BE-023,036: shared work report shows aggregate and per-department compl
   await remainingResponse;
   await expect(page.getByRole('heading', { name: '남은 작업 목록' })).toBeVisible();
   await expect(page.getByText('작업 4건', { exact: true })).toBeVisible();
-  await expect(page.locator('.table-wrap tbody tr')).toHaveCount(4);
+  await expect(page.locator('.shared-work-detail tbody tr')).toHaveCount(4);
 });
 
 test('SR-BE-026,035: standalone situation pages still require the existing login session', async ({ page }) => {
@@ -1224,8 +1556,9 @@ test('FR-046: optional personal phone is editable and visible only to the owner,
   await page.goto('/requests');
   await loginWithPopup(page, 'requester');
   await page.goto('/new');
-  await fields(page, `개인전화 권한 확인 ${info.project.name}`);
+  await fields(page, `개인전화 권한 확인 ${info.project.name}`);await guidedOptional(page);
   await page.getByLabel('요청자 개인전화번호', { exact: true }).fill('010-0000-0000');
+  await guidedReady(page);
   await page.getByRole('button', { name: '신청 등록', exact: true }).click();
   await expect(page.getByRole('heading', { name: '신청 상세', exact: true })).toBeVisible();
   const number = new URL(page.url()).pathname.split('/').at(-1)!;
@@ -1259,29 +1592,19 @@ test('FR-046: optional personal phone is editable and visible only to the owner,
 });
 
 test('FR-047: BNOC selects the real requester and that requester can edit the proxy request', async ({ page }, info) => {
-  await page.goto('/requests');
-  const ownerSession=await apiLogin(page,'requester');
-  await apiLogin(page,'bnoc');
-  const choices=(await apiRead(page,'/api/requesters')).data as {requesterRef:string;displayName:string;department:string}[];
-  expect(choices.some(item=>item.requesterRef===ownerSession.actor.id)).toBeTruthy();
-  await page.goto('/new');
-  const picker=page.getByRole('combobox',{name:'요청자 계정',exact:true});
-  await expect(picker).toBeEnabled();
-  await page.getByRole('button',{name:'신청 등록',exact:true}).click();
-  await expect(page.getByText('실제 요청자를 선택하세요.',{exact:true})).toBeVisible();
-  await picker.selectOption(ownerSession.actor.id);
-  await fields(page,`대리 신청 수정 ${info.project.name}`);
-  await page.getByRole('button',{name:'신청 등록',exact:true}).click();
-  await expect(page.getByRole('heading',{name:'신청 상세',exact:true})).toBeVisible();
-  const number=new URL(page.url()).pathname.split('/').at(-1)!;
-  expect((await apiRead(page,`/api/requests/${number}`)).data.requesterDisplayText).toBe([ownerSession.actor.displayName,ownerSession.actor.department].filter(Boolean).join(' · '));
-  await apiLogin(page,'requester');
-  await page.goto(`/requests/${number}`);
-  await expect(page.getByRole('button',{name:'내용 수정',exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'내용 수정',exact:true}).click();
-  await page.getByLabel('내용',{exact:true}).fill(`요청자 직접 수정 ${info.project.name}`);
-  await page.getByRole('button',{name:'수정 저장',exact:true}).click();
-  await expect(page.getByText(`요청자 직접 수정 ${info.project.name}`,{exact:true})).toBeVisible();
+  await page.goto('/requests');const ownerSession=await apiLogin(page,'requester');await apiLogin(page,'bnoc');
+  const choices=(await apiRead(page,'/api/requesters')).data as {requesterRef:string;displayName:string;department:string}[];expect(choices.some(item=>item.requesterRef===ownerSession.actor.id)).toBeTruthy();
+  await page.goto('/new');await fields(page,`대리 신청 수정 ${info.project.name}`);
+  const picker=page.getByRole('combobox',{name:'요청자 계정',exact:true});await expect(picker).toBeEnabled();
+  await expect(page.getByRole('button',{name:'최종 확인',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'신청 등록',exact:true})).toHaveCount(0);
+  await picker.selectOption(ownerSession.actor.id);await page.getByRole('button',{name:'최종 확인',exact:true}).click();await page.getByRole('button',{name:'신청 등록',exact:true}).click();await expect(page.getByRole('heading',{name:'신청 상세',exact:true})).toBeVisible();
+  const number=new URL(page.url()).pathname.split('/').at(-1)!;expect((await apiRead(page,`/api/requests/${number}`)).data.requesterDisplayText).toBe([ownerSession.actor.displayName,ownerSession.actor.department].filter(Boolean).join(' · '));
+  await apiLogin(page,'requester');await page.goto(`/requests/${number}`);await expect(page.getByRole('button',{name:'내용 수정',exact:true})).toBeVisible();await page.getByRole('button',{name:'내용 수정',exact:true}).click();
+  await guidedDetail(page,`요청자 직접 수정 ${info.project.name}`);
+  const saving=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/commands'&&response.request().method()==='POST'&&response.request().postDataJSON().type==='updateRequest');
+  await page.getByRole('button',{name:'수정 저장',exact:true}).click();const saved=await saving;expect(saved.status()).toBe(200);expect((await saved.json()).ok).toBe(true);
+  await expect(page.getByRole('button',{name:'수정 저장',exact:true})).toHaveCount(0);
+  await expect(page.locator('.request-content')).toContainText(`요청자 직접 수정 ${info.project.name}`);expect((await apiRead(page,`/api/requests/${number}`)).data.requestItems[0].detail).toBe(`요청자 직접 수정 ${info.project.name}`);
 });
 
 test('FR-048: BNOC records a reason to reject an unassigned request and requester sees the closure', async ({ page }, info) => {
@@ -1550,8 +1873,10 @@ test('FR-049, SR-BE-016,024,025,027,033: completed after-action report, departme
   await expect(page.getByRole('combobox', { name: '화상회의 방식', exact: true })).toHaveCount(0);
   await expect(page.getByLabel('첨부파일', { exact: true })).toHaveAttribute('aria-required', 'false');
   await page.getByRole('combobox', { name: '요청 유형', exact: true }).selectOption('장비/체계');
-  await page.getByLabel('실제 요청자', { exact: true }).fill('요청 부서');
-  await fields(page, `완료 후보고 ${info.project.name}`);
+  const requesterOptions=(await apiRead(page,'/api/requesters')).data as {requesterRef:string}[];
+  expect(requesterOptions.length).toBeGreaterThan(0);
+  await page.getByRole('combobox',{name:'실제 요청자 계정',exact:true}).selectOption(requesterOptions[0].requesterRef);
+  await legacyFields(page, `완료 후보고 ${info.project.name}`);
   await page.getByRole('button', { name: '후보고 등록', exact: true }).click();
   await expect(page.getByText(/작업을 완료한 뒤 보고/).first()).toBeVisible();
   await expect(page.getByRole('textbox', { name: /^요청 내용·증상(?:\s|$)/ })).toHaveValue(`완료 후보고 ${info.project.name}`);
@@ -1609,76 +1934,6 @@ test('FR-049, SR-BE-016,024,025,027,033: completed after-action report, departme
   await expect(afterActionRow).toBeVisible();
   await expect(afterActionRow).toContainText('선조치 후보고');
   await expect(afterActionRow).toContainText('완료');
-  const manager = await departmentManagerLogin(page);
-  const department = manager.actor.department;
-  const recordDate = '2026-10-01';
-  const rosterBefore = (await apiRead(page, `/api/personnel-roster?department=${encodeURIComponent(department)}`)).data;
-  await page.goto('/roster');
-  await page.getByRole('button', { name: '인원 추가', exact: true }).click();
-  await page.getByLabel('인원 표시명', { exact: true }).last().fill('담당 인원');
-  const rosterSaved = page.waitForResponse(response => new URL(response.url()).pathname === '/api/commands' && response.request().method() === 'POST' && response.request().postDataJSON().type === 'savePersonnelRoster' && response.status() === 200);
-  await page.getByRole('button', { name: '명부 저장', exact: true }).click();
-  await rosterSaved;
-  await expect(page.getByText(/저장.*완료|저장했습니다/).first()).toBeVisible();
-  const rosterAfter = (await apiRead(page, `/api/personnel-roster?department=${encodeURIComponent(department)}`)).data;
-  const introduced = rosterAfter.entries.filter((person: { personRef: string }) => !rosterBefore.entries.some((existing: { personRef: string }) => existing.personRef === person.personRef));
-  expect(introduced, 'the displayed role is reused; the server public reference identifies the new person').toHaveLength(1);
-  const added = introduced[0];
-  expect(added.displayName).toBe('담당 인원'); expect(added.active).toBe(true); expect(added.personRef).toBeTruthy();
-  const dateQuery = (kind: 'personnel' | 'night-duty') => page.waitForResponse(response => {
-    const url = new URL(response.url());
-    return url.pathname === `/api/${kind}` && response.request().method() === 'GET' && response.status() === 200 && url.searchParams.get('date') === recordDate;
-  });
-  const dailyQuery = dateQuery('personnel');
-  await page.goto('/personnel');
-  await page.getByLabel(/기준 날짜|조회 날짜/).fill(recordDate);
-  const daily = (await (await dailyQuery).json()).data;
-  const ownDay = daily.departments.find((item: { department: string }) => item.department === department);
-  expect(daily.date).toBe(recordDate);
-  await expect(page.getByText(`표시 기준일: ${recordDate}`, { exact: true })).toBeVisible();
-  const dayControl = await dailyPersonControl(page, department, ownDay.entries, added.personRef);
-  await expect(dayControl).toBeEnabled(); await expect(dayControl).toHaveValue('');
-  await dayControl.selectOption('leave');
-  const dailySaved = page.waitForResponse(response => new URL(response.url()).pathname === '/api/commands' && response.request().method() === 'POST' && response.request().postDataJSON().type === 'saveDailyPersonnel' && response.status() === 200);
-  await page.getByRole('button', { name: '현황 저장', exact: true }).click();
-  const committedDay = await dailySaved;
-  const dailyPayload = committedDay.request().postDataJSON().payload;
-  expect(dailyPayload.department).toBe(department); expect(dailyPayload.date).toBe(recordDate);
-  expect(dailyPayload.entries.find((person: { personRef: string }) => person.personRef === added.personRef).status).toBe('leave');
-  await expect(page.getByText(/저장.*완료|저장했습니다/).first()).toBeVisible();
-  const storedDay = await departmentRecord(page, 'personnel', department, recordDate);
-  expect(storedDay.entries.find((person: { personRef: string }) => person.personRef === added.personRef).status).toBe('leave');
-  await noOverflow(page);
-  await screenshot(page, info, 'daily-personnel');
-  const nightRosterQuery = page.waitForResponse(response => {
-    const url = new URL(response.url());
-    return url.pathname === '/api/personnel-roster' && response.request().method() === 'GET' && response.status() === 200 && url.searchParams.get('department') === department;
-  });
-  const nightQuery = dateQuery('night-duty');
-  await page.goto('/night-duty');
-  const nightRoster = (await (await nightRosterQuery).json()).data;
-  await page.getByLabel('근무 시작일', { exact: true }).fill(recordDate);
-  const night = (await (await nightQuery).json()).data;
-  expect(night.date).toBe(recordDate); expect(nightRoster.department).toBe(department);
-  const ownNight = night.departments.find((item: { department: string }) => item.department === department);
-  await expect(page.getByText(`표시 기준일: ${recordDate}`, { exact: true })).toBeVisible();
-  const nightControl = await nightPersonControl(page, department, nightRoster.entries, ownNight.entries, added.personRef);
-  await expect(nightControl).toBeEnabled(); await expect(nightControl).not.toBeChecked();
-  await nightControl.check();
-  await expect(nightControl).toBeChecked();
-  const nightSaved = page.waitForResponse(response => new URL(response.url()).pathname === '/api/commands' && response.request().method() === 'POST' && response.request().postDataJSON().type === 'saveNightDuty' && response.status() === 200);
-  await page.getByRole('button', { name: '야간 근무 저장', exact: true }).click();
-  const committedNight = await nightSaved;
-  const nightPayload = committedNight.request().postDataJSON().payload;
-  const expectedNightRefs = [...ownNight.entries.map((person: { personRef: string }) => person.personRef), added.personRef].sort();
-  expect(nightPayload.department).toBe(department); expect(nightPayload.date).toBe(recordDate);
-  expect([...nightPayload.personRefs].sort()).toEqual(expectedNightRefs);
-  await expect(page.getByText(/저장.*완료|저장했습니다/).first()).toBeVisible();
-  const storedNight = await departmentRecord(page, 'night-duty', department, recordDate);
-  expect(storedNight.submitted).toBe(true);
-  expect(storedNight.entries.map((person: { personRef: string }) => person.personRef).sort()).toEqual(expectedNightRefs);
-  expect(storedNight.entries.find((person: { personRef: string }) => person.personRef === added.personRef).displayName).toBe('담당 인원');
-  await info.attach('operational-person-reference', { body: JSON.stringify({ department, date: recordDate, addedPersonRef: added.personRef, displayName: added.displayName, previousNightPersonRefs: ownNight.entries.map((person: { personRef: string }) => person.personRef), submittedNightPersonRefs: nightPayload.personRefs, savedNightPersonRefs: storedNight.entries.map((person: { personRef: string }) => person.personRef) }), contentType: 'application/json' });
   await apiLogin(page, 'bnoc');
   await page.goto('/notices/new');
   await page.getByLabel('제목', { exact: true }).fill(`업무 안내 ${info.project.name}`);
@@ -1688,10 +1943,14 @@ test('FR-049, SR-BE-016,024,025,027,033: completed after-action report, departme
   await page.getByRole('button', { name: '굵게', exact: true }).click();
   await noticeEditor.selectText();
   await page.getByRole('button', { name: '밑줄', exact: true }).click();
-  await noticeEditor.selectText();
-  await page.getByRole('button', { name: '글자 크기 20', exact: true }).click();
-  await noticeEditor.selectText();
-  await page.getByRole('combobox', { name: '글자색', exact: true }).selectOption('#1d4ed8');
+  for(const size of [16,20,24,20]) {
+    await noticeEditor.selectText();
+    await page.getByRole('button', { name: `글자 크기 ${size}`, exact: true }).click();
+  }
+  for(const color of ['#b91c1c','#166534','default','#1d4ed8']) {
+    await noticeEditor.selectText();
+    await page.getByRole('combobox', { name: '글자색', exact: true }).selectOption(color);
+  }
   await page.getByLabel('첨부파일', { exact: true }).setInputFiles({ name: '공지문서.txt', mimeType: 'text/plain', buffer: Buffer.from('공지 첨부') });
   await page.getByRole('button', { name: '공지 게시', exact: true }).click();
   await expect(page.getByRole('heading', { name: `업무 안내 ${info.project.name}` })).toBeVisible();
@@ -1710,174 +1969,32 @@ test('FR-049, SR-BE-016,024,025,027,033: completed after-action report, departme
   await screenshot(page, info, 'notice');
 });
 
-test('SR-BE-024,025,030,032: partial personnel input preserves unentered people and failed date or department queries cannot save old data', async ({ page }) => {
-  const session = await departmentManagerLogin(page, '유선반');
-  const department = session.actor.department;
-  let roster = (await apiRead(page, `/api/personnel-roster?department=${encodeURIComponent(department)}`)).data;
-  const beforeRefs = roster.entries.map((entry: { personRef: string }) => entry.personRef);
-  await command(page, 'savePersonnelRoster', { department, entries: [...roster.entries, { displayName: '담당 인원', active: true }, { displayName: '담당 인원', active: true }] }, { expectedRevision: roster.revision });
-  roster = (await apiRead(page, `/api/personnel-roster?department=${encodeURIComponent(department)}`)).data;
-  const introduced = roster.entries.filter((entry: { personRef: string }) => !beforeRefs.includes(entry.personRef));
-  expect(introduced).toHaveLength(2);
-  expect(introduced.map((entry: { displayName: string }) => entry.displayName)).toEqual(['담당 인원', '담당 인원']);
-  expect(introduced.every((entry: { active: boolean }) => entry.active === true)).toBe(true);
-  const [chosen, omitted] = introduced;
-  expect(chosen?.personRef).toBeTruthy(); expect(omitted?.personRef).toBeTruthy();
-  expect(chosen.personRef).not.toBe(omitted.personRef);
-  const [sourceDate, destinationDate] = await unenteredPastDates(page, department);
-  const sourceBefore = await departmentRecord(page, 'personnel', department, sourceDate);
-  const destination = await departmentRecord(page, 'personnel', department, destinationDate);
-  await command(page, 'saveDailyPersonnel', { department, date: destinationDate, entries: [{ personRef: omitted.personRef, status: 'trip' }] }, { expectedRevision: destination.revision });
-  const savedDestination = await departmentRecord(page, 'personnel', department, destinationDate);
-  const writes: { type: string; payload: { date?: string; entries?: { personRef: string; status: string }[] } }[] = [];
-  page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/commands') writes.push(request.postDataJSON()); });
-  await page.goto('/personnel');
-  await page.getByLabel('기준 날짜', { exact: true }).fill(sourceDate);
-  await expect(page.getByText(`표시 기준일: ${sourceDate}`, { exact: true })).toBeVisible();
-  const chosenControl = await dailyPersonControl(page, department, sourceBefore.entries, chosen.personRef);
-  const omittedControl = await dailyPersonControl(page, department, sourceBefore.entries, omitted.personRef);
-  await expect(omittedControl).toHaveValue(''); await expect(chosenControl).toBeEnabled();
-  await chosenControl.selectOption('leave');
-  await page.getByRole('button', { name: '현황 저장', exact: true }).click();
-  await expect(page.getByText(`${department} · ${sourceDate} 병력 현황을 저장했습니다.`, { exact: true })).toBeVisible();
-  const savedSource = await departmentRecord(page, 'personnel', department, sourceDate);
-  expect(savedSource.entries.find((entry: { personRef: string }) => entry.personRef === chosen.personRef).status).toBe('leave');
-  expect(savedSource.entries.find((entry: { personRef: string }) => entry.personRef === omitted.personRef).status).toBeNull();
-  expect(writes.filter(item => item.type === 'saveDailyPersonnel')).toHaveLength(1);
-  expect(writes[0].payload.entries).toEqual([{ personRef: chosen.personRef, status: 'leave' }]);
-  expect(savedSource.revision, 'equal versions make a wrong-date save possible unless the UI checks its displayed context').toBe(savedDestination.revision);
-  await expect(await dailyPersonControl(page, department, savedSource.entries, chosen.personRef)).toHaveValue('leave');
-
-  await page.route('**/api/personnel?**', route => new URL(route.request().url()).searchParams.get('date') === destinationDate
-    ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'SAVE_FAILED', message: '선택한 날짜 조회에 실패했습니다.' }) }) : route.continue());
-  await page.getByLabel('기준 날짜', { exact: true }).fill(destinationDate);
-  await expect(page.getByText('선택한 날짜 조회에 실패했습니다.', { exact: false })).toBeVisible();
-  await expect(page.getByText(new RegExp(`표시 기준일: ${sourceDate}.*마지막 성공 조회`))).toBeVisible();
-  await expect(page.getByRole('button', { name: '현황 저장', exact: true })).toBeDisabled();
-  await expect(await dailyPersonControl(page, department, savedSource.entries, chosen.personRef)).toBeDisabled();
-  expect(writes.filter(item => item.type === 'saveDailyPersonnel')).toHaveLength(1);
-  expect(await departmentRecord(page, 'personnel', department, destinationDate)).toEqual(savedDestination);
-  await page.unroute('**/api/personnel?**');
-  await page.getByRole('button', { name: '다시 조회', exact: true }).click();
-  await expect(page.getByText(`표시 기준일: ${destinationDate}`, { exact: true })).toBeVisible();
-  await expect(await dailyPersonControl(page, department, savedDestination.entries, omitted.personRef)).toHaveValue('trip');
-  await expect(page.getByRole('button', { name: '현황 저장', exact: true })).toBeEnabled();
-  await page.getByLabel('기준 날짜', { exact: true }).fill(sourceDate);
-  await expect(page.getByText(`표시 기준일: ${sourceDate}`, { exact: true })).toBeVisible();
-  const clearingControl = await dailyPersonControl(page, department, savedSource.entries, chosen.personRef);
-  await expect(clearingControl).toHaveValue('leave');
-  await clearingControl.selectOption('');
-  await page.getByRole('button', { name: '현황 저장', exact: true }).click();
-  await expect.poll(async () => (await departmentRecord(page, 'personnel', department, sourceDate)).entries.find((entry: { personRef: string }) => entry.personRef === chosen.personRef).status).toBeNull();
-  await expect(page.getByRole('button', { name: '현황 저장', exact: true })).toBeEnabled();
-
-  for (const [date, personRef] of [[sourceDate, chosen.personRef], [destinationDate, omitted.personRef]]) {
-    const record = await departmentRecord(page, 'night-duty', department, date);
-    await command(page, 'saveNightDuty', { department, date, personRefs: [personRef] }, { expectedRevision: record.revision });
-  }
-  const sourceNight = await departmentRecord(page, 'night-duty', department, sourceDate);
-  const destinationNight = await departmentRecord(page, 'night-duty', department, destinationDate);
-  await page.goto('/night-duty');
-  await page.getByLabel('근무 시작일', { exact: true }).fill(sourceDate);
-  await expect(page.getByText(`표시 기준일: ${sourceDate}`, { exact: true })).toBeVisible();
-  await expect(await nightPersonControl(page, department, roster.entries, sourceNight.entries, chosen.personRef)).toBeChecked();
-  await page.route('**/api/night-duty?**', route => new URL(route.request().url()).searchParams.get('date') === destinationDate
-    ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'SAVE_FAILED', message: '선택한 근무일 조회에 실패했습니다.' }) }) : route.continue());
-  await page.getByLabel('근무 시작일', { exact: true }).fill(destinationDate);
-  await expect(page.getByText('선택한 근무일 조회에 실패했습니다.', { exact: false })).toBeVisible();
-  await expect(page.getByText(new RegExp(`표시 기준일: ${sourceDate}.*마지막 성공 조회`))).toBeVisible();
-  await expect(await nightPersonControl(page, department, roster.entries, sourceNight.entries, chosen.personRef)).toBeDisabled();
-  await expect(page.getByRole('button', { name: '야간 근무 저장', exact: true })).toBeDisabled();
-  expect(writes.filter(item => item.type === 'saveNightDuty')).toHaveLength(0);
-  expect(await departmentRecord(page, 'night-duty', department, destinationDate)).toEqual(destinationNight);
-  await page.unroute('**/api/night-duty?**');
-  await page.getByRole('button', { name: '다시 조회', exact: true }).click();
-  await expect(page.getByText(`표시 기준일: ${destinationDate}`, { exact: true })).toBeVisible();
-  await expect(await nightPersonControl(page, department, roster.entries, destinationNight.entries, omitted.personRef)).toBeChecked();
-  await expect(page.getByRole('button', { name: '야간 근무 저장', exact: true })).toBeEnabled();
-
-  await page.goto('/roster');
-  await expect(page.getByRole('heading', { name: department, exact: true })).toBeVisible();
-  await page.getByRole('combobox', { name: '부서', exact: true }).selectOption(wire);
-  await expect(page.getByRole('heading', { name: wire, exact: true })).toBeVisible();
-  await page.route('**/api/personnel-roster?**', route => new URL(route.request().url()).searchParams.get('department') === department
-    ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'SAVE_FAILED', message: '선택한 부서 조회에 실패했습니다.' }) }) : route.continue());
-  await page.getByRole('combobox', { name: '부서', exact: true }).selectOption(department);
-  await expect(page.getByText('선택한 부서 조회에 실패했습니다.', { exact: false })).toBeVisible();
-  await expect(page.getByText(new RegExp(`마지막 성공 조회: ${wire}`))).toBeVisible();
-  await expect(page.getByRole('button', { name: '명부 저장', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '인원 추가', exact: true })).toHaveCount(0);
-  expect(writes.filter(item => item.type === 'savePersonnelRoster')).toHaveLength(0);
-  expect((await apiRead(page, `/api/personnel-roster?department=${encodeURIComponent(department)}`)).data).toEqual(roster);
-  await page.unroute('**/api/personnel-roster?**');
-  await page.getByRole('button', { name: '다시 조회', exact: true }).click();
-  await expect(page.getByRole('button', { name: '명부 저장', exact: true })).toBeEnabled();
-  await noOverflow(page);
-});
-
 test('SR-BE-006,027,032: delayed uploads preserve current fields and mixed upload failures require retry or explicit exclusion', async ({ page }) => {
-  await apiLogin(page, 'requester');
-  await page.goto('/new');
-  await fields(page, '첨부 전 요청 내용');
-  let releaseUpload!: () => void, uploadStarted!: () => void;
-  const waiting = new Promise<void>(resolve => { releaseUpload = resolve; });
-  const started = new Promise<void>(resolve => { uploadStarted = resolve; });
-  await page.route('**/api/attachments?**', async route => { uploadStarted(); await waiting; await route.continue(); });
-  await page.getByLabel('첨부파일', { exact: true }).setInputFiles({ name: '지연문서.txt', mimeType: 'text/plain', buffer: Buffer.from('지연 업로드 내용') });
-  await started;
-  await expect(page.getByRole('button', { name: '신청 등록', exact: true })).toBeDisabled();
-  await page.getByRole('textbox', { name: /^요청 내용·증상(?:\s|$)/ }).fill('첨부 중 바꾼 요청 내용');
-  await page.getByLabel('작업 위치', { exact: true }).fill('첨부 중 바꾼 위치');
-  await page.getByLabel('요청자 군내전화번호', { exact: true }).fill('000-1111');
-  releaseUpload();
-  await expect(page.getByRole('button', { name: '지연문서.txt 첨부 제외', exact: true })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: /^요청 내용·증상(?:\s|$)/ })).toHaveValue('첨부 중 바꾼 요청 내용');
-  await expect(page.getByLabel('작업 위치', { exact: true })).toHaveValue('첨부 중 바꾼 위치');
-  await expect(page.getByLabel('요청자 군내전화번호', { exact: true })).toHaveValue('000-1111');
-  await page.unroute('**/api/attachments?**');
-  await page.getByRole('button', { name: '신청 등록', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '신청 상세', exact: true })).toBeVisible();
-  const savedNumber = new URL(page.url()).pathname.split('/').at(-1)!;
-  const saved = (await apiRead(page, `/api/requests/${savedNumber}`)).data;
-  expect(saved.detail).toBe('첨부 중 바꾼 요청 내용'); expect(saved.location).toBe('첨부 중 바꾼 위치'); expect(saved.contact).toBe('000-1111');
-  expect(saved.attachments.map((file: { fileName: string }) => file.fileName)).toEqual(['지연문서.txt']);
-
-  await page.goto('/new');
-  await fields(page, '실패 첨부 처리 후 제출');
-  let retryAllowed = false;
-  await page.route('**/api/attachments?**', route => {
-    const body = route.request().postDataBuffer()?.toString() ?? '';
-    if (body.includes('제외문서.txt') || (body.includes('재시도문서.txt') && !retryAllowed)) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'SAVE_FAILED', message: '첨부 저장에 실패했습니다.' }) });
-    return route.continue();
+  await apiLogin(page,'requester');await page.goto('/new');await fields(page,'첨부 전 요청 내용');
+  const attachmentInput=await guidedAttachments(page);
+  let releaseUpload!:()=>void,uploadStarted!:()=>void;const waiting=new Promise<void>(resolve=>{releaseUpload=resolve;}),started=new Promise<void>(resolve=>{uploadStarted=resolve;});
+  await page.route('**/api/attachments?**',async route=>{uploadStarted();await waiting;await route.continue();});
+  await attachmentInput.setInputFiles({name:'지연문서.txt',mimeType:'text/plain',buffer:Buffer.from('지연 업로드 내용')});await started;
+  await expect(page.getByRole('button',{name:'이 대상 확인 완료',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'이전',exact:true})).toBeDisabled();await expect(question(page).getByRole('button',{name:'내용 수정',exact:true})).toBeDisabled();await expectGuidedDetail(page,'첨부 전 요청 내용');
+  releaseUpload();await expect(page.getByRole('button',{name:'지연문서.txt 첨부 제외',exact:true})).toBeVisible();await page.unroute('**/api/attachments?**');
+  await guidedDetail(page,'첨부 중 바꾼 요청 내용');await guidedItemReview(page);await question(page).getByRole('button',{name:'위치 수정',exact:true}).click();await page.getByLabel('어디에 있나요?',{exact:true}).fill('첨부 중 바꾼 위치');await question(page).getByRole('button',{name:'다음',exact:true}).click();await guidedReady(page);
+  await page.getByRole('button',{name:'4단계 연락처',exact:true}).click();await page.getByLabel('요청자 군내전화번호',{exact:true}).fill('000-1111');await guidedReady(page);
+  await expectGuidedDetail(page,'첨부 중 바꾼 요청 내용','컴퓨터 지원 1대 / 첨부 중 바꾼 위치 / 인트라넷 / 첨부 중 바꾼 요청 내용');await page.getByRole('button',{name:'신청 등록',exact:true}).click();await expect(page.getByRole('heading',{name:'신청 상세',exact:true})).toBeVisible();
+  const savedNumber=new URL(page.url()).pathname.split('/').at(-1)!;const saved=(await apiRead(page,`/api/requests/${savedNumber}`)).data;
+  expect(saved.requestItems[0].detail).toBe('첨부 중 바꾼 요청 내용');expect(saved.requestItems[0].location).toBe('첨부 중 바꾼 위치');expect(saved.contact).toBe('000-1111');expect(saved.attachments.map((file:{fileName:string})=>file.fileName)).toEqual(['지연문서.txt']);expect(saved.requestItems[0].attachmentIds).toEqual(saved.attachments.map((file:{id:string})=>file.id));
+  await page.goto('/new');await fields(page,'실패 첨부 처리 후 제출');const nextAttachment=await guidedAttachments(page);
+  let retryAllowed=false;await page.route('**/api/attachments?**',route=>{
+    const body=route.request().postDataBuffer()?.toString()??'';
+    if(body.includes('제외문서.txt')||(body.includes('재시도문서.txt')&&!retryAllowed))return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({code:'SAVE_FAILED',message:'첨부 저장에 실패했습니다.'})});return route.continue();
   });
-  await page.getByLabel('첨부파일', { exact: true }).setInputFiles([
-    { name: '재시도문서.txt', mimeType: 'text/plain', buffer: Buffer.from('재시도 보존 내용') },
-    { name: '완료문서.txt', mimeType: 'text/plain', buffer: Buffer.from('다른 파일은 성공') },
-  ]);
-  await expect(page.getByRole('button', { name: '재시도문서.txt 업로드 다시 시도', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '완료문서.txt 첨부 제외', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '신청 등록', exact: true })).toBeDisabled();
-  await expect(page.getByRole('textbox', { name: /^요청 내용·증상(?:\s|$)/ })).toHaveValue('실패 첨부 처리 후 제출');
-  await page.getByRole('button', { name: '재시도문서.txt 업로드 다시 시도', exact: true }).click();
-  await expect(page.getByText(/파일을 올리는 중/)).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '재시도문서.txt 업로드 다시 시도', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '신청 등록', exact: true })).toBeDisabled();
-  retryAllowed = true;
-  await page.getByRole('button', { name: '재시도문서.txt 업로드 다시 시도', exact: true }).click();
-  await expect(page.getByRole('button', { name: '재시도문서.txt 첨부 제외', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '신청 등록', exact: true })).toBeEnabled();
-  await page.getByLabel('첨부파일', { exact: true }).setInputFiles({ name: '제외문서.txt', mimeType: 'text/plain', buffer: Buffer.from('사용자가 제외') });
-  await expect(page.getByRole('button', { name: '제외문서.txt 실패 첨부 제외', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '신청 등록', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: '제외문서.txt 실패 첨부 제외', exact: true }).click();
-  await expect(page.getByRole('button', { name: '신청 등록', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: '신청 등록', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '신청 상세', exact: true })).toBeVisible();
-  const number = new URL(page.url()).pathname.split('/').at(-1)!;
-  const completed = (await apiRead(page, `/api/requests/${number}`)).data;
-  expect(completed.attachments.map((file: { fileName: string }) => file.fileName).sort()).toEqual(['완료문서.txt', '재시도문서.txt']);
-  expect(completed.detail).toBe('실패 첨부 처리 후 제출');
-  await page.unroute('**/api/attachments?**');
+  await nextAttachment.setInputFiles([{name:'재시도문서.txt',mimeType:'text/plain',buffer:Buffer.from('재시도 보존 내용')},{name:'완료문서.txt',mimeType:'text/plain',buffer:Buffer.from('다른 파일은 성공')}]);
+  await expect(page.getByRole('button',{name:'재시도문서.txt 업로드 다시 시도',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'완료문서.txt 첨부 제외',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'이 대상 확인 완료',exact:true})).toBeDisabled();await expectGuidedDetail(page,'실패 첨부 처리 후 제출');
+  await page.getByRole('button',{name:'재시도문서.txt 업로드 다시 시도',exact:true}).click();await expect(page.getByText(/파일을 올리는 중/)).toHaveCount(0);await expect(page.getByRole('button',{name:'재시도문서.txt 업로드 다시 시도',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'이 대상 확인 완료',exact:true})).toBeDisabled();
+  retryAllowed=true;await page.getByRole('button',{name:'재시도문서.txt 업로드 다시 시도',exact:true}).click();await expect(page.getByRole('button',{name:'재시도문서.txt 첨부 제외',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'이 대상 확인 완료',exact:true})).toBeEnabled();
+  await nextAttachment.setInputFiles({name:'제외문서.txt',mimeType:'text/plain',buffer:Buffer.from('사용자가 제외')});await expect(page.getByRole('button',{name:'제외문서.txt 실패 첨부 제외',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'이 대상 확인 완료',exact:true})).toBeDisabled();
+  await page.getByRole('button',{name:'제외문서.txt 실패 첨부 제외',exact:true}).click();await expect(page.getByRole('button',{name:'이 대상 확인 완료',exact:true})).toBeEnabled();await guidedReady(page);await page.getByRole('button',{name:'신청 등록',exact:true}).click();await expect(page.getByRole('heading',{name:'신청 상세',exact:true})).toBeVisible();
+  const number=new URL(page.url()).pathname.split('/').at(-1)!;const completed=(await apiRead(page,`/api/requests/${number}`)).data;
+  expect(completed.attachments.map((file:{fileName:string})=>file.fileName).sort()).toEqual(['완료문서.txt','재시도문서.txt']);expect(completed.requestItems[0].detail).toBe('실패 첨부 처리 후 제출');await page.unroute('**/api/attachments?**');
   await apiLogin(page, 'bnoc');
   await page.goto('/notices/new');
   await page.getByLabel('제목', { exact: true }).fill('첨부 전 공지 제목');
@@ -1903,58 +2020,24 @@ test('SR-BE-006,027,032: delayed uploads preserve current fields and mixed uploa
 });
 
 test('SR-BE-007,029,030,032: failed, lost, stale and expired saves retain input and require explicit recovery', async ({ page }) => {
-  await apiLogin(page, 'requester');
-  await page.goto('/new');
-  await page.getByRole('button', { name: '신청 등록', exact: true }).click();
-  await expect(page.locator('[aria-invalid="true"]').first()).toBeFocused();
-  await fields(page, '저장 입력 보존');
-  const submissions: { operationId: string; detail: string }[] = [];
-  let intercepted = false;
-  let committedNumber = '';
-  await page.route('**/api/commands', async route => {
-    const payload = route.request().postDataJSON();
-    submissions.push({ operationId: payload.operationId, detail: payload.payload.detail });
-    if (!intercepted) {
-      intercepted = true;
-      const committed = await route.fetch();
-      expect(committed.status()).toBe(200);
-      committedNumber = (await committed.json()).requestNumber;
-      await route.abort('failed');
-    }
-    else await route.continue();
+  await apiLogin(page,'requester');await page.goto('/new');await expect(page.getByRole('button',{name:'신청 등록',exact:true})).toHaveCount(0);await fields(page,'저장 입력 보존');
+  const submissions:Record<string,unknown>[]=[];let intercepted=false,committedNumber='';
+  await page.route('**/api/commands',async route=>{
+    const payload=route.request().postDataJSON();submissions.push(payload);
+    if(!intercepted){intercepted=true;const committed=await route.fetch();expect(committed.status()).toBe(200);committedNumber=(await committed.json()).requestNumber;await route.abort('failed');}else await route.continue();
   });
-  await page.getByRole('button', { name: '신청 등록', exact: true }).click();
-  await expect(page.getByText(/저장 결과를 확인하지 못했습니다/).first()).toBeVisible();
-  await expect(page.getByRole('textbox', { name: /^요청 내용·증상(?:\s|$)/ })).toHaveValue('저장 입력 보존');
-  await page.getByRole('button', { name: '신청 등록', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '신청 상세' })).toBeVisible();
-  expect(submissions.length).toBe(2);
-  expect(submissions[1].operationId).toBe(submissions[0].operationId);
-  await page.unroute('**/api/commands');
-  const number = new URL(page.url()).pathname.split('/').at(-1)!;
-  expect(number).toBe(committedNumber);
-  expect((await apiRead(page, `/api/requests?requestNumber=${number}`)).total).toBe(1);
-  await page.getByRole('button', { name: '내용 수정', exact: true }).click();
-  await page.getByRole('textbox', { name: '내용', exact: true }).fill('사용자 편집 중 입력');
-  const snapshot = (await apiRead(page, `/api/requests/${number}`)).data;
-  await command(page, 'updateRequest', { detail: '서버의 먼저 저장된 내용' }, { requestNumber: number, expectedRevision: snapshot.revision });
-  await page.getByRole('button', { name: '수정 저장', exact: true }).click();
-  await expect(page.getByText(/다른 변경.*저장|다른 변경.*반영|다른 담당자.*수정/).first()).toBeVisible();
-  await expect(page.getByRole('textbox', { name: '내용', exact: true })).toHaveText('사용자 편집 중 입력');
-  await page.getByRole('button', { name: '최신 내용 다시 불러오기', exact: true }).click();
-  await expect(page.getByRole('textbox', { name: '내용', exact: true })).toHaveText('서버의 먼저 저장된 내용');
-  await page.getByRole('textbox', { name: '내용', exact: true }).fill('세션 만료 뒤 유지');
-  const session = (await apiRead(page, '/api/session')).data;
-  expect((await page.request.post('/api/auth/logout', { headers: { Origin: new URL(base).origin, 'X-CSRF-Token': session.csrfToken }, data: {} })).status()).toBe(200);
-  await page.getByRole('button', { name: '수정 저장', exact: true }).click();
-  await expect(page.getByText(/만료|다시 로그인/).first()).toBeVisible();
-  await expect(page.getByRole('textbox', { name: '내용', exact: true })).toHaveText('세션 만료 뒤 유지');
-  const before = await page.evaluate(() => Object.keys(localStorage));
-  expect(before).toHaveLength(0);
-  await loginWithPopup(page, 'requester');
-  await expect(page.getByRole('textbox', { name: '내용', exact: true })).toHaveText('세션 만료 뒤 유지');
-  await page.getByRole('button', { name: '수정 저장', exact: true }).click();
-  await expect.poll(async () => (await apiRead(page, `/api/requests/${number}`)).data.detail).toBe('세션 만료 뒤 유지');
+  await page.getByRole('button',{name:'신청 등록',exact:true}).click();await expect(page.getByText(/저장 결과를 확인하지 못했습니다/).first()).toBeVisible();await expectGuidedDetail(page,'저장 입력 보존');
+  await page.getByRole('button',{name:'신청 등록',exact:true}).click();await expect(page.getByRole('heading',{name:'신청 상세',exact:true})).toBeVisible();expect(submissions).toHaveLength(2);expect(submissions[1]).toEqual(submissions[0]);await page.unroute('**/api/commands');
+  const number=new URL(page.url()).pathname.split('/').at(-1)!;expect(number).toBe(committedNumber);expect((await apiRead(page,`/api/requests?requestNumber=${number}`)).total).toBe(1);
+  await page.getByRole('button',{name:'내용 수정',exact:true}).click();await guidedDetail(page,'사용자 편집 중 입력');
+  const snapshot=(await apiRead(page,`/api/requests/${number}`)).data;
+  await command(page,'updateRequest',{intakeVersion:1,itemQuantities:snapshot.itemQuantities,requestItems:snapshot.requestItems.map((item:any,index:number)=>index===0?{...item,detail:'서버의 먼저 저장된 내용'}:item)},{requestNumber:number,expectedRevision:snapshot.revision});
+  await page.getByRole('button',{name:'수정 저장',exact:true}).click();await expect(page.getByText(/다른 변경.*저장|다른 변경.*반영|다른 담당자.*수정/).first()).toBeVisible();await expectGuidedDetail(page,'사용자 편집 중 입력');
+  await page.getByRole('button',{name:'최신 내용 다시 불러오기',exact:true}).click();await expectGuidedDetail(page,'서버의 먼저 저장된 내용');await guidedDetail(page,'세션 만료 뒤 유지');
+  const session=(await apiRead(page,'/api/session')).data;expect((await page.request.post('/api/auth/logout',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},data:{}})).status()).toBe(200);
+  const expiryDialog=page.getByRole('dialog',{name:'로그인 만료'});if(!await expiryDialog.isVisible())await page.getByRole('button',{name:'수정 저장',exact:true}).click();await expect(expiryDialog).toBeVisible();await expect(page.getByText(/만료|다시 로그인/).first()).toBeVisible();
+  await expectGuidedDetail(page,'세션 만료 뒤 유지');const before=await page.evaluate(()=>Object.keys(localStorage));expect(before).toHaveLength(0);await loginWithPopup(page,'requester');await expectGuidedDetail(page,'세션 만료 뒤 유지');
+  await page.getByRole('button',{name:'수정 저장',exact:true}).click();await expect.poll(async()=>(await apiRead(page,`/api/requests/${number}`)).data.requestItems[0].detail).toBe('세션 만료 뒤 유지');
 });
 
 test('SR-BE-010,011,019,027,030,032: BNOC drafts retain their starting versions through reauthentication, notice updates, and assignment-to-classification changes', async ({ page, request: otherRequest }, info) => {
@@ -2130,7 +2213,7 @@ test('SR-BE-026,032,033,035: GPS and CPCON open separate popups with status but 
     await expect(cpconCard.getByText('갱신 실패',{exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:/GPS.*정상/})).toBeVisible();
     await expect(page.getByRole('button',{name:/CPCON.*갱신 실패/})).toBeVisible();
-    await page.getByRole('button',{name:'내 신청',exact:true}).click();
+    await navItem(page,'내 신청');
     await page.route('**/api/situation',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({code:'SAVE_FAILED',message:'상황을 조회하지 못했습니다.'})}));
     const failedSituationRequest=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/situation'&&response.status()===503);
     await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});document.dispatchEvent(new Event('visibilitychange'));});
@@ -2234,8 +2317,9 @@ test('planned-maintenance UI: completion details do not squeeze the task row', a
   const actions = item.locator('.planned-item-actions');
   const rowDisplay = await item.evaluate(element => getComputedStyle(element).display);
   expect(rowDisplay, 'ActionRow owns the work item layout').toBe('grid');
-  const groupLayout = await actions.evaluate(element => ({ display: getComputedStyle(element).display, alignItems: getComputedStyle(element).alignItems }));
-  expect(groupLayout, 'ActionGroup centers its controls').toEqual({ display: 'flex', alignItems: 'center' });
+  const groupLayout = await actions.evaluate(element => ({ display: getComputedStyle(element).display, boxes: [...element.querySelectorAll('button')].map(item => { const box=item.getBoundingClientRect();return {top:box.top,bottom:box.bottom}; }) }));
+  expect(groupLayout.display, 'ActionGroup lays out its actions in one row').toBe('flex');
+  expect(new Set(groupLayout.boxes.map(box=>`${box.top}:${box.bottom}`)).size, 'single-row action controls share the same vertical bounds').toBe(1);
   await item.getByRole('button', { name: '수정', exact: true }).click();
   const editRow = page.locator('.planned-item').filter({ has: page.locator('.planned-edit') });
   const editCancel = editRow.getByRole('button', { name: '취소', exact: true });
@@ -2380,7 +2464,7 @@ test('planned-maintenance UI: retry after SAVE_FAILED survives reload and anothe
   await expect(selectedDate).toBeDisabled();
   await expect(page.getByRole('button', { name: '다음 날짜', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: '전체 작업 현황', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: '부서별 작업 현황', exact: true }).click();
+  await navItem(page, '부서별 작업 현황');
   await expect(page).toHaveURL(/view=planned-maintenance/);
   await expect(page.getByText('저장 결과를 계획 화면에서 확인한 뒤 이동할 수 있습니다.', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '같은 제출 재확인', exact: true })).toBeEnabled();
@@ -2470,7 +2554,7 @@ test('shared DateInput: existing screens use the same native date control withou
     }
   });
   await apiLogin(page, 'team-wireless');
-  for (const route of ['/schedule', '/personnel', '/night-duty']) {
+  for (const route of ['/schedule', '/personnel']) {
     await page.goto(route);
     const dates = page.locator('input[type="date"]');
     await expect(dates.first()).toBeVisible();
@@ -2478,6 +2562,14 @@ test('shared DateInput: existing screens use the same native date control withou
     expect(await dates.evaluateAll(inputs => inputs.every(input => parseFloat(getComputedStyle(input).minHeight) >= 44)), `${route} shared date controls must meet the 44px minimum`).toBeTruthy();
     await expect(page.locator('input[type="date"] + button')).toHaveCount(0);
   }
+  await page.goto('/night-duty');
+  await expect(page.getByRole('heading',{name:'당직 야간근무 현황'})).toBeVisible();
+  const dutyDate=page.locator('input[type="date"]');await expect(dutyDate).toBeVisible();
+  expect(await dutyDate.evaluate(input=>parseFloat(getComputedStyle(input).minHeight)>=44)).toBeTruthy();
+  await page.getByRole('button',{name:'월',exact:true}).click();
+  const month=page.locator('input[type="month"]');await expect(month).toBeVisible();
+  expect(await month.evaluate(input=>parseFloat(getComputedStyle(input).minHeight)>=44)).toBeTruthy();
+  await expect(page.locator('input[type="date"] + button')).toHaveCount(0);
   await apiLogin(page, 'bnoc');
   for (const route of ['/overview', '/requests']) {
     await page.goto(route);
@@ -2489,4 +2581,34 @@ test('shared DateInput: existing screens use the same native date control withou
     await expect(page.locator('input[type="date"] + button')).toHaveCount(0);
   }
   expect(businessWrites, 'date selection does not write business state').toEqual([]);
+});
+
+
+test('FR-052: fixed duty slots keep empty positions and battalion B saves without changing legacy A',async({page},info)=>{
+  const suffix=randomUUID().slice(0,8),year=2000+parseInt(suffix.slice(0,4),16)%7000,month=`${year}-${String(1+parseInt(suffix.slice(4),16)%12).padStart(2,'0')}`,date=`${month}-10`;
+  await apiLogin(page,'bnoc');
+  const names=[`합성 A ${suffix}`,`합성 B ${suffix}`];
+  const refs:string[]=[];
+  for(const displayName of names){const directory=(await apiRead(page,'/api/personnel-roster')).data;const saved=await command(page,'saveCentralPerson',{department:wire,category:'간부',rank:'대위',displayName,serviceNumber:`QA-${randomUUID()}`,internalPhone:'7654',active:true},{expectedRevision:directory.revision});refs.push(saved.publicRef);}
+  const aCommand={month,date,seat:'communications_battalion_day_officer',personRefs:[refs[0]]};
+  await command(page,'saveDutySchedule',aCommand,{expectedRevision:0});
+  const aBefore=(await apiRead(page,`/api/duty-schedules?month=${month}&seat=communications_battalion_day_officer`)).data.entries;
+  const openDate=async()=>{await page.goto('/night-duty');await page.getByRole('button',{name:'월',exact:true}).click();await page.getByLabel('대상 월').fill(month);await expect(page.getByText('불러오는 중…',{exact:true})).toHaveCount(0);await page.getByRole('button',{name:new RegExp(`^${date} 근무자 보기`)}).click();};
+  await openDate();
+  const board=page.locator('.duty-officer-board');
+  for(const seat of ['당직사관','A대대 일직사관','B대대 일직사관'])await expect(board.getByRole('region',{name:seat,exact:true})).toBeVisible();
+  await expect(board.getByRole('region',{name:'A대대 일직사관',exact:true})).toContainText(names[0]);
+  await expect(board.getByRole('region',{name:'B대대 일직사관',exact:true}).getByLabel('미편성',{exact:true})).toBeVisible();
+  await page.getByRole('combobox',{name:'근무 자리',exact:true}).selectOption('B대대 일직사관');
+  await page.getByRole('searchbox',{name:'근무자 검색',exact:true}).fill(names[1]);
+  await page.getByRole('checkbox',{name:new RegExp(names[1])}).check();
+  await page.locator('.duty-save').click();
+  await expect(page.locator('.duty-feedback')).toContainText('저장');
+  await expect(board.getByRole('region',{name:'B대대 일직사관',exact:true})).toContainText(names[1]);
+  expect((await apiRead(page,`/api/duty-schedules?month=${month}&seat=communications_battalion_day_officer`)).data.entries).toEqual(aBefore);
+  const b=(await apiRead(page,`/api/duty-schedules?month=${month}&seat=battalion_b_day_officer`)).data.entries.find((entry:{date:string})=>entry.date===date);expect(b.people[0].personRef).toBe(refs[1]);
+  await screenshot(page,info,'duty-battalion-slots');await noOverflow(page);
+  await apiLogin(page,'requester');await openDate();
+  await expect(page.locator('.duty-editor')).toHaveCount(0);await expect(board.getByRole('region',{name:'A대대 일직사관',exact:true})).toContainText(names[0]);await expect(board.getByRole('region',{name:'B대대 일직사관',exact:true})).toContainText(names[1]);
+  for(const entry of (await apiRead(page,`/api/duty-schedules?month=${month}`)).data.entries)for(const person of entry.people)expect(Object.keys(person).sort()).toEqual(['displayName','rank']);
 });

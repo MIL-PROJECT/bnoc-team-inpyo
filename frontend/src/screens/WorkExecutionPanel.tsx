@@ -10,6 +10,7 @@ import { displayScheduleRange, removeScheduleIntervalSlots, scheduleIntervalsFro
 import { ResourceStatus } from './ResourceStatus';
 import { focusFormError, saveFailureMessage } from '../app/formFeedback.mjs';
 import { workStatusLabel } from '../types';
+import { comparePersonnelRank, personnelCategories } from '../preview/personnelModel';
 import { StatusBadge } from '../ui/WorkflowStatus';
 
 type WorkInput = { nextStatus: WorkItemView['status']; scheduleSlots: string[]; memo: string; returnReason: string; completionMemo: string; assignedPersonRefs: string[]; reusePreviousSchedule: boolean };
@@ -26,6 +27,7 @@ export function WorkExecutionPanel({ requestNumber, work, requestStatus, api, ru
   const [selectedDate, setSelectedDate] = useState(() => workInput(work).scheduleSlots[0]?.slice(0,10) ?? seoulDate());
   const [rangeStartHour, setRangeStartHour] = useState('');
   const [rangeEndHour, setRangeEndHour] = useState('');
+  const [personSearch,setPersonSearch]=useState('');
   const [original, setOriginal] = useState(() => JSON.stringify(workInput(work))), [baseRevision, setBaseRevision] = useState(work.revision);
   const [message, setMessage] = useState(''), [errors, setErrors] = useState<Record<string,string>>({}), [conflict, setConflict] = useState(false), [failed, setFailed] = useState(false);
   const panelRef = useRef<HTMLElement>(null), feedbackRef = useRef<HTMLParagraphElement>(null);
@@ -51,8 +53,20 @@ export function WorkExecutionPanel({ requestNumber, work, requestStatus, api, ru
     if (result.ok) { setOriginal(JSON.stringify(input)); setBaseRevision(result.revision ?? baseRevision); setErrors({}); setConflict(false); setMessage(`작업 ${work.workNumber}의 상태·일정·담당 인원을 저장했습니다. 저장 상태: ${workStatusLabel(input.nextStatus)}.`); onRefresh(); }
     else { setErrors(result.fieldErrors ?? {}); setConflict(result.errorCode === 'CONFLICT'); setMessage(saveFailureMessage(result)); setFailed(true); }
   };
-  const people = [...(roster.data?.entries ?? []).filter(person => person.active !== false), ...(work.assignedPersons ?? []).filter(person => !(roster.data?.entries ?? []).some(entry => entry.personRef === person.personRef && entry.active !== false))];
+  const rosterPeople = roster.data?.entries ?? [];
+  const people = rosterPeople.filter(person => person.active !== false && person.complete !== false && Boolean(person.category && person.rank)).sort((a,b)=>comparePersonnelRank({category:a.category!,rank:a.rank},{category:b.category!,rank:b.rank}) || a.displayName.localeCompare(b.displayName,'ko'));
+  const eligibleRefs = new Set(people.map(person => person.personRef));
+  const existingAssigned = input.assignedPersonRefs.flatMap(ref => {
+    const person = rosterPeople.find(entry => entry.personRef === ref) ?? work.assignedPersons?.find(entry => entry.personRef === ref);
+    return person && !eligibleRefs.has(ref) ? [person] : [];
+  });
   const selectedIntervals = input.reusePreviousSchedule ? work.previousScheduleIntervals : scheduleIntervalsFromSlots(input.scheduleSlots, work.scheduleIntervals ?? []);
+  const scheduledDates=[...new Set(selectedIntervals.flatMap(interval=>{
+    const start=seoulDate(interval.startsAt),end=seoulDate(new Date(Date.parse(interval.endsAt)-1).toISOString());
+    const dates:string[]=[];for(let day=start;day<=end;){dates.push(day);const next=new Date(`${day}T00:00:00Z`);next.setUTCDate(next.getUTCDate()+1);day=next.toISOString().slice(0,10);}return dates;
+  }))];
+  const visiblePeople=people.filter(person=>`${person.rank??''} ${person.displayName} ${person.department??''}`.toLocaleLowerCase('ko').includes(personSearch.trim().toLocaleLowerCase('ko')));
+  const visibleExistingAssigned=existingAssigned.filter(person=>`${person.rank??''} ${person.displayName} ${person.department??''}`.toLocaleLowerCase('ko').includes(personSearch.trim().toLocaleLowerCase('ko')));
   const rangeSlots = rangeStartHour !== '' && rangeEndHour !== ''
     ? scheduleSlotsForRange(selectedDate, Number(rangeStartHour), Number(rangeEndHour))
     : [];
@@ -74,7 +88,7 @@ export function WorkExecutionPanel({ requestNumber, work, requestStatus, api, ru
     setRangeStartHour(value);
     if (rangeEndHour && Number(rangeEndHour) <= Number(value)) setRangeEndHour('');
   };
-  return <article ref={panelRef} className="work-card"><div className="row-head"><h3>{work.teamId} · 작업 {work.workNumber}</h3><StatusBadge status={work.status} work afterAction={work.origin==='after-action'} department={work.teamId} /></div>
+  return <article ref={panelRef} className="work-card work-execution"><div className="row-head"><h3>{work.teamId} · 작업 {work.workNumber}</h3><StatusBadge status={work.status} work afterAction={work.origin==='after-action'} department={work.teamId} /></div>
     <p>작업 일정: {work.scheduleIntervals.length ? work.scheduleIntervals.map(displayScheduleRange).join(' · ') : '미정'}</p>{work.assignedAt && <small>배정 시각(접수 시간): {displayTime(work.assignedAt)}</small>}{work.status==='반환' && work.previousScheduleIntervals.length>0 && <p className="muted">반환 전 일정: {work.previousScheduleIntervals.map(displayScheduleRange).join(' · ')}</p>}
     {work.returnReason && <p>반환 사유: {work.returnReason}</p>}{work.resolved && <p className="muted">{work.resolutionKind==='withdrawn'?'반환된 부서 배정이 해제된 과거 작업입니다.':'재배정된 이전 작업입니다.'}</p>}
     {work.completion && <p>완료: {displayTime(work.completion.completedAt)} · {work.completion.completedBy} · {work.completion.memo || '메모 없음'}</p>}
@@ -101,7 +115,15 @@ export function WorkExecutionPanel({ requestNumber, work, requestStatus, api, ru
         {errors.scheduleIntervals && <small id={errorId('scheduleIntervals')} className="field-error">{errors.scheduleIntervals}</small>}
       </fieldset>
       <label className="field"><span>작업 메모<small className="field-hint" aria-hidden="true">선택</small></span><input maxLength={2000} value={input.memo} aria-label="작업 메모" aria-invalid={!!errors.memo} aria-describedby={errors.memo ? errorId('memo') : undefined} onChange={e => change({ ...input, memo: e.target.value })} />{errors.memo && <small id={errorId('memo')} className="field-error">{errors.memo}</small>}</label>
-      <fieldset aria-invalid={!!errors.assignedPersonRefs} tabIndex={errors.assignedPersonRefs ? -1 : undefined} aria-describedby={errors.assignedPersonRefs ? errorId('assignedPersonRefs') : undefined}><legend>담당 인원 (선택)</legend><ResourceStatus loading={roster.loading} error={roster.error} retry={roster.reload} />{people.length ? people.map(person => <label className="check" key={person.personRef}><input type="checkbox" checked={input.assignedPersonRefs.includes(person.personRef)} onChange={e => change({ ...input, assignedPersonRefs: e.target.checked ? [...input.assignedPersonRefs, person.personRef] : input.assignedPersonRefs.filter(ref => ref !== person.personRef) })} />{person.displayName}{person.active === false ? ' · 비활성' : ''}</label>) : !roster.loading && !roster.error && <p className="muted">등록된 명부가 없습니다. 담당 인원을 선택하지 않고 저장할 수 있습니다.</p>}{errors.assignedPersonRefs && <p id={errorId('assignedPersonRefs')} className="field-error">{errors.assignedPersonRefs}</p>}</fieldset>
+      <fieldset aria-invalid={!!errors.assignedPersonRefs} tabIndex={errors.assignedPersonRefs ? -1 : undefined} aria-describedby={errors.assignedPersonRefs ? errorId('assignedPersonRefs') : undefined}>
+        <legend>담당 인원 (선택)</legend><ResourceStatus loading={roster.loading} error={roster.error} retry={roster.reload} />
+        {(people.length>0||existingAssigned.length>0)&&<label className="field"><span>인원 검색</span><input type="search" value={personSearch} onChange={event=>setPersonSearch(event.target.value)} placeholder="계급·이름" /></label>}
+        {visibleExistingAssigned.length>0&&<section className="assigned-person-group" aria-label="기존 배정 인원"><h4>현재 배정 · 명부 확인 필요</h4>{visibleExistingAssigned.map(person=>{const checked=input.assignedPersonRefs.includes(person.personRef);const reason=person.active===false?'비활성 인원':person.complete===false||!person.category||!person.rank?'명부 정보 미완성':'현재 일정과 부재 기간이 겹칩니다.';return <label className="check assigned-person assigned-person--unavailable" key={person.personRef}><input type="checkbox" checked={checked} onChange={event=>change({...input,assignedPersonRefs:event.target.checked?[...input.assignedPersonRefs,person.personRef]:input.assignedPersonRefs.filter(ref=>ref!==person.personRef)})}/><span>{person.rank?`${person.rank} `:''}{person.displayName}<small>{reason} · 선택 해제 가능</small></span></label>;})}</section>}
+        {personnelCategories().map(category=>{const group=visiblePeople.filter(person=>person.category===category);if(!group.length)return null;return <section className="assigned-person-group" key={category}><h4>{category}</h4>{group.map(person=>{const absent=person.absences?.filter(record=>scheduledDates.some(date=>record.startDate<=date&&record.endDate>=date))??[];const unavailable=person.active===false||person.complete===false||!person.category||!person.rank||absent.length>0;const checked=input.assignedPersonRefs.includes(person.personRef);const reason=person.active===false?'비활성 인원':person.complete===false||!person.category||!person.rank?'명부 정보 미완성':absent.length?`${absent[0].absenceType} · ${absent[0].startDate.slice(5)}~${absent[0].endDate.slice(5)}`:'';return <label className={`check assigned-person${unavailable?' assigned-person--unavailable':''}`} key={person.personRef}><input type="checkbox" checked={checked} disabled={unavailable&&!checked} onChange={event=>change({...input,assignedPersonRefs:event.target.checked?[...input.assignedPersonRefs,person.personRef]:input.assignedPersonRefs.filter(ref=>ref!==person.personRef)})}/><span>{person.rank?`${person.rank} `:''}{person.displayName}{reason&&<small>{reason}</small>}</span></label>;})}</section>;})}
+        {(people.length>0||existingAssigned.length>0)&&!visiblePeople.length&&!visibleExistingAssigned.length&&<p className="muted">검색 결과가 없습니다.</p>}
+        {!roster.loading&&!roster.error&&!people.length&&!existingAssigned.length&&<p className="muted">선택 가능한 인원이 없습니다. 담당 인원 없이 저장할 수 있습니다.</p>}
+        {errors.assignedPersonRefs&&<p id={errorId('assignedPersonRefs')} className="field-error">{errors.assignedPersonRefs}</p>}
+      </fieldset>
       {input.nextStatus === '완료' && <label className="field"><span>완료 메모<small className="field-hint" aria-hidden="true">선택</small></span><input maxLength={2000} value={input.completionMemo} aria-label="완료 메모" aria-invalid={!!errors.completionMemo} aria-describedby={errors.completionMemo ? errorId('completionMemo') : undefined} onChange={e => change({ ...input, completionMemo: e.target.value })} />{errors.completionMemo && <small id={errorId('completionMemo')} className="field-error">{errors.completionMemo}</small>}</label>}
       {input.nextStatus === '반환' && <label className="field"><span>반환 사유<small className="field-hint" aria-hidden="true">필수</small></span><input maxLength={2000} value={input.returnReason} aria-label="반환 사유" aria-required="true" aria-invalid={!!errors.returnReason} aria-describedby={errors.returnReason ? errorId('returnReason') : undefined} onChange={e => change({ ...input, returnReason: e.target.value })} />{errors.returnReason && <small id={errorId('returnReason')} className="field-error">{errors.returnReason}</small>}{work.scheduleIntervals.length>0 && <small className="field-hint">반환하면 현재 시간대는 해제되며 전체 구간을 이력으로 보존합니다.</small>}</label>}
       <button className="primary" onClick={() => void save()} disabled={saving || conflict}>{saving ? '저장 중…' : '상태 저장'}</button>

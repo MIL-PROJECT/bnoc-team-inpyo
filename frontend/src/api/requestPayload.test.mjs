@@ -24,7 +24,8 @@ test('after-action transmits explicit completion and actual instants without a n
   assert.equal(payload.completedConfirmed, true, 'AFTER_ACTION_COMPLETED_CONFIRMATION_REQUIRED');
   assert.equal(payload.actualStartedAt, '2026-10-13T01:00:00.000Z');
   assert.equal(payload.actualCompletedAt, '2026-10-13T02:00:00.000Z');
-  assert.equal(payload.actualRequesterText, input.requesterDisplayText);
+  assert.equal(payload.requesterRef, input.requesterRef);
+  assert.equal(Object.hasOwn(payload, 'actualRequesterText'), false);
   assert.equal(Object.hasOwn(payload, 'requesterDisplayText'), false);
   assert.equal(Object.hasOwn(payload, 'schedulePreferences'), false);
   assert.equal(Object.hasOwn(payload, 'priority'), false, 'AFTER_ACTION_CLASSIFICATION_MUST_REMAIN_UNSET');

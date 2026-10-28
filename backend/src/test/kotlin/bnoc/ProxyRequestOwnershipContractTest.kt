@@ -31,7 +31,7 @@ class ProxyRequestOwnershipContractTest {
         workflow.execute(actor,Command(type,UUID.randomUUID().toString(),number,expectedRevision=revision,payload=payload))
     private fun requestPayload(ref:String?=requester.subjectRef) = mapOf(
         "category" to "장비/체계","subcategories" to mapOf("systemType" to "인터넷","resourceType" to "PC","workType" to "지원"),
-        "detail" to "점검 요청","location" to "사무실","contact" to "군내 1234"
+        "detail" to "점검 요청","location" to "사무실","contact" to "1234"
     ) + (ref?.let { mapOf("requesterRef" to it) } ?: emptyMap())
 
     @Test fun `BNOC requester picker returns only active public requester fields`() {
@@ -77,7 +77,10 @@ class ProxyRequestOwnershipContractTest {
         assertEquals("NOT_FOUND",assertThrows(BusinessFailure::class.java) {
             command(otherRequester,"updateRequest",number,db.request(number)!!.revision,mapOf("detail" to "다른 요청자 수정"))
         }.code)
-        assertEquals("FORBIDDEN",assertThrows(BusinessFailure::class.java) { query.requesters(team) }.code)
+        val choices=query.requesters(team)
+        assertTrue(choices.isNotEmpty())
+        assertEquals(setOf("requesterRef","displayName","department"),choices.first().keys)
+        assertTrue(choices.any { it["requesterRef"]==requester.subjectRef })
     }
 
     @Test fun `legacy requests without an account owner remain unlinked`() {

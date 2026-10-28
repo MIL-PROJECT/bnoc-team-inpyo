@@ -11,13 +11,13 @@ data class Actor(val id:String, val role:String, val displayName:String, val dep
 }
 data class RequestRecord(
     val number:String, val requesterSubject:String?, val requesterDisplayText:String, val registeredBy:String,
-    val category:String, val subcategories:Map<String,String>, var detail:String, var location:String, var contact:String,
+    val category:String, var subcategories:Map<String,String>, var detail:String, var location:String, var contact:String,
     val equipmentId:String?=null, val maintenanceTarget:Map<String,String>?=null,
     var scheduledAt:String?=null, var documentRef:String?=null, var attachments:List<Map<String,Any?>> = emptyList(),
     var status:String="대기", val registeredAt:String, var updatedAt:String=registeredAt,
     var revision:Long=1, var priority:String?=null, var assignedAt:String?=null,
     var schedulePreferences:List<SchedulePreference> = emptyList(), var personalContact:String?=null,
-    var rejectionReason:String?=null, var rejectedBy:String?=null, var rejectedAt:String?=null)
+    var rejectionReason:String?=null, var rejectedBy:String?=null, var rejectedAt:String?=null,var intake:IntakeRecord?=null)
 data class SchedulePreference(val rank:Int,val date:String,val period:String)
 data class WorkScheduleInterval(val startsAt:String,val endsAt:String)
 data class WorkRecord(
@@ -42,6 +42,13 @@ fun text(payload:Map<String,Any?>,field:String,max:Int,required:Boolean=false):S
     val result=(value as? String)?.trim().orEmpty()
     if(result.length>max || (required && result.isBlank())) reject("VALIDATION",mapOf(field to if(result.isBlank()) "필수 입력입니다." else "최대 ${max}자까지 입력하세요."))
     return result
+}
+fun phoneText(payload:Map<String,Any?>,field:String,required:Boolean=false,existing:String?=null):String {
+    val value=text(payload,field,50,required)
+    if(value==existing || value.isEmpty() && !required) return value
+    if(!(payload[field] as? String).orEmpty().matches(Regex("[0-9-]+")) || value.none { it in '0'..'9' })
+        reject("VALIDATION",mapOf(field to "전화번호는 숫자와 -만 입력하세요."))
+    return value
 }
 fun dateValue(value:String):String {
     if(!value.matches(Regex("\\d{4}-\\d{2}-\\d{2}")) || runCatching { LocalDate.parse(value) }.isFailure) reject("VALIDATION",mapOf("date" to "날짜를 확인하세요."))

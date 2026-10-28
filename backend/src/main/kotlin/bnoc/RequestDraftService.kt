@@ -52,7 +52,7 @@ class RequestDraftService(private val db:Database,private val transaction:Transa
     }
     private fun input(raw:Any?):MutableMap<String,Any?> {
         val value=raw as? Map<*,*> ?: reject("VALIDATION")
-        if(value.keys.any { it !in stringLimits.keys+setOf("differentTarget","attachments") } || db.json.writeValueAsBytes(value).size>65536) reject("VALIDATION")
+        if(value.keys.any { it !in stringLimits.keys+setOf("differentTarget","attachments","guidedDraft") } || db.json.writeValueAsBytes(value).size>65536) reject("VALIDATION")
         val result=linkedMapOf<String,Any?>()
         stringLimits.forEach { (key,max) ->
             val text=value[key] ?: ""
@@ -65,6 +65,8 @@ class RequestDraftService(private val db:Database,private val transaction:Transa
         val attachments=value["attachments"] ?: emptyList<Any>()
         if(attachments !is List<*> || attachments.size>10) reject("VALIDATION")
         result["attachments"]=attachments
+        result["guidedDraft"]=IntakePolicy.draft(value["guidedDraft"],attachmentIds(attachments).toSet())
+        if(result["guidedDraft"]!=null) result["equipmentId"]=""
         return result
     }
     private fun attachmentIds(value:Any?):List<String> {

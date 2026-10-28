@@ -9,6 +9,7 @@ export class RequestQueryService {
   summary(request, state) {
     const entries = state.history.filter(item => item.targetId === request.id);
     return {
+      canReuse: this.store.getActor().role==='requester'&&request.requesterActorId===this.store.getActor().id&&request.registeredBy===this.store.getActor().id,
       requestNumber: request.requestNumber, requesterDisplayText: request.requesterDisplayText,
       category: request.category, status: request.status,
       teamIds: [...new Set(state.workItems.filter(work => work.requestId === request.id).map(work => work.teamId))],
@@ -20,6 +21,7 @@ export class RequestQueryService {
     const actor = this.store.getActor();
     const state = this.store.getSnapshot();
     return state.requests.filter(request => this.visible(request, state) &&
+      (!criteria.reusableOnly || actor.role==='requester'&&request.requesterActorId===actor.id&&request.registeredBy===actor.id) &&
       (!criteria.period?.from || request.registeredAt.slice(0,10) >= criteria.period.from) &&
       (!criteria.period?.to || request.registeredAt.slice(0,10) <= criteria.period.to) &&
       (!criteria.status?.length || criteria.status.includes(request.status)) &&
@@ -28,7 +30,7 @@ export class RequestQueryService {
       (!criteria.location || request.location.includes(criteria.location)) &&
       (!criteria.requestNumber || request.requestNumber.includes(criteria.requestNumber)) &&
       (!criteria.requesterDeptOrName || actor.role !== 'bnoc' || request.requesterDisplayText.includes(criteria.requesterDeptOrName))
-    ).map(request => this.summary(request, state)).sort((a,b) => b.updatedAt.localeCompare(a.updatedAt));
+    ).map(request => this.summary(request, state)).sort((a,b) => { const left=BigInt(a.requestNumber),right=BigInt(b.requestNumber);return left<right?1:left>right?-1:0; });
   }
   getRequestDetail(requestNumber) {
     const actor = this.store.getActor();

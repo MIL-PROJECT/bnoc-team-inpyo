@@ -1,11 +1,16 @@
+/* Hallmark v2.0.0 · shape: app screen · theme: BNOC (brand) · scope: app · redesign: full · signature: actual source stage and scope · copy: verbatim */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V3 · weakest: V, keep the standalone information window and foreground the reported stage. */
+/* User contract: standalone window retains minimum640px; main workspace is PC-only. No clipping is used to hide unsupported mobile overflow. */
+/* Hallmark · dismissed 3 · inherited failure and stale notices carry operational state; the information pane uses a plain top rule. */
+/* Hallmark · answered F23 · this authenticated information window is a task surface; title and lang are present and no search preview is required. */
 :root {
   color-scheme: light;
-  --color-bg: #F8FAFC;
+  --color-bg: #F5F6F7;
   --color-surface: #FFFFFF;
-  --color-text: #0F172A;
-  --color-muted: #475569;
-  --color-divider: #CBD5E1;
-  --color-control-border: #64748B;
+  --color-text: #18212F;
+  --color-muted: #515D6B;
+  --color-divider: #D8DDE3;
+  --color-control-border: #73808F;
   --color-primary: #1D4ED8;
   --color-primary-hover: #1E40AF;
   --color-focus: #1D4ED8;
@@ -21,31 +26,60 @@
   --control-height: 44px;
   --radius-control: 3px;
   --radius-card: 3px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --color-neutral-bg: #EDF0F3;
+  --text-small: .875rem;
 }
 
 * { box-sizing: border-box; }
 body { min-width: 640px; min-height: 100vh; margin: 0; background: var(--color-bg); color: var(--color-text); font: 1rem/1.6 var(--font-family); }
 :focus-visible { outline: 3px solid var(--color-focus); outline-offset: 3px; }
-button { min-height: var(--control-height); padding: .5rem .95rem; border: 1px solid var(--color-control-border); border-radius: var(--radius-control); background: var(--color-surface); color: inherit; font: inherit; cursor: pointer; }
+button { min-height: var(--control-height); padding: var(--space-2) .95rem; border: 1px solid var(--color-control-border); border-radius: var(--radius-control); background: var(--color-surface); color: inherit; font: inherit; cursor: pointer; }
 button:hover { border-color: var(--color-primary); color: var(--color-primary); }
 button:disabled { opacity: .55; cursor: wait; }
-.situation-site { max-width: 760px; padding: 2rem 1.5rem 3rem; margin: 0 auto; }
-.situation-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
+.situation-site { max-width: 760px; padding: var(--space-8) var(--space-6) 3rem; margin: 0 auto; }
+.situation-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-6); }
 .situation-head h1 { margin: 0; font-size: 1.8rem; line-height: 1.3; letter-spacing: -.03em; }
-.eyebrow { margin: 0 0 .15rem; color: var(--color-muted); font-size: .875rem; }
+.situation-source-label { margin: 0 0 .15rem; color: var(--color-muted); font-size: .875rem; }
 .situation-card { padding: 1.4rem; border: 1px solid var(--color-divider); border-radius: var(--radius-card); background: var(--color-surface); }
-.situation-card-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.situation-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
 .situation-card h2 { margin: 0; font-size: 1.2rem; }
 .badge { display: inline-block; padding: .2rem .55rem; border-radius: var(--radius-control); background: var(--color-info-bg); color: var(--color-info); font-size: .875rem; white-space: nowrap; }
 .badge--review { background: var(--color-warning-bg); color: var(--color-warning); }
-.situation-stage { margin: 1.2rem 0; font-size: 1.7rem; font-weight: 750; }
-.situation-card dl { display: grid; grid-template-columns: 7rem 1fr; gap: .5rem 1rem; margin: 1rem 0; }
+.situation-stage { margin: 1.2rem 0; font-size: 1.7rem; font-weight: 600; }
+.situation-card dl { display: grid; grid-template-columns: 7rem 1fr; gap: var(--space-2) var(--space-4); margin: var(--space-4) 0; }
 .situation-card dl div { display: contents; }
 dt { color: var(--color-muted); }
-dd { margin: 0; font-weight: 650; }
+dd { margin: 0; font-weight: 600; }
 small,.load-status { color: var(--color-muted); }
-.load-status { margin: .5rem 0; }
+.load-status { margin: var(--space-2) 0; }
 .notice,.error { padding: .65rem .8rem; border-left: 3px solid var(--color-warning); background: var(--color-warning-bg); color: var(--color-warning); }
 .error { border-color: var(--color-danger); background: var(--color-danger-bg); color: var(--color-danger); }
-footer { margin-top: 1.25rem; text-align: right; }
+footer { margin-top: var(--space-5); text-align: right; }
 a { color: var(--color-primary); }
+
+[hidden] { display: none !important; }
+body { caret-color: var(--color-primary); }
+html { scrollbar-color: var(--color-control-border) var(--color-bg); }
+::selection { color: var(--color-text); background: var(--color-info-bg); }
+.situation-head h1,.situation-card h2 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
+.situation-head { margin-bottom: var(--space-4); }
+.situation-source-label { margin-top: var(--space-1); }
+.situation-head h1 { font-size: 1.75rem; }
+button { height: var(--control-height); padding-block: 0; line-height: 1.25; font-weight: 600; }
+button:active:not(:disabled) { background: var(--color-neutral-bg); }
+button:focus-visible,a:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 3px; }
+button:disabled { cursor: not-allowed; }
+.situation-card { padding: var(--space-5); border: 0; border-top: 1px solid var(--color-divider); border-radius: 0; }
+.situation-stage { font-size: 2.25rem; line-height: 1.3; font-weight: 600; font-variant-numeric: tabular-nums; }
+.situation-card dl { padding-top: var(--space-4); border-top: 1px solid var(--color-divider); }
+.situation-card dt { font-size: var(--text-small); }
+.load-status { font-size: var(--text-small); font-variant-numeric: tabular-nums; }
+footer { font-size: var(--text-small); }
+a { text-underline-offset: .2em; }

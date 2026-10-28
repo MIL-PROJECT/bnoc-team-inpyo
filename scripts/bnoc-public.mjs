@@ -17,6 +17,15 @@ const providerPort = 8086;
 const mysqlHome = process.env.BNOC_MYSQL_HOME ?? join(root, '.local/dependencies/mysql-8.4.11-macos15-arm64');
 const tunnelBinary = join(root, '.local/dependencies/cloudflared/cloudflared');
 const exists = path => access(path).then(() => true, () => false);
+export async function retainPublicArtifact(source, destination) {
+  const bytes = await readFile(source), sha256 = createHash('sha256').update(bytes).digest('hex');
+  await mkdir(destination, { recursive: true, mode: 0o700 });
+  const path = join(destination, sha256 + '.jar');
+  try { await writeFile(path, bytes, { flag: 'wx', mode: 0o600 }); }
+  catch (error) { if (error.code !== 'EEXIST') throw error; }
+  if (createHash('sha256').update(await readFile(path)).digest('hex') !== sha256) throw new Error('Retained public artifact does not match its SHA.');
+  return { path, sha256 };
+}
 const json = async (path, fallback) => await exists(path) ? JSON.parse(await readFile(path, 'utf8')) : fallback;
 async function save(path, value) {
   await writeFile(path, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
@@ -108,11 +117,12 @@ async function startTunnel() {
   return url;
 }
 async function startApplication(url, secrets) {
-  const jar = join(root, 'backend/build/libs/bnoc-server-1.0.0.jar');
-  if (!await exists(jar)) throw new Error('Build the BNOC JAR before starting public access.');
-  const artifactSha256 = createHash('sha256').update(await readFile(jar)).digest('hex');
+  const source = join(root, 'backend/build/libs/bnoc-server-1.0.0.jar');
+  if (!await exists(source)) throw new Error('Build the BNOC JAR before starting public access.');
+  const artifact = await retainPublicArtifact(source, join(directory, 'artifacts'));
+  const jar = artifact.path, artifactSha256 = artifact.sha256;
   const previous = await json(manifestPath, {});
-  if ((previous.configuredUrl && previous.configuredUrl !== url) || (previous.artifactSha256 && previous.artifactSha256 !== artifactSha256)) {
+  if ((previous.configuredUrl && previous.configuredUrl !== url) || (previous.artifactSha256 && previous.artifactSha256 !== artifactSha256) || (previous.application && previous.application.artifactPath !== jar)) {
     await stop('application'); await stop('provider');
   }
   const providerPath = join(root, 'mock-provider/server.mjs');
@@ -134,6 +144,7 @@ async function startApplication(url, secrets) {
   }, `--server.port=${applicationPort}`);
   await waitFor(() => owned(application) && ready(`http://127.0.0.1:${applicationPort}/api/session`), 'Public BNOC server');
   const manifest = await json(manifestPath, {});
+  manifest.application.artifactPath = jar;
   manifest.artifactSha256 = artifactSha256; manifest.configuredUrl = url; await save(manifestPath, manifest);
   return { url, mode: 'competition', availability: 'while-computer-and-services-are-running', artifactSha256: manifest.artifactSha256 };
 }

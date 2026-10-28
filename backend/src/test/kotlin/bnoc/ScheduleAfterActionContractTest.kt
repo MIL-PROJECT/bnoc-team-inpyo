@@ -116,7 +116,7 @@ class ScheduleAfterActionContractTest {
 
     @Test fun `after action is counted once as completed and appears as a private field safe team calendar record`() {
         val result = workflow.execute(db.actor("team-wireless")!!, op("createAfterActionReport", payload = mapOf(
-            "actualRequesterText" to "요청 부서", "category" to "장비/체계", "subcategories" to mapOf("systemType" to "인터넷", "resourceType" to "PC", "workType" to "고장"),
+            "requesterRef" to db.actor("requester")!!.subjectRef, "category" to "장비/체계", "subcategories" to mapOf("systemType" to "인터넷", "resourceType" to "PC", "workType" to "고장"),
             "detail" to "네트워크 연결 오류", "location" to "공작사 2층", "contact" to "9123", "completedConfirmed" to true,
             "actualStartedAt" to "2026-10-22T04:13:00Z", "actualCompletedAt" to "2026-10-22T04:29:00Z", "reason" to "선조치", "completionMemo" to "회선 재연결")))
         val number = result.requestNumber!!; val overview = queries.shared(db.actor("requester")!!, mapOf("requestNumber" to number))
@@ -138,7 +138,11 @@ class ScheduleAfterActionContractTest {
         assertEquals(setOf("workNumber", "teamId", "request", "actualStartedAt", "status", "location", "memo", "origin"), record.keys)
         assertEquals(setOf("requestNumber"), (record["request"] as Map<*, *>).keys)
         assertTrue(!record.containsKey("requesterContact") && !record.containsKey("detail"), "CALENDAR_MUST_EXCLUDE_PHONE_AND_REQUEST_DETAIL")
-        assertEquals("FORBIDDEN", assertThrows(BusinessFailure::class.java) { queries.schedule(db.actor("requester")!!, emptyMap()) }.code)
+        val requesterCalendar=queries.schedule(db.actor("requester")!!,emptyMap())
+        assertTrue((requesterCalendar["entries"] as List<*>).isEmpty())
+        assertTrue((requesterCalendar["completedRecords"] as List<*>).isEmpty())
+        assertTrue((requesterCalendar["unscheduled"] as List<*>).isEmpty())
+        assertEquals(setOf("entries","completedRecords","unscheduled","plans","from","to"),requesterCalendar.keys)
     }
 
     @Test fun `v8 schedule data migrates from an empty v9 schema while retaining exact legacy values and history`() {

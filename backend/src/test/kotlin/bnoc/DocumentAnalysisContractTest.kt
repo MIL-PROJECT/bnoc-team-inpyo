@@ -54,7 +54,7 @@ class DocumentAnalysisContractTest {
     }
 
     private fun createRequest()=workflow.execute(requester,Command("createRequest",UUID.randomUUID().toString(),payload=mapOf(
-        "category" to "장비/체계","subcategories" to mapOf("systemType" to "인트라넷","resourceType" to "PC","workType" to "지원"),"detail" to "지원 요청","location" to "회의실","contact" to "군내 1234"
+        "category" to "장비/체계","subcategories" to mapOf("systemType" to "인트라넷","resourceType" to "PC","workType" to "지원"),"detail" to "지원 요청","location" to "회의실","contact" to "1234"
     ))).requestNumber!!
 
     private fun hwpFixture():ByteArray {
@@ -108,7 +108,7 @@ class DocumentAnalysisContractTest {
         val attachment=temporaryAttachment(bytes,name,contentType)
         val subcategories=mapOf("meetingType" to type)+(if(type=="화상회의") mapOf("videoPlatform" to "KJCCS") else emptyMap())
         val number=workflow.execute(requester,Command("createRequest",UUID.randomUUID().toString(),payload=mapOf(
-            "category" to "회의 지원","subcategories" to subcategories,"detail" to "회의 지원 요청","location" to "회의실","contact" to "군내 1234","attachments" to listOf(attachment)
+            "category" to "회의 지원","subcategories" to subcategories,"detail" to "회의 지원 요청","location" to "회의실","contact" to "1234","attachments" to listOf(attachment)
         ))).requestNumber!!
         return number to attachment
     }
@@ -116,7 +116,7 @@ class DocumentAnalysisContractTest {
     private fun createEquipmentWithAttachment(bytes:ByteArray,name:String,contentType:String):Pair<String,String> {
         val attachment=temporaryAttachment(bytes,name,contentType)
         val number=workflow.execute(requester,Command("createRequest",UUID.randomUUID().toString(),payload=mapOf(
-            "category" to "장비/체계","subcategories" to mapOf("systemType" to "인트라넷","resourceType" to "PC","workType" to "지원"),"detail" to "장비 지원 요청","location" to "사무실","contact" to "군내 1234","attachments" to listOf(attachment)
+            "category" to "장비/체계","subcategories" to mapOf("systemType" to "인트라넷","resourceType" to "PC","workType" to "지원"),"detail" to "장비 지원 요청","location" to "사무실","contact" to "1234","attachments" to listOf(attachment)
         ))).requestNumber!!
         return number to attachment
     }
@@ -345,7 +345,7 @@ class DocumentAnalysisContractTest {
         assertArrayEquals(bytes,files.download(requester,meeting).second)
     }
 
-    @Test fun `DOCX original preview requires an authorized linked file and never enables server analysis`() {
+    @Test fun `DOCX original preview requires owner or linked access and never enables server analysis`() {
         val bytes=ByteArrayOutputStream().use { output ->
             ZipOutputStream(output).use { zip ->
                 for((name,value) in mapOf("[Content_Types].xml" to "<Types/>","word/document.xml" to "<document>DOCX PREVIEW PRIVATE 7319</document>")) {
@@ -355,7 +355,8 @@ class DocumentAnalysisContractTest {
             output.toByteArray()
         }
         val temporary=temporaryAttachment(bytes,"source.docx","application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-        assertEquals("NOT_FOUND",assertThrows(BusinessFailure::class.java) { files.renderSource(requester,temporary) }.code)
+        assertArrayEquals(bytes,files.renderSource(requester,temporary).second,"OWN_TEMP_DOCX_PREVIEW_REQUIRED")
+        assertEquals("NOT_FOUND",assertThrows(BusinessFailure::class.java) { files.renderSource(db.actor("requester-secondary")!!,temporary) }.code)
         val ordinary=attach(createRequest(),bytes,"ordinary.docx")
         val (_,meeting)=createMeetingWithAttachment("일반회의",bytes,"meeting.docx","application/vnd.openxmlformats-officedocument.wordprocessingml.document")
         for((ref,status) in listOf(ordinary to "unsupported",meeting to "excluded")) {

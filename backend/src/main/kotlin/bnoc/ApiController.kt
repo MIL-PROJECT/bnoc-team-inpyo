@@ -15,7 +15,7 @@ import java.time.ZoneId
 
 @RestController
 @RequestMapping("/api")
-class ApiController(val auth:AuthService,val db:Database,val workflow:WorkflowService,val query:QueryService,val files:AttachmentService,val situation:SituationService,val plannedWorks:PlannedWorkService,val documents:DocumentAnalysisService) {
+class ApiController(val auth:AuthService,val db:Database,val workflow:WorkflowService,val query:QueryService,val files:AttachmentService,val situation:SituationService,val operationsStatus:OperationsStatusService,val plannedWorks:PlannedWorkService,val documents:DocumentAnalysisService) {
     private fun actor(request:HttpServletRequest)=auth.actor(request) ?: reject("UNAUTHENTICATED")
     private fun envelope(data:Any?):Map<String,Any?> = mapOf("data" to data,"queriedAt" to Instant.now().toString())
     @GetMapping("/request-draft") fun requestDraft(request:HttpServletRequest)=envelope(workflow.requestDrafts.get(actor(request)))
@@ -93,14 +93,20 @@ class ApiController(val auth:AuthService,val db:Database,val workflow:WorkflowSe
         val revision=ifMatch?.trim()?.removeSurrounding("\"")?.toLongOrNull()?.takeIf { it>0 } ?: reject("VALIDATION",mapOf("If-Match" to "버전이 필요합니다."))
         return envelope(plannedWorks.delete(actor(request),id,revision))
     }
+    @GetMapping("/department-contacts") @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
+    fun departmentContacts(request:HttpServletRequest):Map<String,Any?> { actor(request);return envelope(workflow.operations.departmentContacts()) }
     @GetMapping("/personnel-roster","/roster") @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
-    fun roster(request:HttpServletRequest,@RequestParam(required=false) department:String?)=envelope(workflow.operations.listRoster(actor(request),department ?: actor(request).department))
+    fun roster(request:HttpServletRequest,@RequestParam(required=false) department:String?)=envelope(workflow.operations.listCentralRoster(actor(request),department))
     @GetMapping("/personnel") @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
-    fun personnel(request:HttpServletRequest,@RequestParam(required=false) date:String?,@RequestParam(required=false) department:String?)=envelope(workflow.operations.personnel(actor(request),date ?: LocalDate.now(ZoneId.of("Asia/Seoul")).toString(),department))
+    fun personnel(request:HttpServletRequest,@RequestParam(required=false) date:String?,@RequestParam(required=false) department:String?)=envelope(workflow.operations.personnelSummary(actor(request),date ?: LocalDate.now(ZoneId.of("Asia/Seoul")).toString(),department))
     @GetMapping("/night-duty") @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
     fun night(request:HttpServletRequest,@RequestParam(required=false) date:String?,@RequestParam(required=false) department:String?)=envelope(workflow.operations.night(actor(request),date ?: LocalDate.now(ZoneId.of("Asia/Seoul")).toString(),department))
+    @GetMapping("/duty-schedules") @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
+    fun dutySchedules(request:HttpServletRequest,@RequestParam month:String,@RequestParam(required=false) seat:String?)=envelope(workflow.operations.listDutySchedules(actor(request),month,seat))
     @GetMapping("/situation") @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
     fun situations(request:HttpServletRequest):Map<String,Any?> { actor(request);return envelope(mapOf("gps" to situation.snapshot("gps"),"cpcon" to situation.snapshot("cpcon"))) }
+    @GetMapping("/operations/status") @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
+    fun operationsStatus(request:HttpServletRequest):Map<String,Any?> { actor(request); return envelope(operationsStatus.snapshot()) }
     @GetMapping("/situation/{kind}") fun situation(request:HttpServletRequest,@PathVariable kind:String):Map<String,Any?> { actor(request);return envelope(situation.snapshot(kind)) }
     @GetMapping("/notices") @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
     fun notices(request:HttpServletRequest,@RequestParam params:Map<String,String>)=pageEnvelope(page(params,workflow.operations.notices(actor(request))))

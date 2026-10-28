@@ -1,8 +1,10 @@
+/* Hallmark v2.0.0 · shape: app screen · theme: BNOC (brand) · scope: app · redesign: full · signature: actual request and team progress · copy: verbatim */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V3 · weakest: V, keep the real process and quiet its enclosure. */
 .workflow-status { display: inline-flex; vertical-align: middle; }
 .workflow-status__trigger { cursor: help; }
 .request-team-progress { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .request-overall-progress { flex-basis: 100%; color: var(--color-muted); font-size: var(--text-small); }
-.workflow-status__popover { position: fixed; z-index: var(--z-dialog); width: 280px; max-width: calc(100vw - 32px); box-sizing: border-box; padding: var(--space-3); color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: var(--radius-card); box-shadow: var(--shadow-dialog); }
+.workflow-status__popover { position: fixed; z-index: var(--z-dialog); width: 280px; max-width: calc(100% - var(--space-8)); box-sizing: border-box; padding: var(--space-3); color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: var(--radius-card); box-shadow: var(--shadow-dialog); }
 .workflow-status__popover p { margin: var(--space-2) 0 0; color: var(--color-muted); line-height: 1.45; }
 .workflow-status__contacts { display: grid; gap: var(--space-2); list-style: none; margin: var(--space-2) 0 0; padding: 0; }
 .workflow-status__contacts li { display: flex; justify-content: space-between; gap: var(--space-3); }
@@ -22,3 +24,11 @@
 .workflow-status-process[data-tone='success'] .workflow-status-step[aria-current='step'] strong,.workflow-status-process[data-tone='success'] .workflow-status-step__current { color: var(--color-success); }
 .workflow-status-steps--compact .workflow-status-step__number { width: 22px; height: 22px; font-size: 12px; }
 .workflow-status-steps--compact .workflow-status-step:not(:last-child)::after { top: 10px; left: calc(50% + 15px); width: calc(100% - 30px); }
+
+.workflow-status__trigger { border-color: transparent; }
+.workflow-status__popover { box-shadow: none; }
+.workflow-status-process { border: 0; border-top: 1px solid var(--color-divider); border-radius: 0; background: transparent; padding: var(--space-3) 0; }
+.workflow-status-process h2 { text-wrap: balance; font-size: var(--text-small); color: var(--color-muted); font-weight: 600; }
+.workflow-status-step strong { font-weight: 400; }
+.workflow-status-step[aria-current='step'] strong { font-weight: 600; }
+.workflow-status-step__number { font-variant-numeric: tabular-nums; }

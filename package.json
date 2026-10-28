@@ -19,6 +19,8 @@
     "server:public-status": "node scripts/bnoc-public.mjs status",
     "server:public-restart": "node scripts/bnoc-public.mjs restart",
     "server:public-stop": "node scripts/bnoc-public.mjs stop",
+    "offline:package": "node scripts/offline-windows/package.mjs",
+    "test:offline-package": "node --test scripts/offline-windows/bundle.test.mjs",
     "test:server": "node scripts/bnoc-runtime.mjs test-api",
     "test:server-ui": "node scripts/bnoc-runtime.mjs test-ui",
     "test:server-storage": "node scripts/verify-server-storage.mjs concurrency && node scripts/verify-server-storage.mjs rollback && node scripts/verify-server-storage.mjs persistence",
@@ -31,7 +33,8 @@
     "team:test": "node --test scripts/bnoc-team.test.mjs docker/development.test.mjs",
     "team:check": "node scripts/check-team-handoff.mjs",
     "team:share": "node scripts/prepare-team-share.mjs",
-    "team:setup": "node scripts/bnoc-team.mjs setup"
+    "team:setup": "node scripts/bnoc-team.mjs setup",
+    "test:controls": "node e2e/control-layout.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0"

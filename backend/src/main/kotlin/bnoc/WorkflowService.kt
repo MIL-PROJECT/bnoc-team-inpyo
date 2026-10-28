@@ -26,13 +26,14 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
     private val inflight=ConcurrentHashMap<String,String>()
     private fun now()=Instant.now().toString()
     private val seoul=ZoneId.of("Asia/Seoul")
-    private val createFields=setOf("category","subcategories","detail","location","contact","personalContact","equipmentId","maintenanceTarget","schedulePreferences","documentRef","attachments","requesterRef","draftRef")
+    private val intakeFields=setOf("intakeVersion","itemQuantities","requestItems")
+    private val createFields=setOf("category","subcategories","detail","location","contact","personalContact","equipmentId","maintenanceTarget","schedulePreferences","documentRef","attachments","requesterRef","draftRef")+intakeFields
     private val fields=mapOf(
-        "createRequest" to createFields,"updateRequest" to setOf("detail","location","contact","personalContact","schedulePreferences","documentRef","attachments"),
+        "createRequest" to createFields,"updateRequest" to (setOf("detail","location","contact","personalContact","schedulePreferences","documentRef","attachments")+intakeFields),
         "cancelRequest" to emptySet(),"moveToDocumentWaiting" to emptySet(),"rejectRequest" to setOf("reason"),"assignTeams" to setOf("teamIds","priority"),"changePriority" to setOf("priority"),
         "updateWork" to setOf("nextStatus","scheduleIntervals","memo","returnReason","completionMemo","assignedPersonRefs","reusePreviousSchedule"),"returnWork" to setOf("returnReason","reason","scheduleIntervals","memo"),
         "updateWorkDetails" to setOf("scheduleIntervals","memo"),"reassignReturnedWork" to setOf("teamIds"),"reassignAssignedWork" to setOf("teamIds"),"addTeams" to setOf("teamIds"),"withdrawReturnedWork" to emptySet(),"markNotificationsSeen" to setOf("notificationIds"),
-        "createAfterActionReport" to (createFields-setOf("requesterDisplayText","schedulePreferences","personalContact","draftRef")+setOf("completedConfirmed","actualRequesterText","actualStartedAt","actualCompletedAt","reason","completionMemo"))
+        "createAfterActionReport" to (createFields-setOf("requesterDisplayText","schedulePreferences","personalContact","draftRef")-intakeFields+setOf("requesterRef","completedConfirmed","actualStartedAt","actualCompletedAt","reason","completionMemo"))
     )+OperationsService.fields
 
     private fun schedulePreferences(value:Any?):List<SchedulePreference> {
@@ -54,10 +55,11 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
             reject("VALIDATION",mapOf("schedulePreferences" to "2지망은 1지망과 함께 입력해야 합니다."))
         return preferences
     }
-    private fun personalContact(payload:Map<String,Any?>):String? {
-        val value=text(payload,"personalContact",50).ifBlank { return null }
+    private fun personalContact(payload:Map<String,Any?>,existing:String?=null):String? {
+        val value=phoneText(payload,"personalContact",existing=existing).ifBlank { return null }
+        if(value==existing) return value
         val digits=value.count { it in '0'..'9' }
-        if(!value.matches(Regex("\\+?[0-9][0-9 ()-]*")) || digits !in 7..15)
+        if(digits !in 7..15)
             reject("VALIDATION",mapOf("personalContact" to "숫자 7~15자리의 전화번호를 입력하세요."))
         return value
     }
@@ -124,6 +126,8 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
     }
     private fun current(caller:Actor):Actor=db.actor(caller.id)?.takeIf { it.active } ?: reject("FORBIDDEN")
     private fun process(caller:Actor,command:Command,fp:String):CommandResult {
+        // Keep eligibility reads and personnel changes in one commit order.
+        if(command.type in setOf("saveCentralPerson","saveAbsence","saveDutySchedule","saveDutyScheduleBatch","updateWork","returnWork","updateWorkDetails")) db.lockResource("personnel-directory")
         val actor=current(caller)
         val creating=command.type in setOf("createRequest","createAfterActionReport","createDirective")
         val operational=command.type in OperationsService.fields
@@ -170,7 +174,7 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
             val saved=db.request(resultNumber)!!;val savedWork=command.workNumber?.let { db.work(it) }
             CommandResult(requestNumber=resultNumber,workNumber=savedWork?.number,revision=savedWork?.revision ?: saved.revision,state=savedWork?.status ?: saved.status,priority=saved.priority)
         }
-        db.jdbc.update("INSERT INTO bnoc_receipts(actor_subject,operation_id,fingerprint,request_number,command_type,result_json) VALUES (?,?,?,?,?,?)",fresh.id,command.operationId,fp,result.requestNumber ?: result.publicRef,command.type,db.json.writeValueAsString(result))
+        db.jdbc.update("INSERT INTO bnoc_receipts(actor_subject,operation_id,fingerprint,request_number,command_type,result_json) VALUES (?,?,?,?,?,?)",fresh.id,command.operationId,fp,result.requestNumber,command.type,db.json.writeValueAsString(result))
         return result
     }
     private fun authorizeBefore(actor:Actor,command:Command) {
@@ -216,17 +220,19 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
         val recipients=when(type) {
             "요청 등록" -> db.actors().filter { it.active && it.role=="bnoc" }.map { it.id } +
                 (if(request.requesterSubject!=null && request.registeredBy!=request.requesterSubject) listOf(request.requesterSubject) else emptyList())
-            "작업 반환","반환 정정","선조치 후보고" -> db.actors().filter { it.active && it.role=="bnoc" }.map { it.id }
+            "작업 반환","반환 정정" -> db.actors().filter { it.active && it.role=="bnoc" }.map { it.id }
+            "선조치 후보고" -> db.actors().filter { it.active && it.role=="bnoc" }.map { it.id } + listOfNotNull(request.requesterSubject)
             "작업 배정","배정 변경" -> db.actors().filter { it.active && it.role=="team" && it.teamId in works.map { w -> w.teamId } }.map { it.id }
             else -> listOfNotNull(request.requesterSubject)
         }
         recipients.distinct().forEach { db.jdbc.update("INSERT INTO bnoc_notifications VALUES (?,?,?,?,?,?,?)",UUID.randomUUID().toString(),it,type,request.number,works.singleOrNull()?.number,now(),false) }
     }
-    private fun validateRequest(payload:Map<String,Any?>,requireMeetingForm:Boolean=false) {
-        text(payload,"detail",10000,true);text(payload,"location",200,true);text(payload,"contact",50,true)
+    private fun validateRequest(payload:Map<String,Any?>,requireMeetingForm:Boolean=false,structured:Boolean=false) {
+        text(payload,"detail",10000,true);text(payload,"location",200,true);phoneText(payload,"contact",true)
         text(payload,"equipmentId",200);text(payload,"documentRef",500)
         val category=text(payload,"category",100,true)
         if(category !in listOf("장비/체계","회의 지원")) reject("VALIDATION",mapOf("category" to "요청 유형을 선택하세요."))
+        if(!structured) {
         val sub=payload["subcategories"] as? Map<*,*> ?: reject("VALIDATION",mapOf("subcategories" to "유형을 선택하세요."))
         val values=mapOf("systemType" to listOf("인트라넷","인터넷","AFCCS","KJCCS","기타"),"resourceType" to listOf("회선","전화","PC","컴퓨터","프린터","기타"),"workType" to listOf("신설","고장","지원","대여","이전","점검","기타"),"meetingType" to listOf("화상회의","일반회의","기타"),"videoPlatform" to listOf("KJCCS","AFCCS","웹미팅"),"phoneType" to listOf("IP","아날로그","인터컴","비상벨"))
         val allowedSubcategories=if(category=="장비/체계") setOf("systemType","resourceType","workType","phoneType") else setOf("meetingType","videoPlatform")
@@ -240,16 +246,20 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
             if(requireMeetingForm && meetingType in listOf("화상회의","일반회의") && (payload["attachments"] as? List<*>)?.isEmpty()!=false)
                 reject("VALIDATION",mapOf("attachments" to "회의 지원 의뢰서를 1개 이상 첨부하세요."))
         }
+        }
         val target=payload["maintenanceTarget"]
         if(target!=null) {
             if(target !is Map<*,*> || target.keys.any { it !in listOf("department","rank","name","phone") }) reject("VALIDATION",mapOf("maintenanceTarget" to "정비 대상자를 확인하세요."))
             @Suppress("UNCHECKED_CAST") val typed=target as Map<String,Any?>
-            listOf("department","rank","name","phone").forEach { text(typed,it,if(it=="phone") 50 else 100,true) }
+            listOf("department","rank","name").forEach { text(typed,it,100,true) };phoneText(typed,"phone",true)
         }
     }
-    @Suppress("UNCHECKED_CAST") private fun createRequest(actor:Actor,payload:Map<String,Any?>):String {
+    private fun intakeAttachmentRefs(value:Any?):Set<String> = (value as? List<*>).orEmpty().mapNotNull { it as? String ?: (it as? Map<*,*>)?.get("id") as? String }.toSet()
+    @Suppress("UNCHECKED_CAST") private fun createRequest(actor:Actor,raw:Map<String,Any?>):String {
+        val intake=IntakePolicy.parse(raw,intakeAttachmentRefs(raw["attachments"]))
+        val payload=if(intake==null)raw else (raw-"equipmentId")+mapOf("subcategories" to IntakePolicy.classifications(intake),"detail" to IntakePolicy.description(intake),"location" to IntakePolicy.location(intake))
         val draft=if("draftRef" in payload) requestDrafts.lockReference(actor,payload["draftRef"]) else null
-        validateRequest(payload,requireMeetingForm=true)
+        validateRequest(payload,requireMeetingForm=true,structured=intake!=null)
         val actualRequester=when(actor.role) {
             "requester" -> {
                 if("requesterRef" in payload) reject("VALIDATION")
@@ -263,6 +273,7 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
         }
         val requesterDisplay=if(actor.role=="bnoc") listOf(actualRequester.displayName,actualRequester.department).filter { it.isNotBlank() }.joinToString(" · ") else actualRequester.displayName
         val request=RequestRecord(db.nextNumber(),actualRequester.id,requesterDisplay,actor.id,text(payload,"category",100),payload["subcategories"] as Map<String,String>,text(payload,"detail",10000),text(payload,"location",200),text(payload,"contact",50),text(payload,"equipmentId",200).ifBlank { null },payload["maintenanceTarget"] as? Map<String,String>,documentRef=text(payload,"documentRef",500).ifBlank { null },registeredAt=now(),schedulePreferences=schedulePreferences(payload["schedulePreferences"]),personalContact=personalContact(payload))
+        request.intake=intake
         db.insertRequest(request);linkAttachments(actor,"request",request.number,payload["attachments"],draft?.id)
         if(draft!=null) requestDrafts.consume(actor,draft)
         history(actor,request,null,"등록",null,"대기");notify("요청 등록",request);return request.number
@@ -289,8 +300,12 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
     private fun updateRequest(actor:Actor,request:RequestRecord,payload:Map<String,Any?>) {
         if(!canEdit(actor,request)) reject("INVALID_STATE")
         if(payload.isEmpty()) reject("VALIDATION")
+        val updatingIntake=payload.keys.any{it in intakeFields}
+        if(updatingIntake&&request.intake==null)reject("VALIDATION",mapOf("requestItems" to "기존 단일 신청은 기존 내용 수정으로 변경하세요."))
+        var intake=if(updatingIntake)IntakePolicy.parse(payload+mapOf("category" to request.category),intakeAttachmentRefs(payload["attachments"]?:db.attachmentMetadata("request",request.number))) else null
         var changed=false
         payload.forEach { (field,_) ->
+            if(field in intakeFields||(request.intake!=null&&field in setOf("detail","location")))return@forEach
             if(field=="attachments") {
                 val before=db.attachmentMetadata("request",request.number)
                 val meetingType=request.subcategories["meetingType"]
@@ -298,9 +313,10 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
                 if(request.category=="회의 지원" && meetingType in listOf("화상회의","일반회의") && before.isNotEmpty() && nextFiles.isEmpty())
                     reject("VALIDATION",mapOf("attachments" to "회의 지원 의뢰서는 마지막 파일을 제외할 수 없습니다."))
                 val after=linkAttachments(actor,"request",request.number,payload[field])
+                if(request.intake!=null&&!updatingIntake){ val ids=after.map{it["id"]}.toSet();intake=request.intake!!.copy(items=request.intake!!.items.map{it.copy(attachmentIds=it.attachmentIds.filter{id->id in ids})}) }
                 if(before.map { it["id"] }!=after.map { it["id"] }) { changed=true;history(actor,request,null,field,before,after) }
             } else if(field=="personalContact") {
-                val next=personalContact(payload);val before=request.personalContact
+                val next=personalContact(payload,request.personalContact);val before=request.personalContact
                 if(before!=next) { changed=true;request.personalContact=next }
             } else if(field=="schedulePreferences") {
                 val next=schedulePreferences(payload[field]);val before=request.schedulePreferences
@@ -308,12 +324,14 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
             } else {
                 val next=text(payload,field,when(field) { "detail" ->10000;"location" ->200;"contact" ->50;else ->500 },field in listOf("detail","location","contact")).ifBlank { null }
                 val before=when(field) { "detail"->request.detail;"location"->request.location;"contact"->request.contact;"documentRef"->request.documentRef;else->null }
+                if(field=="contact")phoneText(payload,"contact",true,request.contact)
                 if(before!=next) {
                     changed=true;history(actor,request,null,field,before,next)
                     when(field) { "detail"->request.detail=next!!;"location"->request.location=next!!;"contact"->request.contact=next!!;"documentRef"->request.documentRef=next }
                 }
             }
         }
+        if(intake!=null&&intake!=request.intake){history(actor,request,null,"requestItems",request.intake,intake);request.intake=intake;request.subcategories=IntakePolicy.classifications(intake);request.detail=IntakePolicy.description(intake);request.location=IntakePolicy.location(intake);changed=true}
         if(changed) { request.revision++;request.updatedAt=now();db.saveRequest(request) }
     }
     private fun teamIds(payload:Map<String,Any?>,previous:String?=null):List<String> {
@@ -330,9 +348,10 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
         works.forEach { db.insertWork(it);history(actor,request,it,"배정",null,it.teamId);history(actor,request,it,"배정 시각(접수 시간)",null,at) }
         changeRequest(actor,request,"배정");notify("작업 배정",request,works)
     }
-    private fun recalculate(actor:Actor,request:RequestRecord,alreadyVersioned:Boolean=false) {
+    private fun recalculate(actor:Actor,request:RequestRecord,alreadyVersioned:Boolean=false,statusWork:WorkRecord?=null) {
         val status=RequestStatus.derive(request,db.works(request.number))
-        if(status!=request.status) { val before=request.status;request.status=status;if(!alreadyVersioned) request.revision++;request.updatedAt=now();db.saveRequest(request);history(actor,request,null,"상태",before,status);if(status in listOf("배정","작업 중","완료")) notify(status,request) }
+        if(status!=request.status) { val before=request.status;request.status=status;if(!alreadyVersioned) request.revision++;request.updatedAt=now();db.saveRequest(request);history(actor,request,null,"상태",before,status);if(statusWork==null && status in listOf("배정","작업 중","완료")) notify(status,request) }
+        if(statusWork!=null) notify(statusWork.status,request,listOf(statusWork))
     }
     private fun updateWork(actor:Actor,request:RequestRecord,work:WorkRecord,payload:Map<String,Any?>,type:String) {
         if(request.status in listOf("취소","기각") || work.resolutionKind!="open" || work.origin=="after-action") reject("INVALID_STATE")
@@ -376,13 +395,15 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
             if(work.previousScheduleIntervals!=previous) { history(actor,request,work,"반환 전 일정",work.previousScheduleIntervals,previous);work.previousScheduleIntervals=previous;changed=true }
             if(work.scheduleIntervals.isNotEmpty()) { history(actor,request,work,"scheduleIntervals",work.scheduleIntervals,emptyList<WorkScheduleInterval>());work.scheduleIntervals=emptyList();changed=true }
         }
+        if("scheduleIntervals" in payload && "assignedPersonRefs" !in payload && work.assignedPersonRefs.isNotEmpty())
+            operations.validateWorkMembers(work.teamId,work.assignedPersonRefs,work.assignedPersonRefs,work.scheduleIntervals)
         if("assignedPersonRefs" in payload) {
             val refs=stringRefs(payload["assignedPersonRefs"],"assignedPersonRefs")
-            operations.validateMembers(work.teamId,refs,work.assignedPersonRefs)
+            operations.validateWorkMembers(work.teamId,refs,work.assignedPersonRefs,work.scheduleIntervals)
             if(refs!=work.assignedPersonRefs) { history(actor,request,work,"담당 인원",work.assignedPersonRefs,refs);work.assignedPersonRefs=refs;changed=true }
         }
         if(changed) {
-            work.revision++;db.saveWork(work);recalculate(actor,request)
+            work.revision++;db.saveWork(work);recalculate(actor,request,statusWork=if(beforeStatus!=work.status) work else null)
             if(beforeStatus!="반환" && nextStatus=="반환") notify("작업 반환",request,listOf(work)) else if(beforeStatus=="반환" && nextStatus!="반환") notify("반환 정정",request,listOf(work))
         }
     }
@@ -429,12 +450,14 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
     }
     @Suppress("UNCHECKED_CAST") private fun createAfterAction(actor:Actor,payload:Map<String,Any?>):String {
         validateRequest(payload)
-        val requester=text(payload,"actualRequesterText",500,true);val reason=text(payload,"reason",2000,true)
+        val requesterRef=text(payload,"requesterRef",36,true)
+        val requester=db.actorByRef(requesterRef,true)?.takeIf { it.active && it.role=="requester" } ?: reject("VALIDATION",mapOf("requesterRef" to "활성 요청자 계정을 선택하세요."))
+        val reason=text(payload,"reason",2000,true)
         if(payload["completedConfirmed"]!=true) reject("VALIDATION",mapOf("completedConfirmed" to "완료된 작업만 후보고할 수 있습니다."))
         val started=instantValue(text(payload,"actualStartedAt",64,true),"actualStartedAt")!!;val completed=instantValue(text(payload,"actualCompletedAt",64,true),"actualCompletedAt")!!
         if(Instant.parse(completed).isBefore(Instant.parse(started))) reject("VALIDATION",mapOf("actualCompletedAt" to "완료 시각을 확인하세요."))
         val memo=text(payload,"completionMemo",2000)
-        val request=RequestRecord(db.nextNumber(),null,requester,actor.id,text(payload,"category",100),payload["subcategories"] as Map<String,String>,text(payload,"detail",10000),text(payload,"location",200),text(payload,"contact",50),text(payload,"equipmentId",200).ifBlank{null},payload["maintenanceTarget"] as? Map<String,String>,documentRef=text(payload,"documentRef",500).ifBlank{null},status="완료",registeredAt=now(),priority=null)
+        val request=RequestRecord(db.nextNumber(),requester.id,requester.displayName,actor.id,text(payload,"category",100),payload["subcategories"] as Map<String,String>,text(payload,"detail",10000),text(payload,"location",200),text(payload,"contact",50),text(payload,"equipmentId",200).ifBlank{null},payload["maintenanceTarget"] as? Map<String,String>,documentRef=text(payload,"documentRef",500).ifBlank{null},status="완료",registeredAt=now(),priority=null)
         db.insertRequest(request);linkAttachments(actor,"request",request.number,payload["attachments"])
         val work=WorkRecord("${request.number}-1",request.number,actor.teamId!!,status="완료",completion=mapOf("completedBy" to actor.id,"completedAt" to completed)+(if(memo.isNotBlank()) mapOf("memo" to memo) else emptyMap()),origin="after-action",actualStartedAt=started)
         db.insertWork(work);history(actor,request,null,"선조치 후보고",null,reason);history(actor,request,work,"실제 시작 시각",null,started);history(actor,request,work,"완료정보",null,work.completion);history(actor,request,work,"상태",null,"완료");notify("선조치 후보고",request,listOf(work));return request.number

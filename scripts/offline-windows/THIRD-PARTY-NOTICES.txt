@@ -1,0 +1,17 @@
+BNOC offline demonstration package · Windows x64
+
+The package includes the BNOC application JAR, the repository's mock provider,
+and the following separately distributed runtimes. Runtime ZIP archives retain
+their upstream license and notice files.
+
+- MySQL Community Server 8.4.11 (GPL-2.0)
+  https://dev.mysql.com/downloads/mysql/8.4.html
+- Node.js 22.18.0 (MIT)
+  https://nodejs.org/en/download/archive/v22.18.0
+- Eclipse Temurin JRE 17.0.20.1+1 (GPL-2.0 with Classpath Exception)
+  https://adoptium.net/temurin/releases/?arch=x64&os=windows&package=jre&version=17
+- Microsoft Visual C++ Redistributable x64 14.50.35719.0
+  https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files
+
+This package contains no user, unit, or operational data. Review upstream
+license and source-distribution obligations before public redistribution.

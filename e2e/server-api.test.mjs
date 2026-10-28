@@ -10,6 +10,7 @@ const base = process.env.BNOC_TEST_URL ?? 'http://127.0.0.1:8083';
 const provider = process.env.BNOC_TEST_PROVIDER_URL ?? 'http://127.0.0.1:8082';
 const evidence = process.env.BNOC_TEST_EVIDENCE_DIR ?? 'runtime/evidence/backend-implementation-20261013';
 const runId = randomUUID().slice(0, 8);
+const fixtureYear = String(2000 + parseInt(runId, 16) % 7999);
 const observations = [];
 const clients = {};
 const teams = ['무선반', '유선반', '전장반(전산장비)', '정체반', '암호반'];
@@ -120,6 +121,11 @@ async function grantDepartmentManager(admin, manager, department = teams[0]) {
   assert.ok(current,'the identified user has a service account mapping');
   success(await admin.command('changeAccess',{subjectRef:current.subjectRef,role:'requester',department,departmentManager:true,active:true},{expectedRevision:current.revision}));
   manager.session=(await manager.read('/api/session')).data;
+}
+async function createCentralPerson({ department, category, rank, displayName, internalPhone = '', active = true }) {
+  const directory=(await clients.bnoc.read('/api/personnel-roster')).data;
+  const saved=success(await clients.bnoc.command('saveCentralPerson',{department,category,rank,displayName,serviceNumber:`${runId}-${randomUUID().slice(0,8)}`,internalPhone,active},{expectedRevision:directory.revision}));
+  return saved.publicRef;
 }
 async function assign(request, teamIds = [teams[0]], priority = 'general') {
   success(await clients.bnoc.command('assignTeams', { teamIds, priority }, { requestNumber: request.requestNumber, expectedRevision: request.revision }));
@@ -239,7 +245,7 @@ after(async () => {
 
 contract('unauthenticated API and forged roles are rejected before data access', [1, 3, 34], async () => {
   const anonymous = new ApiClient();
-  for (const resource of ['/api/session', '/api/requests', '/api/work-overview', '/api/notices', '/api/situation/gps', '/api/situation/cpcon']) {
+  for (const resource of ['/api/session', '/api/requests', '/api/work-overview', '/api/notices', '/api/situation/gps', '/api/situation/cpcon', '/api/operations/status']) {
     failure(await anonymous.raw('GET', resource), 401, 'UNAUTHENTICATED');
   }
   const request = await create();
@@ -305,7 +311,8 @@ contract('direct and proxy requests keep mandatory, optional, and conditional in
   assert.ok(requesterOptions.length > 0);
   assert.deepEqual(Object.keys(requesterOptions[0]).sort(), ['department', 'displayName', 'requesterRef']);
   failure(await clients.requester.raw('GET', '/api/requesters'), 403, 'FORBIDDEN');
-  failure(await clients.wireless.raw('GET', '/api/requesters'), 403, 'FORBIDDEN');
+  const afterActionOptions = (await clients.wireless.read('/api/requesters')).data;
+  assert.ok(afterActionOptions.some(item => item.requesterRef === clients.requester.session.actor.id));
   for (const key of ['detail', 'location', 'contact']) {
     failure(await clients.requester.command('createRequest', input({ [key]: '' })), 400, 'VALIDATION');
   }
@@ -342,7 +349,9 @@ contract('direct and proxy requests keep mandatory, optional, and conditional in
 contract('files are real, private, type checked, and cannot be stolen from another upload', [3, 6, 28], async () => {
   const contents = '문서 저장과 다운로드 확인\n';
   const file = await upload(clients.requester, 'request', contents);
-  failure(await clients.requester.raw('GET', `/api/attachments/${file.id}`), 404, 'NOT_FOUND');
+  await download(clients.requester,file,contents);
+  failure(await clients.requesterOther.raw('GET', `/api/attachments/${file.id}`),404,'NOT_FOUND');
+  failure(await clients.bnoc.raw('GET', `/api/attachments/${file.id}`),404,'NOT_FOUND');
   failure(await clients.requesterOther.command('createRequest', input({ attachments: [{ id: file.id }] })), 403, 'FORBIDDEN');
   const saved = await create(clients.requester, { attachments: [{ id: file.id }] });
   assert.equal(saved.attachments.length, 1);
@@ -556,13 +565,19 @@ contract('BNOC rejection closes only unassigned requests and notifies the connec
   assert.equal((await clients.wireless.raw('GET', `/api/requests/${request.requestNumber}`)).status, 404);
 });
 
-contract('completed after-action reports start unclassified without approval and cannot be edited as assigned work', [5, 11, 16, 20, 23, 28], async () => {
-  const payload = { ...input(), actualRequesterText: '요청 부서', actualStartedAt: '2026-10-12T01:00:00Z', actualCompletedAt: '2026-10-12T02:00:00Z', completedConfirmed: true, reason: '직접 요청 완료' };
+contract('completed after-action reports bind a requester account and notify that requester', [5, 11, 16, 20, 23, 28], async () => {
+  const payload = { ...input(), requesterRef: clients.requester.session.actor.id, actualStartedAt: '2026-10-12T01:00:00Z', actualCompletedAt: '2026-10-12T02:00:00Z', completedConfirmed: true, reason: '직접 요청 완료' };
+  failure(await clients.wireless.command('createAfterActionReport', { ...payload, requesterRef: undefined }), 400, 'VALIDATION');
   failure(await clients.wireless.command('createAfterActionReport', { ...payload, completedConfirmed: false }), 400, 'VALIDATION');
   failure(await clients.wireless.command('createAfterActionReport', { ...payload, priority: 'general' }), 400, 'VALIDATION');
+  failure(await clients.wireless.command('createAfterActionReport', { ...payload, requesterRef: clients.wireless.session.actor.id }), 400, 'VALIDATION');
   failure(await clients.requester.command('createAfterActionReport', payload), 403, 'FORBIDDEN');
   const result = success(await clients.wireless.command('createAfterActionReport', payload));
   let request = await detail(result.requestNumber);
+  assert.equal(request.requesterDisplayText, clients.requester.session.actor.displayName);
+  assert.ok((await clients.requester.read('/api/notifications')).data.items.some(item => item.event === '선조치 후보고' && item.relatedRequestId === result.requestNumber));
+  assert.ok((await clients.bnoc.read('/api/notifications?size=100')).data.items.some(item => item.event === '선조치 후보고' && item.relatedRequestId === result.requestNumber));
+  assert.ok(!(await clients.requesterOther.read('/api/notifications')).data.items.some(item => item.relatedRequestId === result.requestNumber));
   assert.equal(request.status, '완료');
   assert.equal(request.priority ?? null, null, 'AFTER_ACTION_MUST_START_UNCLASSIFIED');
   assert.equal(request.assignedAt ?? null, null);
@@ -747,16 +762,24 @@ contract('planned works persist by team, continue across dates, and count once b
   noPrivateFields(shared);
 });
 
-contract('schedule uses real team schedule, start inclusive/end exclusive, and a separate unscheduled list', [5, 10, 12, 21], async () => {
-  failure(await clients.requester.raw('GET', '/api/schedule?from=2026-10-20&to=2026-10-21'), 403, 'FORBIDDEN');
-  failure(await clients.admin.raw('GET', '/api/schedule?from=2026-10-20&to=2026-10-21'), 403, 'FORBIDDEN');
+contract('schedule uses role-safe work schedule plus visible date-only maintenance plans', [5, 10, 12, 21], async () => {
+  const requesterSchedule = (await clients.requester.read('/api/schedule?from=2026-10-20&to=2026-10-21')).data;
+  assert.deepEqual(requesterSchedule.entries, []);
+  assert.deepEqual(requesterSchedule.completedRecords, []);
+  assert.deepEqual(requesterSchedule.unscheduled, []);
+  assert.ok(Array.isArray(requesterSchedule.plans));
+  const adminSchedule = (await clients.admin.read('/api/schedule?from=2026-10-20&to=2026-10-21')).data;
+  assert.deepEqual(adminSchedule.entries, []);
+  assert.deepEqual(adminSchedule.completedRecords, []);
+  assert.deepEqual(adminSchedule.unscheduled, []);
+  assert.ok(Array.isArray(adminSchedule.plans));
   let request = await assign(await create(clients.requester, { detail: 'PC가 시작되지 않습니다.', location: '요청 위치', contact: '031-1234', schedulePreferences: [{ rank: 1, date: '2026-10-20', period: 'AM' }] }), [teams[0], teams[1]]);
   const empty = (await clients.wireless.read('/api/schedule?from=2026-10-20&to=2026-10-21')).data;
   assert.ok(empty.unscheduled.some(item => item.workNumber === request.workItems.find(work => work.teamId === teams[0]).workNumber));
   request = await updateWork(request, clients.wireless, teams[0], { nextStatus: '배정', scheduleIntervals: [scheduleInterval('2026-10-20T01:00:00Z')], memo: '교체 부품 확인' });
   const ownWork = request.workItems.find(item => item.teamId === teams[0]);
   const day = (await clients.wireless.read('/api/schedule?from=2026-10-20&to=2026-10-21')).data;
-  assert.deepEqual(Object.keys(day).sort(), ['completedRecords', 'entries', 'from', 'to', 'unscheduled'], 'schedule exposes only the documented response envelope');
+  assert.deepEqual(Object.keys(day).sort(), ['completedRecords', 'entries', 'from', 'plans', 'to', 'unscheduled'], 'schedule exposes only the documented response envelope');
   assert.ok(day.entries.some(item => item.workNumber === ownWork.workNumber));
   const scheduled = day.entries.find(item => item.workNumber === ownWork.workNumber);
   assert.deepEqual(Object.keys(scheduled).sort(), ['location', 'memo', 'origin', 'request', 'scheduleIntervals', 'status', 'teamId', 'workNumber'].sort(), 'schedule entries expose only the documented fields');
@@ -769,7 +792,7 @@ contract('schedule uses real team schedule, start inclusive/end exclusive, and a
   assert.equal(scheduled.scheduleIntervals[0].startsAt, '2026-10-20T01:00:00Z');
   assert.ok(!Object.hasOwn(scheduled, 'requesterContact'), 'schedule projection excludes the phone number');
   const reported = success(await clients.wireless.command('createAfterActionReport', {
-    ...input({ detail: '후보고 요청 상세 비공개 검사', location: '선조치 위치', contact: '031-9876' }), actualRequesterText: '선조치 요청자',
+    ...input({ detail: '후보고 요청 상세 비공개 검사', location: '선조치 위치', contact: '031-9876' }), requesterRef: clients.requester.session.actor.id,
     actualStartedAt: '2026-10-20T04:13:00Z', actualCompletedAt: '2026-10-20T04:29:00Z', completedConfirmed: true, reason: '선조치 처리', completionMemo: '현장 확인'
   }));
   const ownSchedule = (await clients.wireless.read('/api/schedule?from=2026-10-20&to=2026-10-21')).data;
@@ -782,7 +805,7 @@ contract('schedule uses real team schedule, start inclusive/end exclusive, and a
   assert.equal(completedRecord.memo, '현장 확인');
   assert.ok(!Object.hasOwn(completedRecord, 'requesterContact') && !Object.hasOwn(completedRecord, 'detail'));
   const bnoc = (await clients.bnoc.read('/api/schedule?from=2026-10-20&to=2026-10-21')).data;
-  assert.deepEqual(Object.keys(bnoc).sort(), ['completedRecords', 'entries', 'from', 'to', 'unscheduled'], 'BNOC schedule exposes only the documented response envelope');
+  assert.deepEqual(Object.keys(bnoc).sort(), ['completedRecords', 'entries', 'from', 'plans', 'to', 'unscheduled'], 'BNOC schedule exposes only the documented response envelope');
   const unscheduled = bnoc.unscheduled.find(item => item.request.requestNumber === request.requestNumber && item.teamId === teams[1]);
   assert.ok(unscheduled, 'BNOC can see another assigned department in the unscheduled schedule list');
   assert.deepEqual(Object.keys(unscheduled).sort(), ['location', 'memo', 'origin', 'request', 'scheduleIntervals', 'status', 'teamId', 'workNumber'].sort(), 'unscheduled schedule entries expose only the documented fields');
@@ -793,6 +816,132 @@ contract('schedule uses real team schedule, start inclusive/end exclusive, and a
   assert.ok(!before.entries.some(item => item.workNumber === ownWork.workNumber));
   assert.ok(bnoc.entries.some(item => item.workNumber === ownWork.workNumber));
   failure(await clients.bnoc.raw('GET', '/api/schedule?from=2026-10-21&to=2026-10-20'), 400, 'VALIDATION');
+});
+
+contract('planned maintenance appears in the requester calendar without work details or times', [21, 40], async () => {
+  const month=String(1+parseInt(runId,16)%12).padStart(2,'0');
+  const date=`${fixtureYear}-${month}-15`;
+  const created=await clients.wireless.raw('POST','/api/planned-works',{operationId:operation(),title:`달력 계획 ${runId}`,firstWorkDate:date});
+  assert.equal(created.status,200,created.json?.code);
+  const plan=created.json.data.plannedWork;
+  const requesterCalendar=(await clients.requester.read(`/api/schedule?from=${date}&to=${fixtureYear}-${month}-16`)).data;
+  assert.deepEqual(requesterCalendar.entries,[]);
+  assert.deepEqual(requesterCalendar.completedRecords,[]);
+  assert.deepEqual(requesterCalendar.unscheduled,[]);
+  const visible=requesterCalendar.plans.find(item=>item.plannedWorkId===plan.id);
+  assert.deepEqual(Object.keys(visible).sort(),['source','plannedWorkId','title','teamId','status','firstWorkDate','completedDate'].sort());
+  assert.equal(visible.firstWorkDate,date);
+  assert.equal(visible.source,'planned');
+  assert.ok(!Object.hasOwn(visible,'scheduleIntervals')&&!Object.hasOwn(visible,'startsAt'));
+  const teamCalendar=(await clients.wireless.read(`/api/schedule?from=${date}&to=${fixtureYear}-${month}-16`)).data;
+  assert.ok(teamCalendar.plans.some(item=>item.plannedWorkId===plan.id));
+  assert.ok((await clients.wired.read(`/api/schedule?from=${date}&to=${fixtureYear}-${month}-16`)).data.plans.some(item=>item.plannedWorkId===plan.id),'ALL_LOGGED_IN_TEAMS_MUST_SEE_DATE_ONLY_PLANS');
+  const adminCalendar=(await clients.admin.read(`/api/schedule?from=${date}&to=${fixtureYear}-${month}-16`)).data;
+  assert.deepEqual(adminCalendar.entries,[]);
+  assert.deepEqual(adminCalendar.completedRecords,[]);
+  assert.deepEqual(adminCalendar.unscheduled,[]);
+  assert.deepEqual(adminCalendar.plans.find(item=>item.plannedWorkId===plan.id),visible);
+});
+
+contract('central personnel, absence totals and monthly duty text import persist with role-safe seats', [2, 3, 12, 24, 25, 33, 48, 49, 50], async () => {
+  const month=`${fixtureYear}-${String(1+parseInt(runId,16)%12).padStart(2,'0')}`;
+  const date=`${month}-15`, nextDate=`${month}-16`;
+  const before=(await clients.bnoc.read(`/api/personnel?date=${date}&department=${encodeURIComponent(teams[0])}`)).data.departments[0];
+  const absent=await createCentralPerson({department:teams[0],category:'병',rank:'상병',displayName:`부재 확인 ${runId}`});
+  const nightOne=await createCentralPerson({department:teams[0],category:'병',rank:'병장',displayName:`야간 첫째 ${runId}`});
+  const nightTwo=await createCentralPerson({department:teams[0],category:'병',rank:'상병',displayName:`야간 둘째 ${runId}`});
+  const officerOne=await createCentralPerson({department:teams[0],category:'간부',rank:'대위',displayName:`일직 담당 ${runId}`});
+  const officerTwo=await createCentralPerson({department:teams[1],category:'간부',rank:'소령',displayName:`당직 담당 ${runId}`});
+
+  success(await clients.bnoc.command('saveAbsence',{personRef:absent,absenceType:'휴가',startDate:date,endDate:nextDate},{expectedRevision:0}));
+  const current=(await clients.bnoc.read(`/api/personnel?date=${date}&department=${encodeURIComponent(teams[0])}`)).data.departments[0];
+  assert.equal(current.total,before.total+4);
+  assert.equal(current.absent,before.absent+1);
+  assert.equal(current.current+current.absent,current.total);
+  assert.equal(current.byAbsenceType['휴가'],before.byAbsenceType['휴가']+1);
+  assert.equal((await clients.wireless.read(`/api/personnel-roster?department=${encodeURIComponent(teams[0])}`)).data.entries.find(item=>item.personRef===absent).complete,true);
+  assert.ok(!Object.hasOwn((await clients.wireless.read(`/api/personnel-roster?department=${encodeURIComponent(teams[0])}`)).data.entries.find(item=>item.personRef===absent),'serviceNumber'));
+  failure(await clients.wireless.raw('GET',`/api/personnel-roster?department=${encodeURIComponent(teams[1])}`),403,'FORBIDDEN');
+  failure(await clients.requester.raw('GET','/api/personnel-roster'),403,'FORBIDDEN');
+
+  success(await clients.wireless.command('saveDutySchedule',{month,date,seat:'team_night',personRefs:[nightOne]},{expectedRevision:0}));
+  success(await clients.wireless.command('saveDutyScheduleBatch',{month,seat:'team_night',text:`${date.replaceAll('-','')} 상병 야간 둘째 ${runId}\n${nextDate.replaceAll('-','')} 병장 야간 첫째 ${runId}`}));
+  const nights=(await clients.wireless.read(`/api/duty-schedules?month=${month}&seat=team_night`)).data.entries;
+  const datePeople=nights.find(item=>item.date===date).people;
+  assert.deepEqual(new Set(datePeople.map(item=>item.personRef)),new Set([nightOne,nightTwo]));
+  assert.deepEqual(nights.find(item=>item.date===nextDate).people.map(item=>item.personRef),[nightOne]);
+  assert.ok(!nights.some(item=>item.date===`${month}-17`),'dates omitted from the text import remain untouched');
+  failure(await clients.wireless.command('saveDutyScheduleBatch',{month,seat:'team_night',text:`${date.replaceAll('-','')} 소령 당직 담당 ${runId}`}),400,'VALIDATION');
+  failure(await clients.wired.command('saveDutyScheduleBatch',{month,seat:'team_night',text:`${date.replaceAll('-','')} 상병 야간 둘째 ${runId}`}),400,'VALIDATION');
+
+  success(await clients.bnoc.command('saveDutyScheduleBatch',{month,seat:'duty_officer',text:`${date.replaceAll('-','')} 대위 일직 담당 ${runId}\n${nextDate.replaceAll('-','')} 소령 당직 담당 ${runId}`}));
+  const officers=(await clients.bnoc.read(`/api/duty-schedules?month=${month}&seat=duty_officer`)).data.entries;
+  assert.equal(officers.find(item=>item.date===date).people[0].personRef,officerOne);
+  assert.equal(officers.find(item=>item.date===nextDate).people[0].personRef,officerTwo);
+  success(await clients.bnoc.command('saveDutyScheduleBatch',{month,seat:'communications_battalion_day_officer',text:`${date.replaceAll('-','')} 대위 일직 담당 ${runId}`}));
+  assert.equal((await clients.bnoc.read(`/api/duty-schedules?month=${month}&seat=communications_battalion_day_officer`)).data.entries.find(item=>item.date===date).people[0].personRef,officerOne);
+  const aBefore=(await clients.bnoc.read(`/api/duty-schedules?month=${month}&seat=communications_battalion_day_officer`)).data.entries;
+  const bCommand={month,seat:'battalion_b_day_officer',text:`${date.replaceAll('-','')} 소령 당직 담당 ${runId}`};
+  const bId=randomUUID();
+  success(await clients.bnoc.command('saveDutyScheduleBatch',bCommand,{},bId));
+  const bReplay=await clients.bnoc.command('saveDutyScheduleBatch',bCommand,{},bId);
+  assert.equal(bReplay.status,200);assert.equal(bReplay.json.ok,true);assert.equal(bReplay.json.replayed,true);
+  assert.deepEqual((await clients.bnoc.read(`/api/duty-schedules?month=${month}&seat=communications_battalion_day_officer`)).data.entries,aBefore,'B write must not change legacy A data or revisions');
+  assert.equal((await clients.bnoc.read(`/api/duty-schedules?month=${month}&seat=battalion_b_day_officer`)).data.entries.find(item=>item.date===date).people[0].personRef,officerTwo);
+  failure(await clients.wireless.command('saveDutyScheduleBatch',bCommand),403,'FORBIDDEN');
+  failure(await clients.wireless.command('saveDutySchedule',{month,date,seat:'battalion_b_day_officer',personRefs:[officerTwo]},{expectedRevision:0}),403,'FORBIDDEN');
+  const publicSchedule=(await clients.requester.read(`/api/duty-schedules?month=${month}`)).data.entries;
+  const todaySchedule=publicSchedule.filter(item=>item.date===date);
+  assert.deepEqual(new Set(todaySchedule.map(item=>item.seat)),new Set(['team_night','duty_officer','communications_battalion_day_officer','battalion_b_day_officer']));
+  for(const person of todaySchedule.find(item=>item.seat==='battalion_b_day_officer').people)assert.deepEqual(Object.keys(person).sort(),['displayName','rank']);
+  const publicPerson=todaySchedule.find(item=>item.seat==='team_night').people[0];
+  assert.deepEqual(Object.keys(publicPerson).sort(),['displayName','rank']);
+  const teamSchedule=(await clients.wired.read(`/api/duty-schedules?month=${month}`)).data.entries;
+  assert.deepEqual(new Set(teamSchedule.map(item=>item.seat)),new Set(['team_night','duty_officer','communications_battalion_day_officer','battalion_b_day_officer']));
+  failure(await clients.requester.command('saveDutyScheduleBatch',{month,seat:'team_night',text:`${date.replaceAll('-','')} 병장 야간 첫째 ${runId}`}),403,'FORBIDDEN');
+  failure(await clients.bnoc.command('saveDutyScheduleBatch',{month,seat:'duty_officer',text:`${date.replaceAll('-','')} 상병 야간 첫째 ${runId}`}),400,'VALIDATION');
+  failure(await clients.wireless.command('saveDutyScheduleBatch',{month,seat:'duty_officer',text:`${date.replaceAll('-','')} 대위 일직 담당 ${runId}`}),403,'FORBIDDEN');
+});
+
+contract('scheduled assignment rejects absence overlap and requester sees only safe assigned contact', [3, 19, 50, 51], async () => {
+  const month=`${fixtureYear}-${String(1+parseInt(runId,16)%12).padStart(2,'0')}`;
+  const ref=await createCentralPerson({department:teams[0],category:'병',rank:'상병',displayName:`담당 병사 ${runId}`,internalPhone:'4321'});
+  const date=`${month}-15`;
+  success(await clients.bnoc.command('saveAbsence',{personRef:ref,absenceType:'출장',startDate:date,endDate:date},{expectedRevision:0}));
+  let request=await assign(await create(),[teams[0]]);
+  let work=request.workItems[0];
+  failure(await clients.wireless.command('updateWork',{nextStatus:'배정',scheduleIntervals:[scheduleInterval(`${month}-14T14:00:00Z`,12)],assignedPersonRefs:[ref]},{requestNumber:request.requestNumber,workNumber:work.workNumber,expectedRevision:work.revision}),400,'VALIDATION');
+  success(await clients.wireless.command('updateWork',{nextStatus:'배정',assignedPersonRefs:[ref]},{requestNumber:request.requestNumber,workNumber:work.workNumber,expectedRevision:work.revision}));
+  const publicDetail=await detail(request.requestNumber,clients.requester);
+  const assigned=publicDetail.workItems[0].assignedPersons[0];
+  assert.deepEqual(Object.keys(assigned).sort(),['displayName','rank','internalPhone'].sort());
+  assert.equal(assigned.displayName,`담당 병사 ${runId}`);
+  assert.equal(assigned.rank,'상병');
+  assert.equal(assigned.internalPhone,'4321');
+  assert.ok(!JSON.stringify(publicDetail).includes(ref));
+  request=await detail(request.requestNumber,clients.wireless);
+  assert.equal(request.workItems[0].assignedPersons[0].personRef,ref);
+  assert.ok(!Object.hasOwn(request.workItems[0].assignedPersons[0],'serviceNumber'));
+});
+
+contract('each work status transition notifies its requester; schedule and memo edits do not', [19, 28, 52, 53], async () => {
+  let request=await assign(await create(),[teams[0],teams[1]]);
+  const first=request.workItems.find(item=>item.teamId===teams[0]);
+  const second=request.workItems.find(item=>item.teamId===teams[1]);
+  success(await clients.wireless.command('updateWork',{nextStatus:'작업 중'},{requestNumber:request.requestNumber,workNumber:first.workNumber,expectedRevision:first.revision}));
+  let statusAlerts=(await clients.requester.read('/api/notifications?size=100')).data.items.filter(item=>item.relatedRequestId===request.requestNumber&&item.event==='작업 중');
+  assert.equal(statusAlerts.length,1);
+  assert.equal(statusAlerts[0].relatedWorkItemId,first.workNumber);
+  const working=await detail(request.requestNumber);
+  const currentFirst=working.workItems.find(item=>item.workNumber===first.workNumber);
+  success(await clients.wireless.command('updateWork',{nextStatus:'작업 중',scheduleIntervals:[scheduleInterval('2098-01-15T01:00:00Z')],memo:'세부 계획만 수정'},{requestNumber:request.requestNumber,workNumber:first.workNumber,expectedRevision:currentFirst.revision}));
+  assert.equal((await clients.requester.read('/api/notifications?size=100')).data.items.filter(item=>item.relatedRequestId===request.requestNumber&&item.event==='작업 중').length,1);
+  success(await clients.wired.command('updateWork',{nextStatus:'완료'},{requestNumber:request.requestNumber,workNumber:second.workNumber,expectedRevision:second.revision}));
+  statusAlerts=(await clients.requester.read('/api/notifications?size=100')).data.items.filter(item=>item.relatedRequestId===request.requestNumber&&item.event==='완료');
+  assert.equal(statusAlerts.length,1);
+  assert.equal(statusAlerts[0].relatedWorkItemId,second.workNumber);
+  request=await detail(request.requestNumber);
+  assert.equal(request.status,'작업 중','each team work updates independently of aggregate request status');
 });
 
 contract('detail, history, and notification DTOs remove cross-team internal information', [3, 17, 19, 20, 23, 34], async () => {
@@ -812,39 +961,19 @@ contract('detail, history, and notification DTOs remove cross-team internal info
   noPrivateFields(notifications);
 });
 
-contract('department rosters, daily personnel, and night duty preserve old references without extending write permissions', [2, 3, 12, 24, 25, 33], async () => {
+contract('central roster and period-based daily counts are private; legacy daily write APIs are closed', [2, 3, 12, 24, 25, 33, 49], async () => {
   failure(await clients.requester.raw('GET', '/api/personnel?date=2026-10-01'), 403, 'FORBIDDEN');
   failure(await clients.requester.raw('GET', '/api/night-duty?date=2026-10-01'), 403, 'FORBIDDEN');
-  const department = clients.manager.session.actor.department;
-  const rosterDisplayName = `담당 인원 현황 ${runId}`;
-  let roster = (await clients.manager.read(`/api/personnel-roster?department=${encodeURIComponent(department)}`)).data;
-  const before = roster.entries;
-  const saved = success(await clients.manager.command('savePersonnelRoster', { department, entries: [...before, { displayName: rosterDisplayName, active: true }] }, { expectedRevision: roster.revision }));
-  assert.ok(saved.publicRef);
-  roster = (await clients.manager.read(`/api/personnel-roster?department=${encodeURIComponent(department)}`)).data;
-  const added = roster.entries.find(entry => !before.some(old => old.personRef === entry.personRef));
-  assert.ok(added?.personRef);
-  failure(await clients.manager.command('savePersonnelRoster', { department: teams[1], entries: [] }, { expectedRevision: 0 }), 403, 'FORBIDDEN');
-  const [date, differentPastDate] = await unenteredPastDates(clients.manager, department);
-  const own = (await clients.manager.read(`/api/personnel?date=${date}&department=${encodeURIComponent(department)}`)).data.departments.find(item => item.department === department);
-  assert.equal(own.submitted, false);
-  assert.equal(own.entries.find(entry => entry.personRef === added.personRef).status, null, 'unentered status must not become available');
-  success(await clients.manager.command('saveDailyPersonnel', { department, date, entries: [{ personRef: added.personRef, status: 'leave' }] }, { expectedRevision: own.revision }));
-  const otherView = (await clients.wireless.read(`/api/personnel?date=${date}&department=${encodeURIComponent(department)}`)).data.departments.find(item => item.department === department);
-  assert.equal(otherView.entries.find(entry => entry.personRef === added.personRef).status, 'leave');
-  failure(await clients.wireless.command('saveDailyPersonnel', { department, date, entries: [{ personRef: added.personRef, status: 'trip' }] }, { expectedRevision: otherView.revision }), 403, 'FORBIDDEN');
-  const night = (await clients.manager.read(`/api/night-duty?date=${date}&department=${encodeURIComponent(department)}`)).data.departments.find(item => item.department === department);
-  assert.equal(night.submitted, false);
-  success(await clients.manager.command('saveNightDuty', { department, date, personRefs: [added.personRef] }, { expectedRevision: night.revision }));
-  assert.equal((await clients.wired.read(`/api/night-duty?date=${date}&department=${encodeURIComponent(department)}`)).data.departments.find(item => item.department === department).entries[0].personRef, added.personRef);
-  success(await clients.manager.command('savePersonnelRoster', { department, entries: roster.entries.map(entry => ({ ...entry, active: entry.personRef === added.personRef ? false : entry.active })) }, { expectedRevision: roster.revision }));
-  const day = (await clients.manager.read(`/api/personnel?date=${date}&department=${encodeURIComponent(department)}`)).data.departments.find(item => item.department === department);
-  success(await clients.manager.command('saveDailyPersonnel', { department, date, entries: [{ personRef: added.personRef, status: 'trip' }] }, { expectedRevision: day.revision }));
-  const retainedNight = (await clients.manager.read(`/api/night-duty?date=${date}&department=${encodeURIComponent(department)}`)).data.departments.find(item => item.department === department);
-  success(await clients.manager.command('saveNightDuty', { department, date, personRefs: [added.personRef] }, { expectedRevision: retainedNight.revision }));
-  assert.equal((await clients.manager.read(`/api/personnel?date=${date}&department=${encodeURIComponent(department)}`)).data.departments.find(item => item.department === department).entries.find(entry => entry.personRef === added.personRef).status, 'trip');
-  failure(await clients.manager.command('saveDailyPersonnel', { department, date: differentPastDate, entries: [{ personRef: added.personRef, status: 'leave' }] }, { expectedRevision: 0 }), 400, 'VALIDATION');
-  failure(await clients.manager.command('saveNightDuty', { department, date: differentPastDate, personRefs: [added.personRef] }, { expectedRevision: 0 }), 400, 'VALIDATION');
+  const department=teams[0];
+  const own=(await clients.wireless.read(`/api/personnel?date=2026-10-01&department=${encodeURIComponent(department)}`)).data.departments[0];
+  assert.equal(own.current+own.absent,own.total);
+  assert.ok(!Object.hasOwn(own,'entries'),'daily count is calculated from central absence periods');
+  failure(await clients.manager.raw('GET',`/api/personnel-roster?department=${encodeURIComponent(department)}`),403,'FORBIDDEN');
+  failure(await clients.wireless.command('savePersonnelRoster',{department,entries:[]},{expectedRevision:0}),403,'FORBIDDEN');
+  failure(await clients.wireless.command('saveDailyPersonnel',{department,date:'2026-10-01',entries:[]},{expectedRevision:0}),403,'FORBIDDEN');
+  failure(await clients.wireless.command('saveNightDuty',{department,date:'2026-10-01',personRefs:[]},{expectedRevision:0}),403,'FORBIDDEN');
+  const schedule=(await clients.wireless.read('/api/duty-schedules?month=2026-10&seat=team_night')).data;
+  assert.ok(Array.isArray(schedule.entries));
 });
 
 contract('any BNOC edits notices while retaining another BNOC attachment, without borrowing other resources', [3, 6, 27, 28, 30], async () => {
@@ -872,34 +1001,21 @@ contract('any BNOC edits notices while retaining another BNOC attachment, withou
   // File-retention after removal and DB-fault rollback are additionally checked from SQL by the independent verifier.
 });
 
-contract('work personnel are selected from the owning team roster and remain distinct from completion actor', [2, 3, 12, 13, 24], async () => {
-  const all = (await clients.admin.read('/api/access-assignments')).data.items;
-  const account = all.find(item => item.subjectRef === clients.wireless.session.actor.id);
-  assert.ok(account);
-  const permission = { subjectRef: account.subjectRef, role: account.role, department: account.department, teamId: account.teamId, departmentManager: true, active: true };
-  success(await clients.admin.command('changeAccess', permission, { expectedRevision: account.revision }));
-  try {
-    const rosterDisplayName = `담당 인원 작업 ${runId}`;
-    let roster = (await clients.wireless.read(`/api/personnel-roster?department=${encodeURIComponent(teams[0])}`)).data;
-    const original = roster.entries;
-    success(await clients.wireless.command('savePersonnelRoster', { department: teams[0], entries: [...original, { displayName: rosterDisplayName, active: true }] }, { expectedRevision: roster.revision }));
-    roster = (await clients.wireless.read(`/api/personnel-roster?department=${encodeURIComponent(teams[0])}`)).data;
-    const person = roster.entries.find(entry => !original.some(before => before.personRef === entry.personRef));
-    assert.ok(person);
-    let request = await assign(await create());
-    const work = request.workItems[0], target = { requestNumber: request.requestNumber, workNumber: work.workNumber, expectedRevision: work.revision };
-    failure(await clients.wireless.command('updateWork', { nextStatus: '완료', assignedPersonRefs: [person.personRef, person.personRef] }, target), 400, 'VALIDATION');
-    request = await updateWork(request, clients.wireless, teams[0], { nextStatus: '완료', assignedPersonRefs: [person.personRef] });
-    assert.equal(request.workItems[0].assignedPersons[0].personRef, person.personRef);
-    assert.equal(request.workItems[0].assignedPersons[0].displayName, rosterDisplayName);
-    assert.equal(request.workItems[0].completionActor, clients.wireless.session.actor.displayName);
-    assert.notEqual(request.workItems[0].completionActor, rosterDisplayName);
-    const shared = (await clients.requester.read(`/api/work-overview?requestNumber=${request.requestNumber}`)).data.items[0];
-    assert.ok(!Object.hasOwn(shared, 'assignedPersonRefs') && !Object.hasOwn(shared, 'assignedPersons'));
-  } finally {
-    const latest = (await clients.admin.read('/api/access-assignments')).data.items.find(item => item.subjectRef === account.subjectRef);
-    success(await clients.admin.command('changeAccess', { ...permission, departmentManager: account.departmentManager }, { expectedRevision: latest.revision }));
-  }
+contract('work assignees come from the BNOC central profile and requester sees only approved contact fields', [2, 3, 12, 13, 24, 51], async () => {
+  const ref=await createCentralPerson({department:teams[0],category:'병',rank:'일병',displayName:`담당 인원 작업 ${runId}`,internalPhone:'4567'});
+  let request=await assign(await create());
+  const work=request.workItems[0],target={requestNumber:request.requestNumber,workNumber:work.workNumber,expectedRevision:work.revision};
+  failure(await clients.wireless.command('updateWork',{nextStatus:'완료',assignedPersonRefs:[ref,ref]},target),400,'VALIDATION');
+  request=await updateWork(request,clients.wireless,teams[0],{nextStatus:'완료',assignedPersonRefs:[ref]});
+  assert.equal(request.workItems[0].assignedPersons[0].personRef,ref);
+  assert.equal(request.workItems[0].completionActor,clients.wireless.session.actor.displayName);
+  assert.notEqual(request.workItems[0].completionActor,`담당 인원 작업 ${runId}`);
+  const requesterDetail=await detail(request.requestNumber,clients.requester);
+  assert.deepEqual(Object.keys(requesterDetail.workItems[0].assignedPersons[0]).sort(),['displayName','rank','internalPhone'].sort());
+  assert.equal(requesterDetail.workItems[0].assignedPersons[0].internalPhone,'4567');
+  assert.ok(!JSON.stringify(requesterDetail).includes(ref));
+  const shared=(await clients.requester.read(`/api/work-overview?requestNumber=${request.requestNumber}`)).data.items[0];
+  assert.ok(!Object.hasOwn(shared,'assignedPersonRefs')&&!Object.hasOwn(shared,'assignedPersons'));
 });
 
 contract('access revocation is immediate and old successful receipts cannot bypass it', [1, 2, 3, 29], async () => {
@@ -929,6 +1045,48 @@ contract('access revocation is immediate and old successful receipts cannot bypa
     const latest = (await clients.admin.read('/api/access-assignments')).data.items.find(item => item.subjectRef === target.subjectRef);
     success(await clients.admin.command('changeAccess', { ...accessPayload, active: true }, { expectedRevision: latest.revision }));
   }
+});
+
+contract('operations status reads and persists the validated source without inventing healthy state', [1, 48], async () => {
+  const read=async()=>(await clients.bnoc.read('/api/operations/status')).data;
+  await control({reset:true});
+  try {
+    const healthy=await waitFor(read,item=>item.collectionState==='ok'&&item.items.length===14,'operations source');
+    assert.equal(healthy.postures.length,2);
+    assert.equal(healthy.alarms.length,2);
+    assert.deepEqual(healthy.groups.map(group=>group.groupId),['통신시설','전송장비','업무체계','통신망','전산장비']);
+    assert.equal(healthy.groups.reduce((sum,group)=>sum+group.items.length,0),10);
+    assert.ok(healthy.groups.every(group=>group.items.length===2&&group.items.every(item=>item.kind==='asset')));
+    assert.ok(healthy.postures.every(item=>['1','2','3','4','5'].includes(String(item.stageCode))));
+    assert.ok(healthy.alarms.every(item=>item.health==='normal'));
+    assert.ok(Number.isFinite(Date.parse(healthy.lastSuccess)));
+    const preserved={items:healthy.items,observedAt:healthy.observedAt,lastSuccess:healthy.lastSuccess};
+    await control({operations:{scenario:'error'}});
+    let failed=await waitFor(read,item=>item.collectionState==='failed'&&item.lastAttempt!==healthy.lastAttempt,'failed operations source');
+    assert.equal(failed.failureCode,'SOURCE_UNAVAILABLE');
+    assert.deepEqual(failed.items,preserved.items);
+    assert.equal(failed.observedAt,preserved.observedAt);
+    assert.equal(failed.lastSuccess,preserved.lastSuccess);
+    const previousAttempt=failed.lastAttempt;
+    await control({operations:{scenario:'invalid-stage'}});
+    failed=await waitFor(read,item=>item.collectionState==='failed'&&item.lastAttempt!==previousAttempt,'invalid operations status');
+    assert.equal(failed.failureCode,'INVALID_STAGE');
+    assert.deepEqual(failed.items,preserved.items);
+    for(const [scenario,code] of [['wrong-kind','SOURCE_MISMATCH'],['missing-field','INVALID_OBSERVED_AT'],['future','FUTURE_OBSERVED_AT']]){
+      const attempt=failed.lastAttempt;
+      await control({operations:{scenario}});
+      failed=await waitFor(read,item=>item.collectionState==='failed'&&item.lastAttempt!==attempt,`${scenario} operations source`);
+      assert.equal(failed.failureCode,code);
+      assert.deepEqual(failed.items,preserved.items);
+    }
+    await control({operations:{scenario:'stale'}});
+    const stale=await waitFor(read,item=>item.collectionState==='stale','stale operations source');
+    assert.equal(stale.stale,true);
+    await control({operations:{scenario:'normal'}});
+    const recovered=await waitFor(read,item=>item.collectionState==='ok','recovered operations source');
+    const stable=items=>items.map(({observedAt,...item})=>item);
+    assert.deepEqual(stable(recovered.items),stable(preserved.items));
+  } finally { await control({reset:true}); }
 });
 
 contract('GPS and CPCON show independent stored dictionaries, timestamps, scope, and simulation provenance', [26, 33, 34, 35], async () => {

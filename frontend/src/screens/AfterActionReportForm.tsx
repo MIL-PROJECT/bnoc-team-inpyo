@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { Actor } from '../types';
-import { RequestFields, initialInput, type RequestInput, type RunCommand } from './RequestRegistrationForm';
+import type { ApiClient } from '../api/apiClient.mjs';
+import { RequestFields, initialInput, type RequestInput, type RunCommand, type RequesterChoice } from './RequestRegistrationForm';
 import type { UploadAttachment } from './AttachmentPicker';
 import { afterActionPayload } from '../api/requestPayload.mjs';
 import { useSubmission } from '../app/useSubmission';
 import { useUnsavedChanges } from '../app/useUnsavedChanges';
 import { focusFormError, saveFailureMessage } from '../app/formFeedback.mjs';
 import { localDateTimePartsToUtc } from '../app/dateTime.mjs';
-export function AfterActionReportForm({ actor, run, upload, onSaved, onDraftChange }: { actor: Actor; run: RunCommand; upload: UploadAttachment; onSaved: (id: string, message?: string) => void; onDraftChange?: (input: RequestInput) => void }) {
+export function AfterActionReportForm({ actor, api, run, upload, onSaved, onDraftChange }: { actor: Actor; api: ApiClient; run: RunCommand; upload: UploadAttachment; onSaved: (id: string, message?: string) => void; onDraftChange?: (input: RequestInput) => void }) {
   const [input, setInput] = useState<RequestInput>(() => initialInput(actor));
+  const [requesters, setRequesters] = useState<RequesterChoice[]>([]);
+  const [requesterError, setRequesterError] = useState('');
   const [startedDate, setStartedDate] = useState(''), [startedTime, setStartedTime] = useState('');
   const [completedDate, setCompletedDate] = useState(''), [completedTime, setCompletedTime] = useState('');
   const [reason, setReason] = useState(''), [memo, setMemo] = useState('');
@@ -18,6 +21,7 @@ export function AfterActionReportForm({ actor, run, upload, onSaved, onDraftChan
   const { saving, submit: save } = useSubmission(run), [uploading, setUploading] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
   const feedbackRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { let active = true; void api.getRequesters().then(result => { if (active) { setRequesters(result.items as RequesterChoice[]); setRequesterError(''); } }).catch(() => { if (active) setRequesterError('요청자 계정을 불러오지 못했습니다. 다시 시도하세요.'); }); return () => { active = false; }; }, [api]);
   useEffect(() => { if (failed) focusFormError(formRef.current, feedbackRef.current); }, [errors, message, failed]);
   const dirty = JSON.stringify(input) !== JSON.stringify(initialInput(actor)) || !!startedDate || !!startedTime || !!completedDate || !!completedTime || !!reason || !!memo || done;
   useUnsavedChanges(dirty);
@@ -34,14 +38,16 @@ export function AfterActionReportForm({ actor, run, upload, onSaved, onDraftChan
     if (!completedAt) timeErrors.actualCompletedAt = '날짜와 시각을 입력하세요. 시각은 00:00~23:59 형식이어야 합니다.';
     if (startedAt && completedAt && Date.parse(completedAt) < Date.parse(startedAt)) timeErrors.actualCompletedAt = '완료 시각은 시작 시각 이후로 입력하세요.';
     if (Object.keys(timeErrors).length) { setErrors(timeErrors); setMessage('실제 시작·완료 날짜와 시각을 확인하세요.'); setFailed(true); return; }
+    if (!input.requesterRef || !requesters.some(item => item.requesterRef === input.requesterRef)) { setErrors({ requesterRef: '활성 요청자 계정을 선택하세요.' }); setMessage('요청자 계정을 선택하세요.'); setFailed(true); return; }
+    if (requesterError) { setMessage(requesterError); setFailed(true); return; }
     setMessage(''); setFailed(false);
     const result = await save('createAfterActionReport', afterActionPayload(input, { startedDate, startedTime, completedDate, completedTime, reason, memo, done }));
     if (!result) return;
     if (result.ok) { setErrors({}); if (result.requestNumber) { const success = `요청 ${result.requestNumber}의 완료 후보고를 등록했습니다.`; setMessage(success); onSaved(result.requestNumber, success); } return; }
     setErrors(result.fieldErrors ?? {}); setMessage(saveFailureMessage(result)); setFailed(true);
   };
-  return <section className="card"><h1>선조치 후보고</h1><form ref={formRef} onSubmit={submit}>
-    <fieldset disabled={saving}><RequestFields actor={actor} input={input} setInput={change} errors={errors} upload={upload} onUploading={setUploading} afterAction />
+  return <section className="card request-editor after-action-editor"><h1>선조치 후보고</h1><form ref={formRef} onSubmit={submit}>
+    <fieldset disabled={saving}><RequestFields actor={actor} input={input} setInput={change} errors={errors} upload={upload} onUploading={setUploading} requesters={requesters} afterAction />{requesterError && <p role="alert" className="error">{requesterError}</p>}
     <div className="form-grid">
       <div className="field"><span>실제 시작 시각<small className="field-hint" aria-hidden="true">필수</small></span><div className="actual-time-inputs">
         <label className="field"><span>날짜</span><input type="date" value={startedDate} aria-label="실제 시작 날짜" aria-required="true" aria-invalid={!!errors.actualStartedAt} aria-describedby={errors.actualStartedAt ? 'actual-start-error' : undefined} onChange={e => { setStartedDate(e.target.value); clearFeedback(); }} /></label>

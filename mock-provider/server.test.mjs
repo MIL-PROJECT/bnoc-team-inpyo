@@ -40,3 +40,20 @@ test('GPS/CPCON provenance, dictionaries and failure scenarios remain independen
   const cpcon = await (await fetch(url + '/feeds/cpcon', { headers: { 'X-Mock-Key': secret } })).json();
   assert.equal(cpcon.stageLabel, 'CPCONⅣ급'); assert.notEqual(cpcon.scopeKey, gps.scopeKey);
 }));
+
+test('operations feed returns grouped synthetic status and supports isolated failures', async () => provider(async url => {
+  assert.equal((await fetch(url + '/feeds/operations')).status, 403);
+  const headers = { 'X-Mock-Key': secret };
+  const response = await fetch(url + '/feeds/operations', { headers });
+  const feed = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(feed.kind, 'operations');
+  assert.equal(feed.items.filter(item => item.kind === 'posture').length, 2);
+  assert.equal(feed.items.filter(item => item.kind === 'alarm').length, 2);
+  assert.equal(feed.items.filter(item => item.kind === 'asset').length, 10);
+  assert.ok(feed.items.filter(item => item.kind === 'posture').every(item => item.stageCode === '5'));
+  assert.ok(feed.items.filter(item => item.kind !== 'posture').every(item => item.health === 'normal'));
+  await post(url, '/control', { operations: { scenario: 'error' } });
+  assert.equal((await fetch(url + '/feeds/operations', { headers })).status, 503);
+  assert.equal((await fetch(url + '/feeds/gps', { headers })).status, 200);
+}));

@@ -88,12 +88,30 @@ class MeetingRequestContractTest {
 
     @Test fun `after action meeting report keeps its existing attachment and video platform rules`() {
         val result=command(team,"createAfterActionReport",meeting("화상회의")+mapOf(
-            "actualRequesterText" to "요청 부서","completedConfirmed" to true,
+            "requesterRef" to db.actor("requester")!!.subjectRef,"completedConfirmed" to true,
             "actualStartedAt" to "2026-10-24T01:00:00Z","actualCompletedAt" to "2026-10-24T02:00:00Z",
             "reason" to "선조치 후 보고"
         ))
         assertEquals("완료",db.request(result.requestNumber!!)!!.status)
         assertTrue(db.request(result.requestNumber)!!.attachments.isEmpty())
         assertNull(db.request(result.requestNumber)!!.subcategories["videoPlatform"])
+    }
+    @Test fun `after action requires an active requester account and notifies its owner`() {
+        val selected=db.actor("requester-secondary")!!
+        val choices=QueryService(db,workflow).requesters(team)
+        assertTrue(choices.any { it["requesterRef"]==selected.subjectRef })
+        val result=command(team,"createAfterActionReport",meeting("일반회의")+mapOf(
+            "requesterRef" to selected.subjectRef,"completedConfirmed" to true,
+            "actualStartedAt" to "2026-10-24T01:00:00Z","actualCompletedAt" to "2026-10-24T02:00:00Z","reason" to "선조치 후 보고"
+        ))
+        val saved=db.request(result.requestNumber!!)!!
+        assertEquals(selected.id,saved.requesterSubject)
+        val recipients=db.rows("SELECT recipient_subject FROM bnoc_notifications WHERE request_number=? AND event_name='선조치 후보고'",saved.number).map { it["recipient_subject"] }.toSet()
+        assertTrue(selected.id in recipients)
+        assertTrue(db.actors().filter { it.active&&it.role=="bnoc" }.all { it.id in recipients })
+        assertFalse(requester.id in recipients)
+        val textOnly=runCatching { command(team,"createAfterActionReport",meeting("일반회의")+mapOf("actualRequesterText" to requester.displayName,"completedConfirmed" to true,"actualStartedAt" to "2026-10-24T01:00:00Z","actualCompletedAt" to "2026-10-24T02:00:00Z","reason" to "선조치")) }.exceptionOrNull() as BusinessFailure
+        assertEquals("VALIDATION",textOnly.code)
+        assertEquals(1,db.requests().count { it.registeredBy==team.id })
     }
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { localInputToUtc, localDateTimePartsToUtc, utcToLocalInput, calendarRange, moveDate, displayClock } from './dateTime.mjs';
+import { localInputToUtc, localDateTimePartsToUtc, utcToLocalInput, calendarRange, moveDate, displayClock, displayDate } from './dateTime.mjs';
 
 test('datetime inputs preserve Korea time while transmitting UTC instants', () => {
   assert.equal(localInputToUtc('2026-10-13T09:30'), '2026-10-13T00:30:00.000Z', 'SEOUL_INPUT_TO_UTC_REQUIRED');
@@ -36,4 +36,11 @@ test('date navigation crosses month, year, and leap-day boundaries', () => {
   assert.equal(moveDate('2026-12-31', 1), '2027-01-01');
   assert.equal(moveDate('2028-03-01', -1), '2028-02-29');
   assert.equal(moveDate('2028-02-29', 1), '2028-03-01');
+});
+
+test('list dates omit clock precision and preserve the Korea date boundary', () => {
+  assert.equal(displayDate('2026-10-26T16:30:59Z'),'2026-10-27');
+  assert.equal(displayDate('2026-10-26'),'2026-10-26');
+  assert.equal(displayDate(undefined),'—');
+  assert.equal(displayDate('invalid'),'날짜 확인 불가');
 });

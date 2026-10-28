@@ -18,6 +18,6 @@ class FrontendResources(@Value("\${bnoc.frontend-root}") val root:String):WebMvc
 }
 @Controller
 class FrontendController {
-    @GetMapping("/","/login","/auth/callback","/requests","/requests/**","/new","/notifications","/overview","/schedule","/operations/**","/work-overview","/personnel","/night-duty","/situation","/notices","/notices/**","/access","/after-action","/roster","/personnel-roster")
+    @GetMapping("/","/login","/auth/callback","/requests","/requests/**","/new","/notifications","/overview","/schedule","/operations/**","/work-overview","/operations-status","/personnel","/night-duty","/situation","/notices","/notices/**","/access","/after-action","/roster","/personnel-roster")
     fun app():String="forward:/index.html"
 }

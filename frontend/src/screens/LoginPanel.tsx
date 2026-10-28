@@ -41,10 +41,10 @@ export function LoginPanel({ api, expired = false, onAuthenticated }: { api: Api
     } catch (error) { opened.close(); popup.current = null; challenge.current = null; setPending(false); setMessage(errorMessage(error instanceof Error ? error : new Error('인증을 시작하지 못했습니다.'))); }
   };
   return <section className={`auth-shell ${expired ? 'compact' : ''}`} aria-label="로그인">
-    <div className="auth-panel"><small className="eyebrow">BNOC 업무 관리</small><h1>{expired ? '다시 로그인' : '업무를 한곳에서'}</h1>
+    <div className="auth-panel"><h1>{expired ? '다시 로그인' : '업무를 한곳에서'}</h1>
       <p>{expired ? '로그인이 만료됐습니다. 입력 내용은 유지됩니다. 같은 사용자로 다시 로그인한 뒤 저장을 눌러주세요.' : '요청·작업 진행과 부대 운영 현황을 확인하세요.'}</p>
       <button className="primary auth-button" onClick={() => void start()} disabled={pending}>{pending ? '인증 창에서 계속해 주세요' : 'SSO 로그인'}</button>
-      {message && <p className="error" role="alert">{message}</p>}
+      {message && <p className="error" role="alert">{message}</p>}<small className="auth-brand">BNOC 업무 관리</small>
     </div>{!expired && <aside className="auth-aside" aria-hidden="true"><strong>BNOC</strong><span>신청과 작업</span><i /><span>일정과 운영 현황</span></aside>}
   </section>;
 }

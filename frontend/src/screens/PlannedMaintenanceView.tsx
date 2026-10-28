@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError } from '../api/apiClient.mjs';
 import { ApiClient } from '../api/apiClient.mjs';
 import { moveDate, seoulDate } from '../app/dateTime.mjs';
@@ -49,9 +49,9 @@ function PlannedDateField({ label, value, min, max, today, showNavigation = fals
   return <div className="field planned-date-field"><label htmlFor={id}>{label}{showNavigation && dateKind && <small className={`planned-date-kind planned-date-kind-${dateKind === '오늘' ? 'today' : dateKind === '미래 예정' ? 'future' : 'past'}`}>{dateKind}</small>}</label><span className="planned-date-control">
     <DateInput id={id} value={value} min={min} max={max} required disabled={disabled} onChange={event => onChange(event.target.value)} />
   </span>{showNavigation && value && <ActionGroup className="planned-date-nav" role="group" aria-label="날짜 빠른 이동">
-    <Button type="button" disabled={disabled} aria-label="이전 날짜" onClick={() => onChange(moveDate(value, -1))}>← 이전</Button>
+    <Button type="button" disabled={disabled} aria-label="이전 날짜" onClick={() => onChange(moveDate(value, -1))}>이전</Button>
     <Button type="button" disabled={disabled} aria-current={value === today ? 'date' : undefined} onClick={() => today && onChange(today)}>오늘</Button>
-    <Button type="button" disabled={disabled} aria-label="다음 날짜" onClick={() => onChange(moveDate(value, 1))}>다음 →</Button>
+    <Button type="button" disabled={disabled} aria-label="다음 날짜" onClick={() => onChange(moveDate(value, 1))}>다음</Button>
   </ActionGroup>}</div>;
 }
 
@@ -73,7 +73,9 @@ export function PlannedMaintenanceView({ api, revision, department, onChanged, o
   const [recoveryList, setRecoveryList] = useState<PlannedWorkList | null>(null);
   const [checkingRecovery, setCheckingRecovery] = useState(false);
   const [notice, setNotice] = useState('');
+  const feedbackRef = useRef<HTMLParagraphElement>(null);
   const [writeError, setWriteError] = useState(() => pendingCreates.length > 0 ? '저장 결과를 확인하지 못했습니다. 원래 작업 제목을 다시 입력하면 같은 제출 번호로 확인합니다.' : '');
+  useEffect(()=>{if(writeError){feedbackRef.current?.focus({preventScroll:true});feedbackRef.current?.scrollIntoView({block:'nearest'});}},[writeError]);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState('');
   const [editTitle, setEditTitle] = useState('');
@@ -276,6 +278,9 @@ export function PlannedMaintenanceView({ api, revision, department, onChanged, o
       <Button type="button" disabled={creating || uncertainCreate} onClick={onOpenOverview}>전체 작업 현황</Button>
     </div>
 
+    {writeError && <p ref={feedbackRef} tabIndex={-1} className="error" role="alert">{writeError}</p>}
+    {notice && <p className="planned-feedback" role="status">{notice}</p>}
+
     <section className="planned-date-panel" aria-label="업무 날짜 선택">
       <PlannedDateField label="업무 날짜" value={selectedDate} today={today} showNavigation disabled={uncertainCreate || recoveryRequired || saving} onChange={changeWorkDate} />
     </section>
@@ -319,7 +324,5 @@ export function PlannedMaintenanceView({ api, revision, department, onChanged, o
       </section>
     </>}
 
-    {writeError && <p className="error" role="alert">{writeError}</p>}
-    {notice && <p className="planned-feedback" role="status">{notice}</p>}
   </div>;
 }

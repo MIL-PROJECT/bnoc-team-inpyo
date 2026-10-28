@@ -27,7 +27,7 @@ class DocumentSearchContractTest {
 
     private fun create(detail:String,location:String="사무실"):String = workflow.execute(requester,Command("createRequest",UUID.randomUUID().toString(),payload=mapOf(
         "category" to "장비/체계","subcategories" to mapOf("systemType" to "인터넷","resourceType" to "PC","workType" to "지원"),
-        "detail" to detail,"location" to location,"contact" to "군내 1234","personalContact" to "010-0000-0000"
+        "detail" to detail,"location" to location,"contact" to "1234","personalContact" to "010-0000-0000"
     ))).requestNumber!!
 
     private fun addAnalyzedAttachment(number:String,body:String?,metadata:List<Map<String,Any?>> = emptyList(),current:Boolean=true,status:String="ready",blocks:List<Map<String,Any?>>?=null):String {
@@ -135,7 +135,7 @@ class DocumentSearchContractTest {
     @Test fun `BNOC search does not expose maintenance target contact or private details`() {
         val number=workflow.execute(bnoc,Command("createRequest",UUID.randomUUID().toString(),payload=mapOf(
             "requesterRef" to requester.subjectRef,"category" to "장비/체계","subcategories" to mapOf("systemType" to "인터넷","resourceType" to "PC","workType" to "지원"),
-            "detail" to "일반 요청 본문","location" to "작업 장소","contact" to "군내 1234",
+            "detail" to "일반 요청 본문","location" to "작업 장소","contact" to "1234",
             "maintenanceTarget" to mapOf("department" to "정비 부서","rank" to "상병","name" to "정비 대상자","phone" to "010-0000-0000")
         ))).requestNumber!!
         assertTrue(query.list(bnoc,mapOf("q" to "010-1234")).isEmpty())
