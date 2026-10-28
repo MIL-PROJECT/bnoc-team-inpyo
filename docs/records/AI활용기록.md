@@ -7,6 +7,8 @@
 
 공식 sloplint의 모바일 미지원 결과와 가변 DB figures WARN을 숨기지 않았다. 새 요약 공백 누락은 기존 시험이 잡았고 시험을 완화하지 않고 제품을 수정했다. 기존 staged 발표물/다른 문서절은 유지하며 이 anchor만 부분 커밋한다. 원본/private 이력을 직접 push하지 않고 기존 팀 원격 조상의 선별 tree에 제품/기술문서만 반영해 push 자동 CI를 먼저 통과시킨다. 실제 최종 실행/게시 SHA·CI와 한계는 [작업기록](작업기록.md#team-feedback-hallmark-20261028)과 연결 증거/원격 체크를 따른다. 사람 추가 수정 요청은 이번1회, 현업 효율/전체 사용량·과거 경과시간은 미측정이다.
 
+게시 CI가 최초 운용현황500을 잡아 main 반영을 중단했다. backend worker는 실제controller Spring proxy/엄격 JDBC red를 만든 뒤 readOnly flag1개만 제거했고 root는 실제 새 MySQL DB의 원본500/수정200·정상14/실패0을 독립 재현했다. 기존 Situation의 유사 annotation을 무작정 바꾸지 않고 초기수집이 없음을 확인해 제외했다. reviewer는 source·strict red/green·실제DB 정리까지 대조했다. root는 로컬/Compose 정보원 검증 주기의 누락도 실제config로 확인해 기존 공통변수 매핑2개만 보완했다. 실패 로그·원시 기대를 보존했고 시험20초/200·제품기본을 완화하지 않았다.
+
 <a id="team-feedback-20261028"></a>
 ## 2026-10-28 · 팀원 지적의 원인과 신청·조회 흐름 정정
 

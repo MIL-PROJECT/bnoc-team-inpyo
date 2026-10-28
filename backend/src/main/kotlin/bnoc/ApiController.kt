@@ -105,7 +105,7 @@ class ApiController(val auth:AuthService,val db:Database,val workflow:WorkflowSe
     fun dutySchedules(request:HttpServletRequest,@RequestParam month:String,@RequestParam(required=false) seat:String?)=envelope(workflow.operations.listDutySchedules(actor(request),month,seat))
     @GetMapping("/situation") @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
     fun situations(request:HttpServletRequest):Map<String,Any?> { actor(request);return envelope(mapOf("gps" to situation.snapshot("gps"),"cpcon" to situation.snapshot("cpcon"))) }
-    @GetMapping("/operations/status") @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
+    @GetMapping("/operations/status") @Transactional(isolation=Isolation.REPEATABLE_READ)
     fun operationsStatus(request:HttpServletRequest):Map<String,Any?> { actor(request); return envelope(operationsStatus.snapshot()) }
     @GetMapping("/situation/{kind}") fun situation(request:HttpServletRequest,@PathVariable kind:String):Map<String,Any?> { actor(request);return envelope(situation.snapshot(kind)) }
     @GetMapping("/notices") @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)

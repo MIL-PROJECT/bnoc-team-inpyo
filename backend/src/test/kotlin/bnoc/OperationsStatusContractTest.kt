@@ -87,6 +87,70 @@ class OperationsStatusContractTest {
         assertEquals(lastSuccess, service.snapshot()["lastSuccess"])
     }
 
+    private data class ObservedQuery(val sql:String,val readOnly:Boolean,val isolation:Int)
+    private fun strictStorage():Pair<Database,MutableList<ObservedQuery>> {
+        val source=DriverManagerDataSource("jdbc:h2:mem:${UUID.randomUUID()};MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE","sa","")
+        val queries=mutableListOf<ObservedQuery>()
+        fun track(connection:java.sql.Connection):java.sql.Connection {
+            var readOnly=false
+            return java.lang.reflect.Proxy.newProxyInstance(java.sql.Connection::class.java.classLoader,arrayOf(java.sql.Connection::class.java)) { _,method,args ->
+                if(method.name=="setReadOnly")readOnly=args!![0] as Boolean
+                if(method.name=="isReadOnly")return@newProxyInstance readOnly
+                if(method.name=="prepareStatement" && args?.firstOrNull() is String) {
+                    val sql=args[0] as String
+                    queries.add(ObservedQuery(sql,readOnly,connection.transactionIsolation))
+                    if(readOnly && sql.trimStart().substringBefore(' ').uppercase() in setOf("INSERT","UPDATE","DELETE"))
+                        throw java.sql.SQLException("Connection is read-only. Queries leading to data modification are not allowed.","S1009")
+                }
+                try { method.invoke(connection,*(args ?: emptyArray())) } catch(error:java.lang.reflect.InvocationTargetException) { throw error.targetException }
+            } as java.sql.Connection
+        }
+        val tracked=object:org.springframework.jdbc.datasource.AbstractDataSource() {
+            override fun getConnection()=track(source.connection)
+            override fun getConnection(username:String,password:String)=track(source.getConnection(username,password))
+        }
+        return Database(JdbcTemplate(tracked)).also { it.initialize() } to queries
+    }
+    private fun firstControllerSnapshot(storage:Database,queries:MutableList<ObservedQuery>):Map<*,*> {
+        val transaction=TransactionTemplate(DataSourceTransactionManager(storage.jdbc.dataSource!!))
+        val collector=OperationsStatusService(storage,auth,transaction,120,30000,2000)
+        val request=org.springframework.mock.web.MockHttpServletRequest()
+        val controllerAuth=org.mockito.Mockito.mock(AuthService::class.java)
+        org.mockito.Mockito.`when`(controllerAuth.actor(request)).thenReturn(storage.actor("requester"))
+        val controller=ApiController(controllerAuth,storage,org.mockito.Mockito.mock(WorkflowService::class.java),org.mockito.Mockito.mock(QueryService::class.java),org.mockito.Mockito.mock(AttachmentService::class.java),org.mockito.Mockito.mock(SituationService::class.java),collector,org.mockito.Mockito.mock(PlannedWorkService::class.java),org.mockito.Mockito.mock(DocumentAnalysisService::class.java))
+        val proxy=org.springframework.aop.framework.ProxyFactory(controller).apply {
+            isProxyTargetClass=true
+            addAdvice(org.springframework.transaction.interceptor.TransactionInterceptor().apply {
+                transactionManager=transaction.transactionManager
+                transactionAttributeSource=org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()
+            })
+        }.proxy as ApiController
+        queries.clear()
+        val snapshot=proxy.operationsStatus(request)["data"] as Map<*,*>
+        val snapshotReads=queries.filter { it.sql.startsWith("SELECT * FROM bnoc_operations_status_") }
+        assertEquals(2,snapshotReads.size,"OPERATIONS_ITEMS_AND_STATE_MUST_SHARE_A_READ_SNAPSHOT")
+        assertTrue(snapshotReads.all { it.isolation==java.sql.Connection.TRANSACTION_REPEATABLE_READ },"OPERATIONS_SNAPSHOT_MUST_KEEP_REPEATABLE_READ")
+        assertTrue(queries.filter { it.sql.startsWith("INSERT") || it.sql.startsWith("UPDATE") }.all { !it.readOnly },"FIRST_COLLECTION_MUST_USE_A_WRITABLE_GET_TRANSACTION")
+        assertFalse(transaction.isReadOnly,"SHARED_TRANSACTION_TEMPLATE_MUST_NOT_BE_MUTATED")
+        return snapshot
+    }
+    @Test fun `fresh controller read persists the source in its repeatable read transaction`() {
+        val (storage,queries)=strictStorage()
+        val snapshot=firstControllerSnapshot(storage,queries)
+        assertEquals("ok",snapshot["collectionState"])
+        assertEquals(14,(snapshot["items"] as List<*>).size)
+        assertEquals(1,storage.rows("SELECT * FROM bnoc_operations_status_state").size)
+    }
+    @Test fun `fresh controller read persists source failure without a read only write error`() {
+        status=503
+        val (storage,queries)=strictStorage()
+        val snapshot=firstControllerSnapshot(storage,queries)
+        assertEquals("failed",snapshot["collectionState"])
+        assertEquals("SOURCE_UNAVAILABLE",snapshot["failureCode"])
+        assertTrue((snapshot["items"] as List<*>).isEmpty())
+        assertNull(snapshot["lastSuccess"])
+    }
+
     @Test fun `old source values are marked stale`() {
         response.set(feed(Instant.now().minusSeconds(300)))
         service.collect()
