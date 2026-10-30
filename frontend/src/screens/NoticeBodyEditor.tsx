@@ -1,7 +1,9 @@
-import { useEffect, useRef, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import type { NoticeBodyDocument } from '../types';
+import './noticeFeedback.css';
 
 const colors = ['default','#1d4ed8','#b91c1c','#166534'] as const;
+const fonts = { 'sans-serif':'고딕', serif:'명조', monospace:'고정폭' } as const;
 type Run = NoticeBodyDocument['blocks'][number]['runs'][number];
 
 export function plainNoticeDocument(body: string): NoticeBodyDocument {
@@ -11,7 +13,7 @@ export function plainNoticeText(document: NoticeBodyDocument): string {
   return document.blocks.map(block=>block.runs.map(run=>run.text).join('')).join('\n');
 }
 function styleOf(run: Run) {
-  return { fontWeight:run.bold?'700':undefined,textDecoration:run.underline?'underline':undefined,fontSize:run.size?`${run.size}px`:undefined,color:run.color && run.color!=='default'?run.color:undefined };
+  return { fontWeight:run.bold?'700':undefined,fontStyle:run.italic?'italic':undefined,fontFamily:run.font,textDecoration:run.underline?'underline':undefined,fontSize:run.size?`${run.size}px`:undefined,color:run.color && run.color!=='default'?run.color:undefined };
 }
 function renderBlocks(document: NoticeBodyDocument, render: (block: NoticeBodyDocument['blocks'][number],key:string)=>ReactNode) {
   const output: ReactNode[]=[];
@@ -33,31 +35,28 @@ export function NoticeBodyContent({ document, body }: { document?: NoticeBodyDoc
   })}</div>;
 }
 
-function directBlock(node: Node, root: HTMLElement): HTMLElement | null {
-  let current:Node=node;
-  while(current.parentNode && current.parentNode!==root) current=current.parentNode;
-  return current.parentNode===root && current instanceof HTMLElement ? current : null;
-}
 function readRuns(node: Node): Run[] {
   const runs:Run[]=[];
-  const push=(text:string,style:{bold:boolean;underline:boolean;size?:16|20|24;color?:Run['color']})=>{
+  type Style = {bold:boolean;italic:boolean;underline:boolean;size?:number;font?:Run['font'];color?:Run['color']};
+  const push=(text:string,style:Style)=>{
     if(!text) return;
     const previous=runs[runs.length-1];
-    if(previous && previous.bold===style.bold && previous.underline===style.underline && previous.size===style.size && previous.color===style.color) previous.text+=text;
-    else runs.push({text,...(style.bold?{bold:true}:{}),...(style.underline?{underline:true}:{}),...(style.size?{size:style.size}:{}),...(style.color?{color:style.color}:{})});
+    if(previous && Boolean(previous.bold)===style.bold && Boolean(previous.italic)===style.italic && Boolean(previous.underline)===style.underline && previous.size===style.size && previous.font===style.font && previous.color===style.color) previous.text+=text;
+    else runs.push({text,...(style.bold?{bold:true}:{}),...(style.italic?{italic:true}:{}),...(style.underline?{underline:true}:{}),...(style.size?{size:style.size}:{}),...(style.font?{font:style.font}:{}),...(style.color?{color:style.color}:{})});
   };
-  const walk=(child:Node, parent:{bold:boolean;underline:boolean;size?:16|20|24;color?:Run['color']})=>{
+  const walk=(child:Node, parent:Style)=>{
     if(child.nodeType===Node.TEXT_NODE) { push(child.textContent ?? '',parent);return; }
     if(!(child instanceof HTMLElement)) return;
-    const bold=parent.bold || ['B','STRONG'].includes(child.tagName),underline=parent.underline || child.tagName==='U';
-    const rawSize=child.style.fontSize?.replace('px','');const size=rawSize==='16'||rawSize==='20'||rawSize==='24'?Number(rawSize) as 16|20|24:parent.size;
+    const bold=parent.bold || ['B','STRONG'].includes(child.tagName),italic=parent.italic || ['I','EM'].includes(child.tagName),underline=parent.underline || child.tagName==='U';
+    const rawSize=Number(child.style.fontSize?.replace('px',''));const size=Number.isInteger(rawSize)&&rawSize>=12&&rawSize<=48?rawSize:parent.size;
+    const font=Object.keys(fonts).find(value=>value===child.style.fontFamily) as Run['font'] ?? parent.font;
     const rawColor=child.style.color?.replaceAll(' ','').toLowerCase();
     const normalizedColor=rawColor==='var(--color-text)'?'default':rawColor==='rgb(29,78,216)'?'#1d4ed8':rawColor==='rgb(185,28,28)'?'#b91c1c':rawColor==='rgb(22,101,52)'?'#166534':rawColor;
     const color=colors.find(value=>value===normalizedColor) ?? parent.color;
-    const style={bold,underline,size,color};
+    const style={bold,italic,underline,size,font,color};
     if(child.tagName==='BR') push('\n',style); else child.childNodes.forEach(grandchild=>walk(grandchild,style));
   };
-  walk(node,{bold:false,underline:false});
+  walk(node,{bold:false,italic:false,underline:false});
   return runs.length?runs:[{text:''}];
 }
 export function serializeNoticeEditor(root:HTMLElement): NoticeBodyDocument {
@@ -80,8 +79,9 @@ export function serializeNoticeEditor(root:HTMLElement): NoticeBodyDocument {
 function appendRun(parent:HTMLElement,run:Run) {
   let node:Node=document.createTextNode(run.text);
   if(run.bold) { const strong=document.createElement('strong');strong.append(node);node=strong; }
+  if(run.italic) { const italic=document.createElement('em');italic.append(node);node=italic; }
   if(run.underline) { const underline=document.createElement('u');underline.append(node);node=underline; }
-  if(run.size || (run.color && run.color!=='default')) { const span=document.createElement('span');if(run.size)span.style.fontSize=`${run.size}px`;if(run.color&&run.color!=='default')span.style.color=run.color;span.append(node);node=span; }
+  if(run.size || run.font || run.color) { const span=document.createElement('span');if(run.size)span.style.fontSize=`${run.size}px`;if(run.font)span.style.fontFamily=run.font;if(run.color)span.style.color=run.color==='default'?'var(--color-text)':run.color;span.append(node);node=span; }
   parent.append(node);
 }
 export function writeNoticeEditor(root:HTMLElement,docModel:NoticeBodyDocument) {
@@ -100,22 +100,34 @@ export function writeNoticeEditor(root:HTMLElement,docModel:NoticeBodyDocument) 
   }
   if(!root.childNodes.length) root.append(document.createElement('p'));
 }
-function applyStyle(root:HTMLElement,property:'fontSize'|'color',value:string,savedRange:Range|null) {
+function applyStyle(root:HTMLElement,property:'fontSize'|'fontFamily'|'color',value:string,savedRange:Range|null) {
   const selection=window.getSelection();
   if(!selection) return false;
   const range=savedRange ?? (selection.rangeCount ? selection.getRangeAt(0) : null);
   if(!range || range.collapsed) return false;
-  if(!root.contains(range.commonAncestorContainer) || directBlock(range.startContainer,root)!==directBlock(range.endContainer,root)) return false;
-  const fragment=range.extractContents(),span=document.createElement('span');
-  fragment.querySelectorAll<HTMLElement>('[style]').forEach(element=>{element.style[property]='';});
-  if(property==='fontSize' && value) span.style.fontSize=`${value}px`;
-  if(property==='color') span.style.color=value==='default'?'var(--color-text)':value;
-  span.append(fragment);range.insertNode(span);selection.removeAllRanges();const next=document.createRange();next.selectNodeContents(span);selection.addRange(next);
+  if(!root.contains(range.commonAncestorContainer)) return false;
+  const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT),parts:{node:Text;start:number;end:number}[]=[];
+  while(walker.nextNode()) {
+    const node=walker.currentNode as Text;
+    if(!range.intersectsNode(node)) continue;
+    const start=node===range.startContainer?range.startOffset:0,end=node===range.endContainer?range.endOffset:node.length;
+    if(end>start)parts.push({node,start,end});
+  }
+  const spans:HTMLElement[]=[];
+  for(const {node,start,end} of parts) {
+    const part=document.createRange();part.setStart(node,start);part.setEnd(node,end);
+    const span=document.createElement('span');
+    span.style[property]=property==='fontSize'?`${value}px`:property==='color'&&value==='default'?'var(--color-text)':value;
+    span.append(part.extractContents());part.insertNode(span);spans.push(span);
+  }
+  if(!spans.length)return false;
+  selection.removeAllRanges();const next=document.createRange();next.setStart(spans[0],0);next.setEnd(spans.at(-1)!,spans.at(-1)!.childNodes.length);selection.addRange(next);
   return true;
 }
 export function NoticeBodyEditor({ value,onChange,resetKey,error,errorId='notice-body-error' }: { value:NoticeBodyDocument;onChange:(document:NoticeBodyDocument)=>void;resetKey:number;error?:string;errorId?:string }) {
   const editor=useRef<HTMLDivElement>(null);
   const savedRange=useRef<Range|null>(null);
+  const [size,setSize]=useState('16');
   const initialize=()=>{if(editor.current)writeNoticeEditor(editor.current,value);};
   useEffect(initialize,[resetKey]);
   const save=()=>{if(editor.current)onChange(serializeNoticeEditor(editor.current));};
@@ -126,11 +138,12 @@ export function NoticeBodyEditor({ value,onChange,resetKey,error,errorId='notice
       if(root.contains(range.commonAncestorContainer))savedRange.current=range.cloneRange();
     }
   };
-  const action=(kind:'bold'|'underline'|'bullet'|'ordered'|'size'|'color',value?:string)=>{
+  const action=(kind:'bold'|'italic'|'underline'|'bullet'|'ordered'|'size'|'font'|'color',value?:string)=>{
     const root=editor.current;if(!root)return;
     root.focus();
-    if(kind==='size'||kind==='color') {
-      const ok=applyStyle(root,kind==='size'?'fontSize':'color',value??'',savedRange.current);
+    if(kind==='size'||kind==='color'||kind==='font') {
+      if(kind==='size'&&(!Number.isInteger(Number(value))||Number(value)<12||Number(value)>48))return;
+      const ok=applyStyle(root,kind==='size'?'fontSize':kind==='font'?'fontFamily':'color',value??'',savedRange.current);
       if(!ok) return;
       rememberSelection();
     } else document.execCommand(kind==='bullet'?'insertUnorderedList':kind==='ordered'?'insertOrderedList':kind,false);
@@ -141,7 +154,10 @@ export function NoticeBodyEditor({ value,onChange,resetKey,error,errorId='notice
   return <section className="notice-editor" aria-label="공지 본문 편집">
     <div className="notice-toolbar" aria-label="본문 서식 도구">
       <button type="button" onMouseDown={preserve} onClick={()=>action('bold')} aria-label="굵게"><strong>B</strong></button>
+      <button type="button" onMouseDown={preserve} onClick={()=>action('italic')} aria-label="기울임"><em>I</em></button>
       <button type="button" onMouseDown={preserve} onClick={()=>action('underline')} aria-label="밑줄"><u>U</u></button>
+      <label className="field"><span>글꼴</span><select aria-label="글꼴" defaultValue="sans-serif" onMouseDown={rememberSelection} onFocus={rememberSelection} onChange={event=>action('font',event.target.value)}>{Object.entries(fonts).map(([font,label])=><option key={font} value={font}>{label}</option>)}</select></label>
+      <label className="field"><span>글자 크기</span><input type="number" aria-label="글자 크기" min={12} max={48} step={1} value={size} onFocus={rememberSelection} onChange={event=>setSize(event.target.value)}/></label><button type="button" onMouseDown={preserve} onClick={()=>action('size',size)}>크기 적용</button>
       {[16,20,24].map(size=><button type="button" key={size} onMouseDown={preserve} onClick={()=>action('size',String(size))} aria-label={`글자 크기 ${size}`}>{size}px</button>)}
       <label className="field"><span>글자색</span><select aria-label="글자색" defaultValue="default" onMouseDown={rememberSelection} onFocus={rememberSelection} onChange={event=>action('color',event.target.value)}>{colors.map(color=><option key={color} value={color}>{color==='default'?'기본색':color==='#1d4ed8'?'파랑':color==='#b91c1c'?'빨강':'초록'}</option>)}</select></label>
       <button type="button" onMouseDown={preserve} onClick={()=>action('bullet')} aria-label="글머리 목록">• 목록</button>

@@ -4,7 +4,8 @@ import type { Actor, ViewCommandResult, GuidedDraft } from '../types';
 import { AttachmentPicker, type UploadAttachment } from './AttachmentPicker';
 import { requestPayload } from '../api/requestPayload.mjs';
 import { useUnsavedChanges } from '../app/useUnsavedChanges';
-import { focusFormError, requestFieldErrors, saveFailureMessage } from '../app/formFeedback.mjs';
+import { focusFormError, requestFieldErrors, saveFailureMessage, guidedRequestErrorStep } from '../app/formFeedback.mjs';
+import { jumpIntake } from '../app/intakeModel.mjs';
 import { requestDetailGuidance, requestLocationGuidance } from '../app/requestGuidance.mjs';
 import { displayTime } from '../app/dateTime.mjs';
 import {useRequestDraft,type RequestDraftApi} from '../app/useRequestDraft';
@@ -136,7 +137,10 @@ export function RequestRegistrationForm({ actor, run, upload, getRequesters, dra
     const uncertain=['NETWORK','INVALID_RESPONSE','PROCESSING','SAVE_FAILED'].includes(result.errorCode??'');
     if(uncertain)setFormalUncertain(true);
     else if(!['UNAUTHENTICATED','FORBIDDEN'].includes(result.errorCode??''))setFormalUncertain(false);
-    setErrors(result.fieldErrors ?? {}); setMessage(saveFailureMessage(result)); setFailed(true);
+    const fieldErrors=result.fieldErrors??{};
+    const errorStep=result.errorCode==='VALIDATION'?guidedRequestErrorStep(fieldErrors):null;
+    if(errorStep)setInput(current=>({...current,guidedDraft:jumpIntake(current.guidedDraft!,errorStep)}));
+    setErrors(fieldErrors); setMessage(saveFailureMessage(result)); setFailed(true);
   };
   const draftDisabled=saving||uploading||persisted.busy||formalUncertain;
   return <section className="card request-editor guided-request-editor"><div className="page-head"><h1>{actor.role === 'bnoc' ? '대리 등록' : '작업 신청'}</h1>

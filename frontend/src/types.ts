@@ -26,7 +26,7 @@ export interface WorkItem {
   resolvedByWorkItemIds: string[]; origin?: 'assigned' | 'after-action'; revision: number
 }
 export interface HistoryEntry { targetId: string; actorId: string; at: string; field: string; before: unknown; after: unknown }
-export interface Notification { notificationId: string; recipientActorId?: string; event: string; relatedRequestId?: string; relatedWorkItemId?: string; at: string; read: boolean }
+export interface Notification { notificationId: string; recipientActorId?: string; event: string; summary?: string; relatedRequestId?: string; relatedWorkItemId?: string; relatedDepartment?: string | null; at: string; read: boolean }
 export interface OperationReceipt { operationId: string; actorId: string; fingerprint: string; changedIds: string[]; requestNumber?: string; resultCode: 'OK' }
 export interface AppState {
   baselineVersion: string; requests: Request[]; workItems: WorkItem[]; history: HistoryEntry[];
@@ -74,6 +74,6 @@ export interface PersonnelEntry extends RosterPerson { status: 'leave' | 'trip' 
 export interface PersonnelDay { date: string; departments: { department: string; revision: number; submitted: boolean; entries: PersonnelEntry[] }[] }
 export interface NightDutyDay { date: string; departments: { department: string; revision: number; submitted: boolean; entries: RosterPerson[] }[] }
 export interface SituationSnapshot { kind: string; scopeKey?: string; stageCode?: number | string; stageLabel?: string; observedAt?: string; lastAttempt?: string; lastSuccess?: string; collectionState: 'not_collected' | 'ok' | 'failed' | 'stale' | 'unconfigured'; failureCode?: string; sourceMode: string }
-export type NoticeBodyDocument = { version: 1; blocks: { type: 'paragraph' | 'listItem'; list?: 'bullet' | 'ordered'; runs: { text: string; bold?: boolean; underline?: boolean; size?: 16 | 20 | 24; color?: 'default' | '#1d4ed8' | '#b91c1c' | '#166534' }[] }[] };
+export type NoticeBodyDocument = { version: 1; blocks: { type: 'paragraph' | 'listItem'; list?: 'bullet' | 'ordered'; runs: { text: string; bold?: boolean; italic?: boolean; underline?: boolean; size?: number; font?: 'sans-serif' | 'serif' | 'monospace'; color?: 'default' | '#1d4ed8' | '#b91c1c' | '#166534' }[] }[] };
 export interface Notice { noticeRef: string; title: string; body: string; bodyDocument?: NoticeBodyDocument | null; createdAt: string; updatedAt: string; createdBy: string; revision: number; attachments: AttachmentMeta[] }
 export interface AccessAssignment { subjectRef: string; displayName: string; role: Role; department: string; teamId?: string; departmentManager: boolean; active: boolean; revision: number }

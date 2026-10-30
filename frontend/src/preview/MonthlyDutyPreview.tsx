@@ -1,3 +1,4 @@
+import './personnelFeedback.css';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { Actor } from '../types';
 import type { ApiClient } from '../api/apiClient.mjs';

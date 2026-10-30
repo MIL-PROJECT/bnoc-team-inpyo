@@ -5,6 +5,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { retainArtifact } from './bnoc-artifact.mjs';
 
 export const root = resolve(fileURLToPath(new URL('../', import.meta.url)));
 export const runtimeRoot = join(root, '.local/bnoc-runtime');
@@ -57,6 +58,15 @@ async function waitUntil(check, description) {
   throw new Error(`${description} did not become ready; see .local/bnoc-runtime/logs`);
 }
 async function apiReady(url) { try { const response = await fetch(url, { signal: AbortSignal.timeout(1500) }); return response.status === 200 || response.status === 401; } catch { return false; } }
+export async function nativeServiceReady(entry, port, url) {
+  const owned = running(entry);
+  if (owned === null) throw new Error('Process ownership cannot be checked in this restricted environment.');
+  if (!owned) throw new Error('Native service exited or no longer matches its process signature; see .local/bnoc-runtime/logs.');
+  const owners = nativePortOwners(port);
+  if (owners.some(pid => pid !== String(entry.pid))) throw new Error(`Port ${port} belongs to another process; existing processes preserved.`);
+  if (!owners.includes(String(entry.pid))) return false;
+  return apiReady(url);
+}
 
 export async function bootstrapDatabase() {
   await mkdir(join(runtimeRoot, 'logs'), { recursive: true });
@@ -108,33 +118,52 @@ export async function testEnvironment() {
 }
 async function startProvider(secrets) {
   const path = join(root, 'mock-provider/server.mjs');
-  const entry = await launch('provider', process.execPath, [path], { BNOC_MOCK_SECRET: secrets.mockSecret, BNOC_MOCK_ALLOWED_ORIGINS: 'http://127.0.0.1:8081,http://127.0.0.1:8083' }, path);
-  await waitUntil(() => running(entry) && apiReady('http://127.0.0.1:8082/health'), 'Mock provider');
+  const entry = await launch('provider', process.execPath, [path], { BNOC_MOCK_PORT: '8082', BNOC_MOCK_SECRET: secrets.mockSecret, BNOC_MOCK_ALLOWED_ORIGINS: 'http://127.0.0.1:8081,http://127.0.0.1:8083' }, path);
+  await waitUntil(() => nativeServiceReady(entry, 8082, 'http://127.0.0.1:8082/health'), 'Mock provider');
+}
+export async function applicationConfiguration(verification, directory = root) {
+  const port = verification ? 8083 : 8081, name = verification ? 'verification' : 'application';
+  const source = join(directory, 'backend/build/libs/bnoc-server-1.0.0.jar');
+  if (!await exists(source)) throw new Error('Application JAR missing. Run npm run server:build.');
+  const artifact = await retainArtifact(source, join(directory, '.local/bnoc-runtime/artifacts'));
+  const jar = artifact.path;
+  return { name, port, jar, artifactSha256: artifact.sha256, args: ['-jar', jar, `--server.port=${port}`], signature: `${jar} --server.port=${port}`, frontendRoot: join(directory, '.local/bnoc-runtime/jar-frontend') };
 }
 export async function startApplication(verification = false) {
+  const configuration = await applicationConfiguration(verification);
+  const { port, artifactSha256 } = configuration;
   const secrets = await bootstrapDatabase(); await startProvider(secrets);
-  const port = verification ? 8083 : 8081;
-  const jar = join(root, 'backend/build/libs/bnoc-server-1.0.0.jar');
-  if (!await exists(jar)) throw new Error('Application JAR missing. Run npm run server:build.');
-  const artifactSha256=createHash('sha256').update(await readFile(jar)).digest('hex');
-  if(verification && (await manifest()).verification?.artifactSha256!==artifactSha256) await stopService('verification');
+  const previous = (await manifest())[configuration.name];
+  if (previous && (previous.artifactSha256 !== artifactSha256 || previous.signature !== configuration.signature)) await stopService(configuration.name);
   const environment = {
     BNOC_PORT: String(port), BNOC_PUBLIC_URL: `http://127.0.0.1:${port}`,
     BNOC_DB_URL: `jdbc:mysql://127.0.0.1:3307/${verification ? 'bnoc_verify' : 'bnoc'}?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul`,
     BNOC_DB_USER: verification ? 'bnoc_verify' : 'bnoc_app', BNOC_DB_PASSWORD: verification ? secrets.verifyPassword : secrets.appPassword,
     BNOC_MOCK_SECRET: secrets.mockSecret, BNOC_PROVIDER_URL: 'http://127.0.0.1:8082', BNOC_INTEGRATION_MODE: 'competition',
     BNOC_FILE_ROOT: join(runtimeRoot, verification ? 'verify-attachments' : 'attachments'),
+    BNOC_FRONTEND_ROOT: configuration.frontendRoot,
     ...(verification ? { BNOC_GPS_POLL_MS: '1000', BNOC_CPCON_POLL_MS: '1000', BNOC_OPERATIONS_POLL_MS: '1000', BNOC_GPS_TIMEOUT_MS: '1000', BNOC_CPCON_TIMEOUT_MS: '1000', BNOC_OPERATIONS_TIMEOUT_MS: '1000' } : {})
   };
-  const entry = await launch(verification ? 'verification' : 'application', 'java', ['-jar', jar], environment, jar + '', { artifactSha256 });
-  await waitUntil(() => running(entry) && apiReady(`http://127.0.0.1:${port}/api/session`), 'BNOC application');
-  return { url: `http://127.0.0.1:${port}`, pid: entry.pid, mode: 'competition' };
+  const entry = await launch(configuration.name, 'java', configuration.args, environment, configuration.signature, { artifactSha256, artifactPath: configuration.jar });
+  await waitUntil(() => nativeServiceReady(entry, port, `http://127.0.0.1:${port}/api/session`), 'BNOC application');
+  return { url: `http://127.0.0.1:${port}`, pid: entry.pid, mode: 'competition', artifactSha256: entry.artifactSha256 };
+}
+function nativePortOwners(port) {
+  const result = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' });
+  if (result.error || result.stderr?.trim() || (result.status !== 0 && result.status !== 1)) throw new Error('Cannot verify native service port ownership; existing process preserved.');
+  return [...new Set(result.stdout.trim().split(/\s+/).filter(Boolean))];
+}
+export function assertNativePortOwnership(entry, port) {
+  const owners = nativePortOwners(port);
+  if (owners.length !== 1 || owners[0] !== String(entry.pid)) throw new Error('Cannot verify native service port ownership; existing process preserved.');
 }
 export async function stopService(name) {
   const entries = await manifest(), entry = entries[name];
   const owned = running(entry);
   if (owned === null) throw new Error('Process ownership cannot be checked in this restricted environment.');
   if (owned) {
+    const port = name === 'verification' ? 8083 : name === 'application' ? 8081 : null;
+    if (port && !entry.signature.endsWith(` --server.port=${port}`)) assertNativePortOwnership(entry, port);
     process.kill(entry.pid, 'SIGTERM');
     await waitUntil(async () => running(entry) === false, name + ' shutdown');
   }

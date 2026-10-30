@@ -23,6 +23,13 @@ export function focusFormError(container, fallback) {
   field.focus();
 }
 
+export function guidedRequestErrorStep(errors) {
+  const contactFields = ['contact','personalContact','documentRef','schedulePreferences','date','maintenanceTarget','department','rank','name','phone',
+    'maintenanceTarget.department','maintenanceTarget.rank','maintenanceTarget.name','maintenanceTarget.phone'];
+  if (contactFields.some(key => errors[key])) return 'contact';
+  return errors.requesterRef ? 'requester' : null;
+}
+
 export function saveFailureMessage(result) {
   return result.message ?? (result.errorCode === 'UNAUTHENTICATED'
     ? '로그인이 만료됐습니다. 다시 로그인하세요. 입력 내용은 유지됩니다.'

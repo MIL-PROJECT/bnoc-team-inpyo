@@ -47,6 +47,44 @@ class ScheduleAfterActionContractTest {
         assertEquals("VALIDATION", assertThrows(BusinessFailure::class.java) { createRequest(listOf(mapOf("rank" to 1, "date" to "2026-10-22", "period" to "EVENING"))) }.code)
     }
 
+    @Test fun `request lists read preferences once without changing individual records locks or rank order`() {
+        val source=db.jdbc.dataSource!!
+        val reads=mutableListOf<String>()
+        fun invoke(target:Any,method:java.lang.reflect.Method,args:Array<out Any?>?):Any? = try { method.invoke(target,*(args ?: emptyArray())) } catch(error:java.lang.reflect.InvocationTargetException) { throw error.targetException }
+        fun track(connection:java.sql.Connection):java.sql.Connection = java.lang.reflect.Proxy.newProxyInstance(java.sql.Connection::class.java.classLoader,arrayOf(java.sql.Connection::class.java)) { _,method,args ->
+            if(method.name=="prepareStatement" && args?.firstOrNull() is String)reads.add(args[0] as String)
+            val result=invoke(connection,method,args)
+            if(method.name=="createStatement")java.lang.reflect.Proxy.newProxyInstance(java.sql.Statement::class.java.classLoader,arrayOf(java.sql.Statement::class.java)) { _,call,values ->
+                if(call.name=="executeQuery" && values?.firstOrNull() is String)reads.add(values[0] as String)
+                invoke(result!!,call,values)
+            } else result
+        } as java.sql.Connection
+        val tracked=object:org.springframework.jdbc.datasource.AbstractDataSource() {
+            override fun getConnection()=track(source.connection)
+            override fun getConnection(username:String,password:String)=track(source.getConnection(username,password))
+        }
+        val storage=Database(JdbcTemplate(tracked))
+        fun preferenceReads()=reads.count { it.contains("FROM bnoc_request_schedule_preferences",ignoreCase=true) }
+        assertTrue(storage.requests().isEmpty());assertEquals(0,preferenceReads())
+        val none=createRequest()
+        val one=createRequest(listOf(mapOf("rank" to 1,"date" to "2026-11-01","period" to "AM")))
+        val two=createRequest(listOf(mapOf("rank" to 1,"date" to "2026-11-02","period" to "PM"),mapOf("rank" to 2,"date" to "2026-11-03","period" to "AM")))
+        db.jdbc.update("DELETE FROM bnoc_request_schedule_preferences WHERE request_number=?",two)
+        db.jdbc.update("INSERT INTO bnoc_request_schedule_preferences VALUES (?,?,?,?),(?,?,?,?)",two,2,"2026-11-03","AM",two,1,"2026-11-02","PM")
+        db.jdbc.update("UPDATE bnoc_requests SET requested_schedule=? WHERE request_number=?","2026-10-21T03:30:00Z",none)
+        db.jdbc.update("UPDATE bnoc_requests SET updated_at=?","2026-10-28T00:00:00Z")
+        val expected=listOf(two,one,none).map { db.request(it)!!.copy(attachments=emptyList()) }
+        reads.clear();val actual=storage.requests()
+        assertEquals(expected,actual,"BULK_PREFERENCES_MUST_PRESERVE_EVERY_REQUEST_FIELD_AND_ORDER")
+        assertEquals(listOf(1,2),actual.single { it.number==two }.schedulePreferences.map { it.rank })
+        assertTrue(actual.single { it.number==none }.schedulePreferences.isEmpty())
+        println("REQUEST_PREFERENCE_READS requests=${actual.size} preferenceSelects=${preferenceReads()}")
+        assertEquals(1,preferenceReads(),"REQUEST_LIST_PREFERENCE_READS_MUST_BE_CONSTANT")
+        reads.clear();assertEquals(db.request(one),storage.request(one));assertEquals(1,preferenceReads())
+        reads.clear();TransactionTemplate(DataSourceTransactionManager(tracked)).executeWithoutResult { assertEquals(db.request(two),storage.request(two,true)) }
+        assertEquals(1,preferenceReads());assertTrue(reads.any { it.endsWith("FOR UPDATE") },"SINGLE_REQUEST_LOCK_MUST_REMAIN")
+    }
+
     @Test fun `team can save multiple hourly intervals and return correction restores the entire previous set`() {
         val number = createRequest(); var work = assigned(number)
         val intervals = listOf(slot("2026-10-22T01:00:00Z", "2026-10-22T03:00:00Z"), slot("2026-10-22T05:00:00Z", "2026-10-22T06:00:00Z"))

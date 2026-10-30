@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createServer } from 'node:net';
 import { root, runtimeRoot, bootstrapDatabase } from './bnoc-runtime.mjs';
+import { retainArtifact } from './bnoc-artifact.mjs';
+export { retainArtifact as retainPublicArtifact } from './bnoc-artifact.mjs';
 
 const directory = join(root, '.local/bnoc-public');
 const manifestPath = join(directory, 'services.json');
@@ -17,15 +19,6 @@ const providerPort = 8086;
 const mysqlHome = process.env.BNOC_MYSQL_HOME ?? join(root, '.local/dependencies/mysql-8.4.11-macos15-arm64');
 const tunnelBinary = join(root, '.local/dependencies/cloudflared/cloudflared');
 const exists = path => access(path).then(() => true, () => false);
-export async function retainPublicArtifact(source, destination) {
-  const bytes = await readFile(source), sha256 = createHash('sha256').update(bytes).digest('hex');
-  await mkdir(destination, { recursive: true, mode: 0o700 });
-  const path = join(destination, sha256 + '.jar');
-  try { await writeFile(path, bytes, { flag: 'wx', mode: 0o600 }); }
-  catch (error) { if (error.code !== 'EEXIST') throw error; }
-  if (createHash('sha256').update(await readFile(path)).digest('hex') !== sha256) throw new Error('Retained public artifact does not match its SHA.');
-  return { path, sha256 };
-}
 const json = async (path, fallback) => await exists(path) ? JSON.parse(await readFile(path, 'utf8')) : fallback;
 async function save(path, value) {
   await writeFile(path, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
@@ -119,7 +112,7 @@ async function startTunnel() {
 async function startApplication(url, secrets) {
   const source = join(root, 'backend/build/libs/bnoc-server-1.0.0.jar');
   if (!await exists(source)) throw new Error('Build the BNOC JAR before starting public access.');
-  const artifact = await retainPublicArtifact(source, join(directory, 'artifacts'));
+  const artifact = await retainArtifact(source, join(directory, 'artifacts'));
   const jar = artifact.path, artifactSha256 = artifact.sha256;
   const previous = await json(manifestPath, {});
   if ((previous.configuredUrl && previous.configuredUrl !== url) || (previous.artifactSha256 && previous.artifactSha256 !== artifactSha256) || (previous.application && previous.application.artifactPath !== jar)) {

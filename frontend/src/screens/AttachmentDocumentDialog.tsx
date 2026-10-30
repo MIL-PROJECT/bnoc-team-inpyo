@@ -61,7 +61,7 @@ export function AttachmentDocumentDialog({api,attachmentId,searchTerm,targetBloc
         </section>
         {!original&&canShowExtracted&&<aside className="document-dialog__metadata" aria-label="문서에서 찾은 정보"><h3>문서 정보</h3>{document.metadata.length?document.metadata.map((field,index)=><div key={`${field.blockId}-${index}`} data-document-metadata-index={index} data-document-metadata-target={targetMetadataIndex===index||undefined}><strong>{highlightText(field.label,searchTerm)}</strong><p>{highlightText(field.rawValue,searchTerm)}</p><details><summary>원문 근거{field.page?` · ${field.page}쪽`:field.blockId?` · ${field.blockId}`:''}</summary><p>{highlightText(field.evidence,searchTerm)}</p></details></div>):<p className="muted">표시할 항목이 없습니다.</p>}</aside>}
       </div>
-      {document.totalBlocks>50&&<footer className="document-dialog__footer"><button type="button" disabled={offset===0||loading} onClick={()=>void load(Math.max(0,offset-50))}>이전</button><span>{offset+1}~{Math.min(offset+50,document.totalBlocks)} / {document.totalBlocks}</span><button type="button" disabled={offset+50>=document.totalBlocks||loading} onClick={()=>void load(offset+50)}>다음</button></footer>}
+      {!original&&canShowExtracted&&document.totalBlocks>50&&<footer className="document-dialog__footer"><button type="button" disabled={offset===0||loading} onClick={()=>void load(Math.max(0,offset-50))}>이전</button><span>{offset+1}~{Math.min(offset+50,document.totalBlocks)} / {document.totalBlocks}</span><button type="button" disabled={offset+50>=document.totalBlocks||loading} onClick={()=>void load(offset+50)}>다음</button></footer>}
     </>}
   </dialog>;
 }

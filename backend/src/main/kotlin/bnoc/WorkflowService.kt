@@ -97,13 +97,16 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
         }
         return merged
     }
-    fun visible(actor:Actor,request:RequestRecord):Boolean=actor.role=="bnoc" || (actor.role=="requester" && request.requesterSubject==actor.id) || (actor.role=="team" && db.works(request.number).any { it.teamId==actor.teamId })
+    fun visible(actor:Actor,request:RequestRecord,works:List<WorkRecord>?=null):Boolean=actor.role=="bnoc" || (actor.role=="requester" && request.requesterSubject==actor.id) || (actor.role=="team" && (works?:db.works(request.number)).any { it.teamId==actor.teamId })
     fun canEdit(actor:Actor,request:RequestRecord):Boolean {
         if(request.status in listOf("취소","기각")) return false
         if(actor.role=="bnoc") return true
         if(actor.role!="requester" || request.requesterSubject!=actor.id) return false
         return db.works(request.number).filter { it.resolutionKind=="open" }.all { it.status=="배정" }
     }
+    fun canReject(actor:Actor,request:RequestRecord,works:List<WorkRecord> = db.works(request.number)):Boolean =
+        actor.role=="bnoc" && request.status in listOf("대기","문서 대기") &&
+            RequestStatus.summarize(request,works).works.all { it.status=="반환" && it.origin=="assigned" }
     fun execute(caller:Actor,command:Command):CommandResult {
         val actor=current(caller)
         val allowed=fields[command.type] ?: reject("VALIDATION",mapOf("type" to "허용된 명령이 아닙니다."))
@@ -127,7 +130,7 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
     private fun current(caller:Actor):Actor=db.actor(caller.id)?.takeIf { it.active } ?: reject("FORBIDDEN")
     private fun process(caller:Actor,command:Command,fp:String):CommandResult {
         // Keep eligibility reads and personnel changes in one commit order.
-        if(command.type in setOf("saveCentralPerson","saveAbsence","saveDutySchedule","saveDutyScheduleBatch","updateWork","returnWork","updateWorkDetails")) db.lockResource("personnel-directory")
+        if(command.type in setOf("saveCentralPerson","saveAbsence","saveAbsenceBatch","saveDutySchedule","saveDutyScheduleBatch","updateWork","returnWork","updateWorkDetails")) db.lockResource("personnel-directory")
         val actor=current(caller)
         val creating=command.type in setOf("createRequest","createAfterActionReport","createDirective")
         val operational=command.type in OperationsService.fields
@@ -283,9 +286,16 @@ class WorkflowService(val db:Database,transaction:TransactionTemplate,@param:Val
         history(actor,request,null,"상태",before,status);notify(status,request)
     }
     private fun rejectRequest(actor:Actor,request:RequestRecord,payload:Map<String,Any?>) {
-        if(request.status !in listOf("대기","문서 대기") || db.works(request.number).isNotEmpty()) reject("INVALID_STATE")
+        val works=db.works(request.number)
+        if(!canReject(actor,request,works)) reject("INVALID_STATE")
         val reason=text(payload,"reason",2000,true)
         val before=request.status;val at=now()
+        // Resolve returns together with rejection, without publishing intermediate request states.
+        works.filter { it.resolutionKind=="open" }.forEach { work ->
+            work.resolutionKind="withdrawn";work.resolutionReason="요청 기각";work.resolvedAt=at;work.resolvedByActor=actor.id
+            work.replacementWorkNumbers=emptyList();work.resolvedBy=emptyList();work.revision++
+            db.saveWork(work);history(actor,request,work,"반환 배정 해제",null,"요청 기각")
+        }
         request.status="기각";request.rejectionReason=reason;request.rejectedBy=actor.id;request.rejectedAt=at
         request.revision++;request.updatedAt=at;db.saveRequest(request)
         history(actor,request,null,"상태",before,"기각");history(actor,request,null,"기각 사유",null,reason)

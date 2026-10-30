@@ -15,6 +15,7 @@ class OperationsService(val db:Database) {
             "saveDepartmentContact" to setOf("department","phone"),
             "saveCentralPerson" to setOf("personRef","department","category","rank","displayName","serviceNumber","internalPhone","active"),
             "saveAbsence" to setOf("absenceRef","personRef","absenceType","startDate","endDate"),
+            "saveAbsenceBatch" to setOf("department","text"),
             "saveDutySchedule" to setOf("month","date","seat","personRefs"),
             "saveDutyScheduleBatch" to setOf("month","seat","entries","text","mode"))
     }
@@ -23,7 +24,7 @@ class OperationsService(val db:Database) {
     fun authorize(actor:Actor,command:Command) {
         when(command.type) {
             "savePersonnelRoster","saveDailyPersonnel","saveNightDuty" -> reject("FORBIDDEN")
-            "saveCentralPerson","saveAbsence" -> if(actor.role!="bnoc") reject("FORBIDDEN")
+            "saveCentralPerson","saveAbsence","saveAbsenceBatch" -> if(actor.role!="bnoc") reject("FORBIDDEN")
             "saveDutySchedule" -> {
                 val seat=text(command.payload,"seat",48,true)
                 if(!((actor.role=="bnoc" && seat in officerDutySeats) || (actor.role=="team" && seat=="team_night"))) reject("FORBIDDEN")
@@ -41,7 +42,7 @@ class OperationsService(val db:Database) {
     fun authorizeReceipt(actor:Actor,type:String,result:CommandResult) {
         when(type) {
             "savePersonnelRoster","saveDailyPersonnel","saveNightDuty" -> reject("FORBIDDEN")
-            "saveCentralPerson","saveAbsence" -> if(actor.role!="bnoc") reject("FORBIDDEN")
+            "saveCentralPerson","saveAbsence","saveAbsenceBatch" -> if(actor.role!="bnoc") reject("FORBIDDEN")
             "saveDutySchedule" -> {
                 val parts=result.publicRef?.split('|') ?: emptyList()
                 if(parts.size!=4 || !((actor.role=="bnoc" && parts[2] in officerDutySeats && parts[3]=="BNOC") || (actor.role=="team" && parts[2]=="team_night" && parts[3]==actor.teamId))) reject("FORBIDDEN")
@@ -62,6 +63,7 @@ class OperationsService(val db:Database) {
         "saveDepartmentContact" -> saveDepartmentContact(actor,command)
         "saveCentralPerson" -> saveCentralPerson(actor,command)
         "saveAbsence" -> saveAbsence(actor,command)
+        "saveAbsenceBatch" -> saveAbsenceBatch(actor,command)
         "saveDutySchedule" -> saveDutySchedule(actor,command)
         "saveDutyScheduleBatch" -> saveDutyScheduleBatch(actor,command)
         "createDirective","updateDirective" -> saveDirective(actor,command,workflow)
@@ -169,6 +171,41 @@ class OperationsService(val db:Database) {
         val after=mapOf("absenceRef" to ref,"personRef" to personRef,"absenceType" to type,"startDate" to start,"endDate" to end,"revision" to next)
         db.operationsHistory(actor,"personnel-absence",ref,beforeView,after)
         return CommandResult(publicRef=ref,revision=next)
+    }
+    private fun saveAbsenceBatch(actor:Actor,command:Command):CommandResult {
+        db.lockResource("personnel-directory")
+        revision(command,directoryRevision())
+        val department=text(command.payload,"department",100,true)
+        if(department !in db.departments) reject("VALIDATION",mapOf("department" to "부서를 선택하세요."))
+        val raw=text(command.payload,"text",20000,true)
+        val lines=raw.split(Regex("\\r?\\n")).mapIndexedNotNull { index,value -> value.trim().takeIf { it.isNotEmpty() }?.let { (index+1) to it } }
+        if(lines.isEmpty() || lines.size>100) reject("VALIDATION",mapOf("text" to "부재 목록은 1~100줄로 입력하세요."))
+        data class Entry(val line:Int,val personRef:String,val type:String,val start:String,val end:String)
+        val entries=lines.map { (line,value) ->
+            fun invalid(message:String):Nothing=reject("VALIDATION",mapOf("text" to "${line}줄: $message"))
+            val parts=value.split(Regex("\\s+"))
+            if(parts.size<5) invalid("계급 이름 구분 시작일 종료일 형식으로 입력하세요.")
+            val rank=parts.first();val name=parts.subList(1,parts.size-3).joinToString(" ");val type=parts[parts.size-3]
+            if(type !in absenceTypes) invalid("구분은 휴가·외박·출장·파견·교육·기타 중 하나로 입력하세요.")
+            fun day(value:String):String {
+                val normalized=if(value.matches(Regex("\\d{8}"))) "${value.substring(0,4)}-${value.substring(4,6)}-${value.substring(6,8)}" else value
+                return runCatching { dateValue(normalized) }.getOrElse { invalid("실제 날짜를 YYYY-MM-DD 또는 YYYYMMDD로 입력하세요.") }
+            }
+            val start=day(parts[parts.size-2]);val end=day(parts.last())
+            if(end<start) invalid("종료일은 시작일 이후로 입력하세요.")
+            val candidates=db.rows("SELECT r.person_ref FROM bnoc_roster r JOIN bnoc_personnel_profiles p ON p.person_ref=r.person_ref WHERE r.department=? AND r.display_name=? AND p.rank_name=? AND r.active=TRUE",department,name,rank)
+            if(candidates.size!=1) invalid("선택 부서의 활성 명부에서 계급·이름이 정확히 한 명과 일치해야 합니다.")
+            val ref=candidates.single()["person_ref"] as String
+            if(db.rows("SELECT absence_ref FROM bnoc_absences WHERE person_ref=? AND starts_on<=? AND ends_on>=?",ref,end,start).isNotEmpty()) invalid("기존 부재 기간과 겹칩니다.")
+            Entry(line,ref,type,start,end)
+        }
+        entries.forEachIndexed { index,entry ->
+            if(entries.take(index).any { it.personRef==entry.personRef && it.start<=entry.end && it.end>=entry.start })
+                reject("VALIDATION",mapOf("text" to "${entry.line}줄: 입력 목록의 같은 인원 부재 기간과 겹칩니다."))
+        }
+        // Validate every row before the first write; the command transaction also covers history and receipt.
+        entries.forEach { entry -> saveAbsence(actor,command.copy(expectedRevision=0,payload=mapOf("personRef" to entry.personRef,"absenceType" to entry.type,"startDate" to entry.start,"endDate" to entry.end))) }
+        return CommandResult(publicRef="absence-batch|$department",revision=1)
     }
     fun personnelSummary(actor:Actor,date:String,department:String?):Map<String,Any?> {
         if(actor.role !in listOf("bnoc","team")) reject("FORBIDDEN")
@@ -475,14 +512,15 @@ class OperationsService(val db:Database) {
             if(runs.isEmpty() || runs.size>1000) reject("VALIDATION")
             val normalizedRuns=runs.map { runValue ->
                 val run=runValue as? Map<*,*> ?: reject("VALIDATION")
-                if(run.keys.any { it !in setOf("text","bold","underline","size","color") }) reject("VALIDATION")
+                if(run.keys.any { it !in setOf("text","bold","italic","underline","size","color","font") }) reject("VALIDATION")
                 val text=run["text"] as? String ?: reject("VALIDATION")
                 if(text.any { it=='\u0000' } || text.length>10000) reject("VALIDATION")
-                if((run["bold"]!=null && run["bold"] !is Boolean) || (run["underline"]!=null && run["underline"] !is Boolean)) reject("VALIDATION")
+                if(listOf("bold","italic","underline").any { run[it]!=null && run[it] !is Boolean }) reject("VALIDATION")
                 val size=run["size"] as? Number
-                if(run["size"]!=null && size?.toDouble() !in listOf(16.0,20.0,24.0)) reject("VALIDATION")
+                if(run["size"]!=null && (size==null || size.toInt() !in 12..48 || size.toDouble()!=size.toInt().toDouble())) reject("VALIDATION")
+                if(run["font"]!=null && run["font"] !in listOf("sans-serif","serif","monospace")) reject("VALIDATION")
                 if(run["color"]!=null && run["color"] !in listOf("default","#1d4ed8","#b91c1c","#166534")) reject("VALIDATION")
-                mutableMapOf<String,Any?>("text" to text).also { normalized -> listOf("bold","underline","size","color").filter { run.containsKey(it) }.forEach { normalized[it]=run[it] } }
+                mutableMapOf<String,Any?>("text" to text).also { normalized -> listOf("bold","italic","underline","size","color","font").filter { run.containsKey(it) }.forEach { normalized[it]=run[it] } }
             }
             mutableMapOf<String,Any?>("type" to type).also { normalized -> if(list!=null) normalized["list"]=list;normalized["runs"]=normalizedRuns }
         }

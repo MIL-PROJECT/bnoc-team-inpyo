@@ -148,6 +148,8 @@ npm run server:start
 npm run server:status
 ```
 
+macOS 독립 실행은 `.local/bnoc-runtime/artifacts/<SHA>.jar` 보관본과 그 안의 화면을 함께 사용한다. 빌드만으로 실행 중인 파일·화면을 바꾸지 않는다. 새 빌드 후 `server:start` 또는 `server:verify-start`를 명시하면 해당 역할만 새 실행본으로 재기동하며 DB·첨부·비밀은 유지한다. 같은 빌드는 같은 실행을 유지한다. 구형 실행 기록을 교체할 때는 실제 해당 포트 소유를 확인하고 불명확하면 기존 프로세스를 보존한 채 중단한다. 보관 파일·실행 역할 검사는 `npm run test:runtime`을 사용한다. Docker 개발의 저장 자동 반영/HMR 경로는 기존대로다. native 준비 성공은 PID의 명령 서명·기대 포트의 단독 LISTEN 소유·기존 HTTP200/401을 함께 확인한다. 아직 바인딩/HTTP 준비 전이면 기다리며, 프로세스 종료·서명 불일치·다른 소유자·소유 확인 불가이면 실패한다. 타 프로세스를 종료하거나 포트를 바꾸지 않는다. native 제공자의 새 실행은 상위 환경과 관계없이 기존8082를 명시한다.
+
 제품은 8081, 별도 모의 제공자는 8082, 이 프로젝트의 MySQL은 3307에서 실행한다. 시작 실행기가 자기 서비스를 백그라운드로 유지한다. 새로고침과 업무 서버 재시작이 DB·첨부를 초기화하지 않는다. 비밀·DB·첨부·프로세스 기록은 Git에서 제외한 `.local/bnoc-runtime/`에 보관하며 기존 3306 DB를 사용하지 않는다. 종료는 `npm run server:stop`이다.
 
 공개 시연 실행기는 `npm run server:public-start`다. 공식 [cloudflared](https://developers.cloudflare.com/tunnel/downloads/)를 `.local/dependencies/cloudflared/cloudflared`에 준비하고 위 도구·JAR을 사용한다. 별도 8085 서버·8086 모의 제공자·`bnoc_public_demo` DB·`.local/bnoc-public/attachments`를 사용하며 기존 제품·검증 DB를 복제하지 않는다. 브라우저 로그인도 공개 서비스의 `/identity`를 사용한다. MySQL·컴퓨터·공개 서버·터널이 실행 중이어야 접속하며 터널을 새로 시작하면 주소가 바뀐다. 상태/현재 URL은 `npm run server:public-status`로 확인한다. 공개 실행은 JAR의 SHA별 보관 파일을 사용하므로 다음 빌드가 실행 파일을 덮어쓰지 않는다. 손상된 보관 파일은 실행하지 않는다. `node --test scripts/bnoc-public.test.mjs`로 원본 빌드 교체/새 SHA/손상 거절을 검사한다. 저장을 유지한 서버 재시작은 `npm run server:public-restart`, 공개 서비스만 종료하려면 `npm run server:public-stop`이다. 이는 상시 호스팅이 아니다.
@@ -165,6 +167,8 @@ npm run test:e2e
 npm run test:server-storage
 npm run test:server-sensitivity
 ```
+
+브라우저 검사는 `BNOC_TEST_EVIDENCE_DIR`가 없거나 빈 값이면 실행마다 `runtime/evidence/server-ui-*`의 새 전용 경로를 만들고 선택 경로를 출력한다. JSON·자동 산출물·수동 캡처는 worker까지 이 경로를 공유한다. 명시한 경로는 유지하므로 기존 결과가 없는 본인 경로를 지정한다. 공백만 있는 값은 거절하며 유효 경로의 공백은 제거하지 않는다. `--list`는 경로를 만들거나 JSON을 쓰지 않는다. 같은 명시 경로 재사용·공유 실행의 덮어쓰기까지 막는 규칙은 아니다.
 
 과거 데모의 단위 검사·업무 흐름 원본은 보존한다. 새 제품 검사는 API 사용·DB 보존을 확인하므로 새로고침 초기화를 기대하는 옛 브라우저 검사를 현재 제품의 합격 기준으로 사용하지 않는다. 실행 결과는 [개발 진행](docs/records/개발진행.md)과 [업무 검증 기록](docs/records/업무검증기록.md)에 연결한다. 2026-10-14 최종 JAR은 서버 35/35·화면 단위 48/48·모의 제공자 3/3·HTTP 26/26·전체 UI 54/54를 통과했다. 공개 HTTPS 독립 검증 10/10·두 브라우저/세 너비·공개 서버 재시작/첨부 보존도 확인했다. 2026-10-13의 실제 DB 동시 저장·롤백·재시작/첨부 보존과 당시 8081 검사 증거는 수행판을 구분해 보존한다.
 

@@ -120,6 +120,33 @@ class DocumentSearchContractTest {
         assertEquals("pending",item["status"])
     }
 
+    @Test fun `reusable search and processing status use the same directly registered scope`() {
+        val own=create("재사용 선택 검색어")
+        fun createFor(actor:Actor,ref:String?=null)=workflow.execute(actor,Command("createRequest",UUID.randomUUID().toString(),payload=mapOf(
+            "category" to "장비/체계","subcategories" to mapOf("systemType" to "인터넷","resourceType" to "PC","workType" to "지원"),
+            "detail" to "다른 신청","location" to "검증 위치","contact" to "1234"
+        )+(if(ref!=null)mapOf("requesterRef" to ref)else emptyMap()))).requestNumber!!
+        val proxy=createFor(bnoc,requester.subjectRef)
+        val other=db.actor("requester-secondary")!!
+        val foreign=createFor(other)
+        addAnalyzedAttachment(proxy,null,status="pending");addAnalyzedAttachment(foreign,null,status="pending")
+        val filter=mapOf("q" to "검색어","reusableOnly" to "true")
+        assertEquals(listOf(own),query.list(requester,filter).map { it["requestNumber"] })
+        assertEquals(0,query.documentSearchStatus(requester,filter)["total"],"REUSE_DOCUMENT_STATUS_MUST_EXCLUDE_PROXY_REQUESTS")
+        for(value in listOf(emptyMap(),mapOf("reusableOnly" to "false")))assertEquals(1,query.documentSearchStatus(requester,value+mapOf("q" to "일치하지 않는 검색어"))["total"])
+        addAnalyzedAttachment(own,null,status="pending")
+        assertTrue(query.list(requester,filter+mapOf("q" to "일치하지 않는 검색어")).isEmpty())
+        val pending=query.documentSearchStatus(requester,filter+mapOf("q" to "일치하지 않는 검색어"))
+        assertEquals(1,pending["total"])
+        assertEquals(own,((pending["items"] as List<*>).single() as Map<*,*>)["requestNumber"])
+        assertEquals(1,query.documentSearchStatus(other,emptyMap())["total"])
+        for(actor in listOf(bnoc,db.actor("team-wireless")!!)) {
+            assertEquals("FORBIDDEN",assertThrows(BusinessFailure::class.java) { query.list(actor,filter) }.code)
+            assertEquals("FORBIDDEN",assertThrows(BusinessFailure::class.java) { query.documentSearchStatus(actor,filter) }.code)
+        }
+        assertEquals("VALIDATION",assertThrows(BusinessFailure::class.java) { query.documentSearchStatus(requester,mapOf("reusableOnly" to "invalid")) }.code)
+    }
+
     @Test fun `partial document remains searchable but warns that only extracted text was searched`() {
         val number=create("요청 본문에는 해당 단어 없음")
         val attachment=addAnalyzedAttachment(number,"추출된 일부 본문",current=true,status="partial")
@@ -141,5 +168,58 @@ class DocumentSearchContractTest {
         assertTrue(query.list(bnoc,mapOf("q" to "010-1234")).isEmpty())
         assertTrue(query.list(bnoc,mapOf("q" to "정비 대상자")).isEmpty())
         assertEquals(number,query.list(bnoc,mapOf("q" to "일반 요청 본문")).single()["requestNumber"])
+    }
+
+    @Test fun `keyword search loads summaries only for matched visible requests`() {
+        val first=create("첫 번째 제외 요청")
+        val wanted=create("경쟁 검색어 요청")
+        val last=create("마지막 제외 요청")
+        val numbers=listOf(first,wanted,last)
+        val attachment=addAnalyzedAttachment(wanted,"경쟁 검색어 원문")
+        numbers.forEach { number ->
+            workflow.execute(bnoc,Command("assignTeams",UUID.randomUUID().toString(),requestNumber=number,
+                expectedRevision=db.request(number)!!.revision,payload=mapOf("teamIds" to listOf("무선반"),"priority" to "general")))
+        }
+        val source=db.jdbc.dataSource!!
+        val workReads=mutableListOf<String>()
+        fun track(connection:java.sql.Connection):java.sql.Connection =
+            java.lang.reflect.Proxy.newProxyInstance(java.sql.Connection::class.java.classLoader,arrayOf(java.sql.Connection::class.java)) { _,method,args ->
+                if(method.name=="prepareStatement") {
+                    val sql=args?.firstOrNull() as? String
+                    if(sql?.startsWith("SELECT * FROM bnoc_works WHERE request_number=?")==true)workReads.add(sql)
+                }
+                try { method.invoke(connection,*(args ?: emptyArray())) } catch(error:java.lang.reflect.InvocationTargetException) { throw error.targetException }
+            } as java.sql.Connection
+        val tracked=object:org.springframework.jdbc.datasource.AbstractDataSource() {
+            override fun getConnection()=track(source.connection)
+            override fun getConnection(username:String,password:String)=track(source.getConnection(username,password))
+        }
+        val storage=Database(JdbcTemplate(tracked))
+        val observed=QueryService(storage,WorkflowService(storage,TransactionTemplate(DataSourceTransactionManager(tracked))))
+        fun measure(actor:Actor,filter:Map<String,String>):Pair<List<Map<String,Any?>>,Int> {
+            workReads.clear()
+            val result=observed.list(actor,filter)
+            return result to workReads.size
+        }
+        for(actor in listOf(requester,bnoc,db.actor("team-wireless")!!)) {
+            val visibilityReads=if(actor.role=="team")numbers.size else 0
+            val (all,allReads)=measure(actor,emptyMap())
+            val (found,foundReads)=measure(actor,mapOf("q" to "경쟁 검색어"))
+            val (missing,missingReads)=measure(actor,mapOf("q" to "없는 검색어"))
+            println("SEARCH_WORK_READS role=${actor.role} all=$allReads hit=$foundReads miss=$missingReads")
+            assertEquals(listOf(last,wanted,first),all.map { it["requestNumber"] })
+            assertEquals(listOf(wanted),found.map { it["requestNumber"] })
+            assertEquals(all.single { it["requestNumber"]==wanted },found.single()-"matches")
+            val matches=found.single()["matches"] as List<*>
+            assertEquals(listOf("document","request"),matches.map { (it as Map<*,*>)["source"] })
+            assertEquals(attachment,(matches.first() as Map<*,*>)["attachmentRef"])
+            assertTrue(missing.isEmpty())
+            assertEquals(numbers.size+visibilityReads,allReads)
+            assertTrue(foundReads<=1+visibilityReads,"NON_MATCHING_REQUESTS_MUST_NOT_LOAD_SUMMARIES role=${actor.role} reads=$foundReads")
+            assertEquals(visibilityReads,missingReads,"NO_MATCH_MUST_SKIP_SUMMARY_READS role=${actor.role}")
+        }
+        val (hidden,hiddenReads)=measure(db.actor("requester-secondary")!!,mapOf("q" to "경쟁 검색어"))
+        assertTrue(hidden.isEmpty())
+        assertEquals(0,hiddenReads,"HIDDEN_REQUESTS_MUST_NOT_LOAD_SUMMARIES")
     }
 }

@@ -110,4 +110,34 @@ class PlannedWorkContractTest {
         assertEquals("VALIDATION",assertThrows(BusinessFailure::class.java) { service.update(team,id,completed["revision"] as Long,"마무리 점검 수정",date(1),UUID.randomUUID().toString()) }.code)
         assertEquals("completed",db.plannedWork(id)!!.status)
     }
+
+    @Test fun `completed date can be corrected without reopening and remains bounded and replayable`() {
+        val created=create("완료일 정정",date(-5));val id=created["id"] as String
+        service.complete(team,id,1,date(-1),UUID.randomUUID().toString())
+        val operation=UUID.randomUUID().toString()
+        val updated=service.update(team,id,2,null,null,operation,date(-2))
+        assertEquals("완료",updated["status"],"PLANNED_DATE_CORRECTION_MUST_KEEP_COMPLETED")
+        assertEquals(date(-2),updated["completedDate"],"PLANNED_DATE_CORRECTION_MUST_PERSIST")
+        assertEquals(3L,updated["revision"])
+        assertEquals(true,service.update(team,id,2,null,null,operation,date(-2))["replayed"])
+        assertEquals("DUPLICATE_ACTION",assertThrows(BusinessFailure::class.java) { service.update(team,id,2,null,null,operation,date(-3)) }.code)
+        for(invalid in listOf(date(-6),date(1),"2026-02-30")) {
+            assertEquals("VALIDATION",assertThrows(BusinessFailure::class.java) { service.update(team,id,3,null,null,UUID.randomUUID().toString(),invalid) }.code)
+            assertEquals(date(-2),db.plannedWork(id)!!.completedDate)
+        }
+        assertEquals("NOT_FOUND",assertThrows(BusinessFailure::class.java) { service.update(otherTeam,id,3,null,null,UUID.randomUUID().toString(),date()) }.code)
+        assertEquals("FORBIDDEN",assertThrows(BusinessFailure::class.java) { service.update(requester,id,3,null,null,UUID.randomUUID().toString(),date()) }.code)
+        val moved=service.update(team,id,3,null,date(-1),UUID.randomUUID().toString(),date())
+        assertEquals(date(-1),moved["firstWorkDate"])
+        assertEquals(date(),moved["completedDate"])
+        assertEquals("완료",(service.list(team,date())["completed"] as List<*>).map { it as Map<*,*> }.single()["status"])
+    }
+
+    @Test fun `completion date cannot complete an in progress work through update`() {
+        val created=create();val id=created["id"] as String
+        assertEquals("INVALID_STATE",assertThrows(BusinessFailure::class.java) { service.update(team,id,1,null,null,UUID.randomUUID().toString(),date()) }.code)
+        assertEquals("in_progress",db.plannedWork(id)!!.status)
+        assertNull(db.plannedWork(id)!!.completedDate)
+        assertEquals(1L,db.plannedWork(id)!!.revision)
+    }
 }

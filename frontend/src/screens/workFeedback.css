@@ -1,0 +1,29 @@
+.request-ledger th,.request-ledger td { vertical-align:middle; }
+.request-ledger td:first-child { min-width:20rem; }
+.request-ledger th:not(:first-child),.request-ledger td:not(:first-child) { text-align:center; }
+.request-ledger td:last-child button { white-space:nowrap; }
+.request-list-requester { min-width:8rem; word-break:keep-all; }
+.request-list-category { white-space:nowrap; }
+.request-ledger .request-list-summary { white-space:pre-line; margin-block:.35rem; line-height:1.65; }
+.request-ledger .request-list-location { min-width:0; }
+.notification-copy { flex:1; min-width:0; }
+.notification-copy>.exception { margin-left:.6rem; }
+.notification-summary { margin:.2rem 0 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--color-muted); font-weight:400; }
+.notification-list .notification>span { flex:0 0 auto; }
+.notification-list .notification>.link { margin-right:0; flex:0 0 auto; }
+.overview-filters .overview-departments { display:flex; flex-wrap:wrap; align-items:center; gap: .25rem 1.25rem; padding:0 0 .5rem; border-bottom:1px solid var(--color-divider); }
+.overview-departments legend { margin-bottom:0; }
+.overview-departments .check { margin:0; }
+.department-work-chart { margin-block:1rem 1.5rem; }
+.department-work-chart h2 { margin:0; }
+.chart-legend { display:flex; gap:1rem; font-size:var(--text-small); margin:0; }
+.chart-legend span::before { content:''; display:inline-block; width:.7rem; height:.7rem; margin-right:.4rem; background:var(--color-primary); }
+.chart-legend span:last-child::before { background:var(--color-success); }
+.department-chart-row { display:grid; grid-template-columns:11rem minmax(0,1fr) 10rem; align-items:center; gap:1rem; margin-top:.65rem; font-variant-numeric:tabular-nums; }
+.department-chart-row>strong { font-size:var(--text-small); }
+.department-chart-row>span { font-size:var(--text-small); text-align:right; }
+.department-chart-track { display:flex; height:1.1rem; background:var(--color-neutral-bg); }
+.department-chart-track>span { display:block; min-width:0; height:100%; }
+.department-chart-remaining { background:var(--color-primary); }
+.department-chart-completed { background:var(--color-success); }
+.department-comparison-section .department-comparison thead th:last-child { width:auto; text-align:center; }

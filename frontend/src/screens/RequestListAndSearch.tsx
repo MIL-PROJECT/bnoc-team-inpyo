@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type Dispatch, type SetStateAction } from 'react';
 import type { Actor, RequestSummary, RequestStatus } from '../types';
 import { priorityLabel, workStatusLabel } from '../types';
 import { useResource } from '../app/useResource';
@@ -7,17 +7,19 @@ import { describeConditions, QueryContext } from './QueryContext';
 import { DateInput } from '../ui/DateInput';
 import {Button} from '../ui/Button';
 import { StatusBadge } from '../ui/WorkflowStatus';
+import './workFeedback.css';
 const emptyCriteria = () => ({ requestNumber: '', q: '', status: '', category: '', teamId: '', location: '', requesterDeptOrName: '', from: '', to: '' });
-export function RequestListAndSearch({ actor, query, teams, revision = 0, onOpen, onOpenAttachment, onNew, onReuse }: {
+export const initialRequestSearchState=()=>({criteria:emptyCriteria(),applied:emptyCriteria(),page:0});
+export type RequestSearchState=ReturnType<typeof initialRequestSearchState>;
+export function RequestListAndSearch({ actor, query, teams, revision = 0, onOpen, onOpenAttachment, onNew, onReuse, searchState, onSearchStateChange }: {
   actor: Actor; query: any; teams: string[]; revision?: number; onOpen: (id: string) => void; onOpenAttachment: (requestNumber: string, attachmentId: string, searchTerm?: string, blockIndex?: number | null, metadataIndex?: number | null) => void; onNew: () => void; onReuse?:(number:string)=>Promise<void>
+  searchState:RequestSearchState;onSearchStateChange:Dispatch<SetStateAction<RequestSearchState>>;
 }) {
   const [reusing,setReusing]=useState(''),[reuseError,setReuseError]=useState('');
   const reuse=async(number:string)=>{if(!onReuse)return;setReusing(number);setReuseError('');try{await onReuse(number);}catch(reason){setReuseError(reason instanceof Error?reason.message:'이전 신청을 불러오지 못했습니다.');}finally{setReusing('');}};
-  const [criteria, setCriteria] = useState(emptyCriteria);
-  const [applied, setApplied] = useState(emptyCriteria);
-  const [page, setPage] = useState(0);
-  const set = (key: string, value: string) => setCriteria(previous => ({ ...previous, [key]: value }));
-  const context = { page, conditions: describeConditions([
+  const {criteria,applied,page}=searchState;
+  const set = (key: string, value: string) => onSearchStateChange(previous => ({...previous,criteria:{...previous.criteria,[key]:value}}));
+  const context = { page, q:applied.q, conditions: describeConditions([
     ['요청 번호', applied.requestNumber], ['상태', applied.status], ['요청 유형', applied.category],
     ['내용·문서', applied.q], ['작업반', applied.teamId], ['위치', applied.location],
     ['요청자 소속·이름', actor.role === 'bnoc' ? applied.requesterDeptOrName : undefined],
@@ -27,7 +29,7 @@ export function RequestListAndSearch({ actor, query, teams, revision = 0, onOpen
     requestNumber: applied.requestNumber, q: applied.q, status: applied.status ? [applied.status as RequestStatus] : undefined,
     category: applied.category, teamId: applied.teamId, location: applied.location,
     requesterDeptOrName: actor.role === 'bnoc' ? applied.requesterDeptOrName : undefined,
-    period: { from: applied.from, to: applied.to }, page, size: 20
+    period: { from: applied.from, to: applied.to }, page, size: 10
   }, signal), [actor.id, applied, query, revision, page], context);
   const list = result.data?.items ?? [];
   const ownRequests = actor.role === 'requester';
@@ -46,8 +48,8 @@ export function RequestListAndSearch({ actor, query, teams, revision = 0, onOpen
     <span className="request-overall-progress">전체 · {progressText(item)}</span>
   </div>;
   const displayedPage = result.success?.context?.page ?? page;
-  const search = (event: FormEvent) => { event.preventDefault(); setApplied({ ...criteria }); setPage(0); };
-  const reset = () => { const empty = emptyCriteria(); setCriteria(empty); setApplied(empty); setPage(0); };
+  const search = (event: FormEvent) => { event.preventDefault(); onSearchStateChange(previous=>({...previous,applied:{...previous.criteria},page:0})); };
+  const reset = () => onSearchStateChange(initialRequestSearchState());
   return <><div className="page-head"><div><h1>신청 목록</h1><small>{actor.role === 'requester' ? '내 신청' : actor.role === 'bnoc' ? '전체 신청' : '관련 신청'}</small></div>{['requester','bnoc'].includes(actor.role) && <button className="primary" onClick={onNew}>새 작업 신청</button>}</div>
     {reuseError&&<p role="alert" className="field-error">{reuseError}</p>}
     <form className="request-query" onSubmit={search}><div className="filter-primary filter-primary--search">
@@ -66,7 +68,7 @@ export function RequestListAndSearch({ actor, query, teams, revision = 0, onOpen
     <QueryContext success={result.success} loading={result.loading} error={result.error} draftChanged={JSON.stringify(criteria) !== JSON.stringify(applied)} />
     {result.data?.documentSearchIncomplete && <details className="notice search-incomplete" role="status"><summary>문서 {result.data.documentSearchStatuses?.total ?? 0}개는 검색에서 빠지거나 추출된 일부만 검색됐을 수 있습니다.</summary><p>일부 추출 문서는 추출된 본문만 검색합니다. 원문 전체의 일치 여부는 확인할 수 없습니다.</p><ul>{result.data.documentSearchStatuses?.items.map(item=><li key={item.attachmentRef}><button className="link" type="button" onClick={()=>onOpenAttachment(item.requestNumber,item.attachmentRef)}>{item.fileName} · {item.status==='pending'?'분석 대기':item.status==='processing'?'분석 중':item.status==='partial'?'일부 추출 · 추출 본문만 검색':item.status==='failed'?'분석 실패':item.status==='unreadable'?'읽기 불가':item.status==='no_text'?'본문 없음':item.status}</button> <small>요청 {item.requestNumber}</small></li>)}</ul>{result.data.documentSearchStatuses?.truncated && <small>나머지 {result.data.documentSearchStatuses.total-result.data.documentSearchStatuses.items.length}개는 표시를 줄였어요.</small>}</details>}
     {result.data && <p className="result-count">요청 {result.data.total}건</p>}
-    {list.length ? <div className="table-wrap"><table><thead><tr><th>신청</th>{!ownRequests && <th>요청자</th>}<th>유형</th><th>상태</th><th>일반·긴급</th><th>작업 진행</th>{ownRequests&&onReuse&&<th>다시 신청</th>}</tr></thead><tbody>{list.map(item => <tr key={item.requestNumber}><td><button className="link" onClick={() => onOpen(item.requestNumber)}>{item.requestNumber}</button>{item.matches?.slice(0,2).map((match,index)=><small className="request-search-match" key={index}><strong>{match.source==='document'?'문서':match.source==='classification'?'분류':'요청 내용'}</strong> · {match.source==='document' && match.attachmentRef ? <button className="link request-search-match__open" type="button" onClick={()=>onOpenAttachment(item.requestNumber,match.attachmentRef!,applied.q.trim(),match.blockIndex,match.metadataIndex)}>{match.text} · 문서 보기</button> : match.text}</small>)}</td>{!ownRequests && <td>{item.requesterDisplayText}</td>}<td>{item.category}</td><td><StatusBadge status={item.status} afterAction={item.afterAction} departments={item.teamIds} /></td><td>{priorityLabel(item.priority)}</td><td>{actor.role === 'team' ? teamProgress(item) : progressText(item)}</td>{ownRequests&&onReuse&&<td>{item.canReuse&&<Button disabled={!!reusing} onClick={()=>void reuse(item.requestNumber)} aria-label={`신청 ${item.requestNumber} 내용 불러오기`}>{reusing===item.requestNumber?'불러오는 중…':'내용 불러오기'}</Button>}</td>}</tr>)}</tbody></table></div> : result.data && <p className="empty">조건에 맞는 신청이 없습니다.</p>}
-    {result.data && <div className="actions pagination"><button disabled={page === 0 || result.loading} onClick={() => setPage(value => value - 1)}>이전 페이지</button><span>{displayedPage + 1}페이지{displayedPage !== page ? ` · 조회 선택 ${page + 1}페이지` : ''}</span><button disabled={(page + 1) * 20 >= result.data.total || result.loading} onClick={() => setPage(value => value + 1)}>다음 페이지</button></div>}
+    {list.length ? <div className="table-wrap"><table className="request-ledger"><thead><tr><th>신청·내용</th>{!ownRequests && <th>요청자</th>}<th>유형</th><th>상태</th><th>일반·긴급</th><th>작업 진행</th>{ownRequests&&onReuse&&<th>다시 신청</th>}</tr></thead><tbody>{list.map(item => <tr key={item.requestNumber}><td><button className="link" onClick={() => onOpen(item.requestNumber)}>{item.requestNumber}</button>{item.detailPreview&&<span className="request-list-summary">{item.detailPreview}</span>}{item.location&&<small className="request-list-location">위치 · {item.location}</small>}{item.matches?.slice(0,2).map((match,index)=><small className="request-search-match" key={index}><strong>{match.source==='document'?'문서':match.source==='classification'?'분류':'요청 내용'}</strong> · {match.source==='document' && match.attachmentRef ? <button className="link request-search-match__open" type="button" onClick={()=>onOpenAttachment(item.requestNumber,match.attachmentRef!,(result.success?.context?.q??'').trim(),match.blockIndex,match.metadataIndex)}>{match.text} · 문서 보기</button> : match.text}</small>)}</td>{!ownRequests && <td className="request-list-requester">{item.requesterDisplayText}</td>}<td className="request-list-category">{item.category}</td><td><StatusBadge status={item.status} afterAction={item.afterAction} departments={item.teamIds} /></td><td>{priorityLabel(item.priority)}</td><td>{actor.role === 'team' ? teamProgress(item) : progressText(item)}</td>{ownRequests&&onReuse&&<td>{item.canReuse&&<Button disabled={!!reusing} onClick={()=>void reuse(item.requestNumber)} aria-label={`신청 ${item.requestNumber} 내용 불러오기`}>{reusing===item.requestNumber?'불러오는 중…':'내용 불러오기'}</Button>}</td>}</tr>)}</tbody></table></div> : result.data && <p className="empty">조건에 맞는 신청이 없습니다.</p>}
+    {result.data && <div className="actions pagination"><button disabled={page === 0 || result.loading} onClick={() => onSearchStateChange(previous=>({...previous,page:previous.page-1}))}>이전 페이지</button><span>{displayedPage + 1}페이지{list.length ? ` · 신청 ${list[0].requestNumber}~${list[list.length-1].requestNumber}` : ''}{displayedPage !== page ? ` · 조회 선택 ${page + 1}페이지` : ''}</span><button disabled={(page + 1) * 10 >= result.data.total || result.loading} onClick={() => onSearchStateChange(previous=>({...previous,page:previous.page+1}))}>다음 페이지</button></div>}
   </>;
 }

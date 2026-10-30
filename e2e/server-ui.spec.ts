@@ -929,6 +929,7 @@ test('an HWP search result opens the matching document directly', async ({ page 
   const row = page.getByRole('row').filter({ hasText: number });
   const openDocument = row.getByRole('button', { name: /문서 보기/ });
   await expect(openDocument).toBeVisible();
+  await page.getByRole('textbox', { name: '내용·문서 검색' }).fill('아직 적용하지 않은 조건');
   await openDocument.click();
   const viewer = page.getByRole('dialog');
   await expect(viewer.getByRole('heading', { name, exact: true })).toBeVisible();
@@ -940,6 +941,10 @@ test('an HWP search result opens the matching document directly', async ({ page 
   await screenshot(page, info, 'hwp-search-viewer');
 
   await viewer.getByRole('button', { name: '닫기', exact: true }).click();
+  const returned=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/requests');
+  await page.getByRole('button',{name:'신청 목록',exact:true}).click();expect(new URL((await returned).url()).searchParams.get('q')).toBe('마이크');
+  await expect(page.getByRole('textbox',{name:'내용·문서 검색'})).toHaveValue('아직 적용하지 않은 조건');
+  await expect(page.getByRole('row').filter({hasText:number}).getByRole('button',{name:/문서 보기/})).toBeVisible();
   await page.route(url => new URL(url).pathname === '/api/requests', async route => {
     const response = await route.fetch();
     const payload = await response.json();
@@ -1001,6 +1006,109 @@ test('an HWP search result opens the matching document directly', async ({ page 
   await expect(historyViewer.getByRole('heading', { name, exact: true })).toBeVisible();
   await historyViewer.getByRole('button', { name: '추출 본문', exact: true }).click();
   await expect(historyViewer.locator('.document-dialog__body')).toContainText('마이크 점검');
+});
+
+const calendarToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+async function calendarNavigationFixture(page: Page, label: string) {
+  const date = `${Number(calendarToday().slice(0, 4)) + 1}-03-18`;
+  const fileName = `calendar-${randomUUID().slice(0, 8)}.txt`;
+  const session = await apiLogin(page, 'requester');
+  const uploaded = await page.request.post('/api/attachments?resourceKind=request', {
+    headers: { Origin: new URL(base).origin, 'X-CSRF-Token': session.csrfToken },
+    multipart: { file: { name: fileName, mimeType: 'text/plain', buffer: Buffer.from('calendar navigation document') } }
+  });
+  expect(uploaded.status()).toBe(200);
+  const attachment = (await uploaded.json()).data;
+  const created = await command(page, 'createRequest', { ...requestPayload(label), attachments: [{ id: attachment.id }] });
+  const number = created.requestNumber as string;
+  await apiLogin(page, 'bnoc');
+  const request = (await apiRead(page, `/api/requests/${number}`)).data;
+  await command(page, 'assignTeams', { teamIds: [wire], priority: 'general' }, { requestNumber: number, expectedRevision: request.revision });
+  await apiLogin(page, 'team-wireless');
+  const work = (await apiRead(page, `/api/requests/${number}`)).data.workItems[0];
+  await command(page, 'updateWork', { nextStatus: '작업 중', scheduleIntervals: [{ startsAt: `${date}T10:00:00+09:00`, endsAt: `${date}T12:00:00+09:00` }] }, { requestNumber: number, workNumber: work.workNumber, expectedRevision: work.revision });
+  await apiLogin(page, 'bnoc');
+  await page.goto('/schedule');
+  await expect(page.getByRole('heading', { name: '정비 일정', exact: true })).toBeVisible();
+  return { date, number, fileName, workNumber: work.workNumber as string };
+}
+async function expireCalendarSession(page: Page) {
+  const session = (await apiRead(page, '/api/session')).data;
+  expect((await page.request.post('/api/auth/logout', { headers: { Origin: new URL(base).origin, 'X-CSRF-Token': session.csrfToken }, data: {} })).status()).toBe(200);
+  await page.locator('.page-head').getByRole('button', { name: '새로고침', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '로그인 만료', exact: true })).toBeVisible();
+}
+
+test('calendar navigation: view and date survive detail, document, Back and menu with fresh queries', async ({ page }) => {
+  const fixture = await calendarNavigationFixture(page, '일정 상세 왕복');
+  const reads: string[] = [];
+  page.on('request', request => { const url = new URL(request.url()); if (request.method() === 'GET' && url.pathname === '/api/schedule') reads.push(url.search); });
+  const date = page.locator('input[type=date][aria-label="기준 날짜"]');
+  const card = () => page.locator('.calendar-item').filter({ hasText: `작업번호: ${fixture.workNumber} (` });
+  await page.getByRole('button', { name: '월', exact: true }).click();
+  await date.fill(fixture.date); await expect(card()).toBeVisible();
+  const monthPeriod = await page.locator('.calendar-period').innerText(), monthQuery = reads.at(-1);
+  expect(monthQuery).toBeTruthy();
+  await card().click(); await expect(page.getByRole('heading', { name: '신청 상세', exact: true })).toBeVisible();
+  const opener = page.getByRole('link', { name: fixture.fileName, exact: true }).locator('xpath=..').getByRole('button', { name: '문서 보기', exact: true });
+  await opener.click(); const viewer = page.getByRole('dialog');
+  await expect(viewer.getByRole('heading', { name: fixture.fileName, exact: true })).toBeVisible();
+  await viewer.getByRole('button', { name: '닫기', exact: true }).click();
+  await expect(viewer).toHaveCount(0); await expect(page).toHaveURL(new RegExp(`/requests/${fixture.number}$`));
+  const beforeBackReads = reads.length; await page.goBack();
+  await expect(date, 'CALENDAR_CONTEXT_MUST_SURVIVE_DETAIL_BACK').toHaveValue(fixture.date);
+  await expect(page.getByRole('button', { name: '월', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.calendar-period')).toHaveText(monthPeriod); await expect(card()).toBeVisible();
+  await expect.poll(() => reads.length).toBeGreaterThan(beforeBackReads); expect(reads.at(-1)).toBe(monthQuery);
+  await card().click(); await page.getByRole('button', { name: '신청 목록', exact: true }).click();
+  await expect(page).toHaveURL(/\/requests$/); await navItem(page, '정비 일정');
+  await expect(date).toHaveValue(fixture.date); await expect(page.getByRole('button', { name: '월', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  for (const mode of ['일', '주', '월']) {
+    await page.getByRole('button', { name: mode, exact: true }).click(); await expect(card()).toBeVisible();
+    await expect(page.locator('.calendar-grid')).toHaveClass(new RegExp(`calendar-${({ 일: 'single-day', 주: 'week', 월: 'month' } as Record<string, string>)[mode]}$`));
+    const period = await page.locator('.calendar-period').innerText();
+    await card().click(); await expect(page.getByRole('heading', { name: '신청 상세', exact: true })).toBeVisible(); await page.goBack();
+    await expect(date).toHaveValue(fixture.date); await expect(page.getByRole('button', { name: mode, exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.calendar-period')).toHaveText(period); await expect(card()).toBeVisible(); await noOverflow(page);
+  }
+  await page.getByRole('button', { name: '다음 기간', exact: true }).click(); await expect(date).toHaveValue(`${fixture.date.slice(0, 4)}-04-01`);
+  await page.getByRole('button', { name: '이전 기간', exact: true }).click(); await expect(date).toHaveValue(`${fixture.date.slice(0, 4)}-03-01`);
+  await page.getByRole('button', { name: '오늘', exact: true }).click(); await expect(date).toHaveValue(calendarToday());
+  await expect(page.getByRole('button', { name: '월', exact: true })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('calendar navigation: same-account reauthentication retains selection while account, logout and reload reset it', async ({ page }) => {
+  const fixture = await calendarNavigationFixture(page, '일정 계정 경계');
+  const date = page.locator('input[type=date][aria-label="기준 날짜"]');
+  const choose = async () => { await page.getByRole('button', { name: '월', exact: true }).click(); await date.fill(fixture.date); await expect(date).toHaveValue(fixture.date); await expect(page.locator('.calendar-grid')).toHaveClass(/calendar-month$/); await expect(page.locator('.calendar-item').filter({ hasText: `작업번호: ${fixture.workNumber} (` })).toBeVisible(); };
+  const defaultSelection = async () => { await expect(date).toHaveValue(calendarToday()); await expect(page.getByRole('button', { name: '주', exact: true })).toHaveAttribute('aria-pressed', 'true'); };
+  const storage = () => page.evaluate(() => ({ local: Object.keys(localStorage), session: Object.keys(sessionStorage) }));
+  const originalStorage = await storage(); await choose(); expect(await storage()).toEqual(originalStorage);
+  await expireCalendarSession(page); await loginWithPopup(page, 'bnoc'); await expect(page.getByRole('dialog', { name: '로그인 만료', exact: true })).toHaveCount(0);
+  await expect(date).toHaveValue(fixture.date); await expect(page.getByRole('button', { name: '월', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expireCalendarSession(page); await loginWithPopup(page, 'team-wireless'); await expect(page.getByRole('heading', { name: '우리 반 일정', exact: true })).toBeVisible(); await defaultSelection();
+  await choose(); await expireCalendarSession(page); await loginWithPopup(page, 'bnoc'); await expect(page.getByRole('heading', { name: '정비 일정', exact: true })).toBeVisible(); await defaultSelection();
+  await choose(); await switchWithPopup(page, 'bnoc'); await navItem(page, '정비 일정'); await defaultSelection();
+  await choose(); await page.reload(); await expect(page.getByRole('heading', { name: '정비 일정', exact: true })).toBeVisible(); await defaultSelection();
+  expect(await storage()).toEqual(originalStorage); await noOverflow(page);
+});
+
+test('document navigation: search page and unapplied criteria survive Back and same-account reauthentication only',async({page})=>{
+  await apiLogin(page,'requester');const marker=`탐색-${randomUUID()}`;const numbers:string[]=[];
+  for(let index=0;index<21;index++)numbers.push((await command(page,'createRequest',requestPayload(marker))).requestNumber as string);
+  await page.goto('/requests');const query=page.getByRole('textbox',{name:'내용·문서 검색'});
+  await query.fill(marker);await page.getByRole('button',{name:'검색',exact:true}).click();await expect(page.locator('.result-count')).toHaveText('요청 21건');
+  await page.getByRole('button',{name:'다음 페이지',exact:true}).click();await expect(page.locator('.pagination')).toContainText('2페이지');
+  await expect(page.getByRole('button',{name:numbers[0],exact:true})).toBeVisible();await query.fill('미적용 조건');
+  await page.getByRole('button',{name:numbers[0],exact:true}).click();await expect(page.getByRole('heading',{name:'신청 상세',exact:true})).toBeVisible();await page.goBack();
+  await expect(query).toHaveValue('미적용 조건');await expect(page.locator('.pagination')).toContainText('2페이지');await expect(page.getByRole('button',{name:numbers[0],exact:true})).toBeVisible();await expect(page.locator('.result-count')).toHaveText('요청 21건');
+  const session=(await apiRead(page,'/api/session')).data;
+  expect((await page.request.post('/api/auth/logout',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},data:{}})).status()).toBe(200);
+  await page.getByRole('button',{name:numbers[0],exact:true}).click();await expect(page.getByRole('dialog',{name:'로그인 만료'})).toBeVisible();
+  await loginWithPopup(page,'requester');await expect(page.getByRole('heading',{name:'신청 상세',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'신청 목록',exact:true}).click();await expect(query).toHaveValue('미적용 조건');await expect(page.locator('.pagination')).toContainText('2페이지');await expect(page.locator('.result-count')).toHaveText('요청 21건');
+  await switchWithPopup(page,'bnoc');await expect(query).toHaveValue('');await expect(page.locator('.pagination')).toContainText('1페이지');
+  await switchWithPopup(page,'requester');await expect(query).toHaveValue('');await expect(page.locator('.pagination')).toContainText('1페이지');
 });
 
 test('meeting support forms stay downloadable without exposing extracted content', async ({ page }) => {
@@ -1361,12 +1469,12 @@ test('SR-BE-017,018,022,023,031,032,033: explicit search, safe shared list and d
   await apiLogin(page, 'requester-secondary');
   await page.goto('/operations');
   await expect(page.getByRole('heading', { name: '부서별 작업 현황', exact: true })).toBeVisible();
-  await page.getByRole('combobox', { name: '부서', exact: true }).selectOption(wire);
+  await page.getByRole('group', { name: '부서 선택' }).getByLabel(wire, { exact: true }).check();
   await page.getByText('상세 조회 조건', { exact: true }).click();
   await page.getByRole('combobox', { name: '작업 유형', exact: true }).selectOption('지원');
   const filteredResponse = (index: number) => page.waitForResponse(response => {
     const url = new URL(response.url());
-    return url.pathname === '/api/work-overview' && response.request().method() === 'GET' && response.status() === 200 && url.searchParams.get('teamId') === wire && url.searchParams.get('workType') === '지원' && url.searchParams.get('page') === String(index);
+    return url.pathname === '/api/work-overview' && response.request().method() === 'GET' && response.status() === 200 && url.searchParams.get('teamIds') === wire && url.searchParams.get('workType') === '지원' && url.searchParams.get('page') === String(index);
   });
   const row = (publicNumber: string) => page.getByRole('row', { name: new RegExp(`(?:^|\\s)${publicNumber}(?:\\s|$)`) });
   const renderedPage = async (result: { page: number; data: { items: { workNumber?: string; requestNumber: string }[] } }) => {
@@ -1472,8 +1580,8 @@ test('SR-BE-023,036: shared work report shows aggregate and per-department compl
   const plannedBar = department.getByRole('progressbar', { name: `${wire} 계획 정비 완료율` });
   await expect(plannedBar).toHaveAttribute('aria-valuenow', '2');
   await expect(plannedBar).toHaveAttribute('aria-valuemax', '3');
-  await expect(department).toContainText('후보고 2건 포함');
-  await expect(department).toContainText('반환 1건 포함');
+  await expect(page.getByRole('columnheader', { name: '포함 내역', exact: true })).toHaveCount(0);
+  await expect(department).not.toContainText('반환 1건 포함');
   await expect(page.getByText(/확인 시각|집계 기준 시각/)).toHaveCount(0);
   await expect(page.getByText('작업 10건', { exact: true })).toBeVisible();
   await expect(page.locator('.shared-work-detail tbody tr')).toHaveCount(10);
@@ -1501,6 +1609,10 @@ test('SR-BE-026,035: standalone situation pages still require the existing login
 test('FR-038: status hover shows responsible departments and official contact availability; detail keeps the process', async ({ page }, info) => {
   const number = await seed(page, `상태 안내 ${info.project.name}`, [wire, '유선반']);
   await apiLogin(page, 'team-wireless');
+  const officialContacts = (await apiRead(page, '/api/department-contacts')).data.items as {department:string;phone:string}[];
+  const wirelessPhone = officialContacts.find(contact => contact.department === wire)!.phone;
+  const wiredPhone = officialContacts.find(contact => contact.department === '유선반')!.phone;
+  expect(wirelessPhone).toBeTruthy();expect(wiredPhone).toBeTruthy();
   await page.goto('/requests');
   const row = page.getByRole('row').filter({ has: page.getByRole('button', { name: number, exact: true }) });
   const requestStatus = row.getByRole('button', { name: '요청 전체 상태: 배정', exact: true });
@@ -1510,7 +1622,9 @@ test('FR-038: status hover shows responsible departments and official contact av
   await expect(requestTooltip).toContainText('담당 부서');
   await expect(requestTooltip).toContainText('무선반');
   await expect(requestTooltip).toContainText('유선반');
-  await expect(requestTooltip.getByText('대표번호 미등록', { exact: true })).toHaveCount(2);
+  await expect(requestTooltip.getByText(wirelessPhone, { exact: true })).toBeVisible();
+  await expect(requestTooltip.getByText(wiredPhone, { exact: true })).toBeVisible();
+  await expect(requestTooltip.getByText('대표번호 미등록', { exact: true })).toHaveCount(0);
   await expect(requestTooltip.locator('.workflow-status-steps')).toHaveCount(0);
   const requestHint = await requestTooltip.innerText();
   await requestTooltip.hover();
@@ -1525,7 +1639,8 @@ test('FR-038: status hover shows responsible departments and official contact av
   const teamTooltip = page.getByRole('tooltip');
   await expect(teamTooltip).toContainText('무선반');
   await expect(teamTooltip).not.toContainText('유선반');
-  await expect(teamTooltip.getByText('대표번호 미등록', { exact: true })).toHaveCount(1);
+  await expect(teamTooltip.getByText(wirelessPhone, { exact: true })).toBeVisible();
+  await expect(teamTooltip.getByText('대표번호 미등록', { exact: true })).toHaveCount(0);
   await expect(teamTooltip.locator('.workflow-status-steps')).toHaveCount(0);
   await teamTooltip.hover();
   await expect(teamTooltip).toBeVisible();
@@ -1547,7 +1662,9 @@ test('FR-038: status hover shows responsible departments and official contact av
   await bnocStatus.click();
   await expect(page).toHaveURL(/\/overview$/);
   await expect(page.getByRole('tooltip')).toContainText('유선반');
-  await expect(page.getByRole('tooltip').getByText('대표번호 미등록', { exact: true })).toHaveCount(2);
+  await expect(page.getByRole('tooltip').getByText(wirelessPhone, { exact: true })).toBeVisible();
+  await expect(page.getByRole('tooltip').getByText(wiredPhone, { exact: true })).toBeVisible();
+  await expect(page.getByRole('tooltip').getByText('대표번호 미등록', { exact: true })).toHaveCount(0);
   await noOverflow(page);
   await screenshot(page, info, 'status-guide-detail');
 });
@@ -1898,6 +2015,9 @@ test('FR-049, SR-BE-016,024,025,027,033: completed after-action report, departme
   const reportedNumber = new URL(page.url()).pathname.split('/').at(-1);
   expect(reportedNumber).toBeTruthy();
   const reportedWork = (await apiRead(page, `/api/requests/${reportedNumber}`)).data.workItems[0];
+  const reportContacts = (await apiRead(page, '/api/department-contacts')).data.items as {department:string;phone:string}[];
+  const reportDepartmentPhone = reportContacts.find(contact => contact.department === wire)!.phone;
+  expect(reportDepartmentPhone).toBeTruthy();
   expect(reportedWork.actualStartedAt).toBe('2026-10-12T14:59:00Z');
   expect(reportedWork.completion.completedAt).toBe('2026-10-12T15:00:00Z');
   await page.goto('/requests');
@@ -1908,7 +2028,8 @@ test('FR-049, SR-BE-016,024,025,027,033: completed after-action report, departme
   const afterActionTooltip = page.locator(`#${await afterActionStatus.getAttribute('aria-describedby')}`);
   await expect(afterActionTooltip).toContainText('수행 부서');
   await expect(afterActionTooltip).toContainText('무선반');
-  await expect(afterActionTooltip).toContainText('대표번호 미등록');
+  await expect(afterActionTooltip).toContainText(reportDepartmentPhone);
+  await expect(afterActionTooltip).not.toContainText('대표번호 미등록');
   await expect(afterActionTooltip).not.toContainText('000-0000');
   await expect(afterActionTooltip.locator('.workflow-status-step')).toHaveCount(0);
   const afterActionTeamStatus = afterActionListRow.getByRole('button', { name: '우리 반 작업 상태: 완료', exact: true });
@@ -1917,7 +2038,8 @@ test('FR-049, SR-BE-016,024,025,027,033: completed after-action report, departme
   const afterActionTeamTooltip = page.locator(`#${await afterActionTeamStatus.getAttribute('aria-describedby')}`);
   await expect(afterActionTeamTooltip).toContainText('수행 부서');
   await expect(afterActionTeamTooltip).toContainText('무선반');
-  await expect(afterActionTeamTooltip).toContainText('대표번호 미등록');
+  await expect(afterActionTeamTooltip).toContainText(reportDepartmentPhone);
+  await expect(afterActionTeamTooltip).not.toContainText('대표번호 미등록');
   await page.goto('/schedule');
   await page.getByLabel(/기준 날짜|조회 날짜/).fill('2026-10-12');
   const completedCard = page.locator('.calendar-item').filter({ hasText: `작업번호: ${reportedWork.workNumber}` });
@@ -2611,4 +2733,582 @@ test('FR-052: fixed duty slots keep empty positions and battalion B saves withou
   await apiLogin(page,'requester');await openDate();
   await expect(page.locator('.duty-editor')).toHaveCount(0);await expect(board.getByRole('region',{name:'A대대 일직사관',exact:true})).toContainText(names[0]);await expect(board.getByRole('region',{name:'B대대 일직사관',exact:true})).toContainText(names[1]);
   for(const entry of (await apiRead(page,`/api/duty-schedules?month=${month}`)).data.entries)for(const person of entry.people)expect(Object.keys(person).sort()).toEqual(['displayName','rank']);
+});
+
+async function sessionBoundaryAccount(admin: ApiSurface, subjectRef: string) {
+  const account = (await apiRead(admin, '/api/access-assignments?size=100')).data.items.find((item: { subjectRef: string }) => item.subjectRef === subjectRef);
+  expect(account, 'the separately authenticated administrator sees the existing subject').toBeTruthy();
+  return account;
+}
+async function sessionBoundaryChangeRole(admin: ApiSurface, subjectRef: string, role: 'requester' | 'bnoc') {
+  const current = await sessionBoundaryAccount(admin, subjectRef);
+  await command(admin, 'changeAccess', { subjectRef, role, department: role === 'bnoc' ? '' : current.department, departmentManager: false, active: true }, { expectedRevision: current.revision });
+  const changed = await sessionBoundaryAccount(admin, subjectRef);
+  expect(changed.subjectRef).toBe(subjectRef); expect(changed.role).toBe(role);
+}
+async function sessionBoundaryRestoreRole(admin: ApiSurface, original: { subjectRef: string; role: string; department: string; teamId?: string | null; departmentManager: boolean; active: boolean }) {
+  const current = await sessionBoundaryAccount(admin, original.subjectRef);
+  if (['role', 'department', 'teamId', 'departmentManager', 'active'].every(key => (current[key] ?? null) === (original[key as keyof typeof original] ?? null))) return;
+  await command(admin, 'changeAccess', { subjectRef: original.subjectRef, role: original.role, department: original.department, ...(original.teamId ? { teamId: original.teamId } : {}), departmentManager: original.departmentManager, active: original.active }, { expectedRevision: current.revision });
+}
+async function sessionBoundaryExpire(page: Page) {
+  const session = (await apiRead(page, '/api/session')).data;
+  expect((await page.request.post('/api/auth/logout', { headers: { Origin: new URL(base).origin, 'X-CSRF-Token': session.csrfToken }, data: {} })).status()).toBe(200);
+  const detected = page.waitForResponse(response => response.status() === 401 && /^\/api\/(situation|notifications|work-overview)/.test(new URL(response.url()).pathname));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus'))); await detected;
+  await expect(page.getByRole('dialog', { name: '로그인 만료', exact: true })).toBeVisible();
+}
+async function sessionBoundaryReauthenticate(page: Page, subject: string, decision: 'cancel' | 'accept' = 'cancel') {
+  const dialogs: string[] = [];
+  const decide = async (dialog: { type(): string; accept(): Promise<void>; dismiss(): Promise<void> }) => {
+    dialogs.push(dialog.type()); await (decision === 'accept' ? dialog.accept() : dialog.dismiss());
+  };
+  page.on('dialog', decide);
+  try {
+    const opened = page.waitForEvent('popup'); await page.getByRole('button', { name: 'SSO 로그인', exact: true }).click(); const popup = await opened;
+    await expect(popup.getByRole('combobox')).toBeVisible(); await popup.getByRole('combobox').selectOption(subject);
+    const returned = page.waitForResponse(response => new URL(response.url()).pathname === '/api/session' && response.status() === 200);
+    const closed = popup.waitForEvent('close'); await popup.getByRole('button', { name: /인증|로그인/ }).click();
+    const session = (await (await returned).json()).data; await closed;
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    const finalStatus = (await page.request.get('/api/session')).status();
+    return { session, dialogs, finalStatus, expired: await page.getByRole('dialog', { name: '로그인 만료', exact: true }).isVisible() };
+  } finally { page.off('dialog', decide); }
+}
+async function sessionBoundaryPending(page: Page) {
+  return page.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith('bnoc:planned-create:')).sort().map(key => ({ key, value: sessionStorage.getItem(key) })));
+}
+
+test('session boundary: same-id role changes require explicit consent before discarding dirty input and completed attachments', async ({ page }) => {
+  const originalSession = await apiLogin(page, 'requester');
+  const adminRequest = await apiRequest.newContext({ baseURL: base }), admin = { request: adminRequest };
+  await apiLogin(admin, 'access-admin'); const original = await sessionBoundaryAccount(admin, originalSession.actor.id);
+  try {
+    const text = `역할 전환 입력 ${randomUUID()}`, fileName = `역할 전환 첨부-${randomUUID()}.txt`;
+    await page.goto('/new'); await fields(page, text);
+    const uploaded = page.waitForResponse(response => new URL(response.url()).pathname === '/api/attachments' && response.request().method() === 'POST');
+    await (await guidedAttachments(page)).setInputFiles({ name: fileName, mimeType: 'text/plain', buffer: Buffer.from('completed attachment before role transition') });
+    const upload = await uploaded; expect(upload.status()).toBe(200); const attachment = (await upload.json()).data; expect(attachment.id).toBeTruthy();
+    const exclusion = page.getByRole('button', { name: fileName + ' 첨부 제외', exact: true }); await expect(exclusion).toBeVisible(); await expectGuidedDetail(page, text);
+    const editor = (await page.locator('.guided-request-editor').elementHandle())!, attachmentRow = (await exclusion.locator('xpath=../..').elementHandle())!;
+    const writes: string[] = []; page.on('request', request => { const pathname = new URL(request.url()).pathname; if (/^(POST|PUT|PATCH|DELETE)$/.test(request.method()) && pathname.startsWith('/api/') && !pathname.startsWith('/api/auth/')) writes.push(pathname); });
+    await sessionBoundaryExpire(page); const same = await sessionBoundaryReauthenticate(page, 'requester');
+    expect(same.session.actor.id).toBe(originalSession.actor.id); expect(same.session.actor.role).toBe('requester'); expect(same.dialogs).toEqual([]); expect(same.finalStatus).toBe(200); expect(same.expired).toBe(false);
+    expect(await editor.evaluate(element => element.isConnected)).toBe(true); expect(await attachmentRow.evaluate(element => element.isConnected)).toBe(true); await expectGuidedDetail(page, text); await expect(exclusion).toBeVisible();
+
+    await sessionBoundaryChangeRole(admin, originalSession.actor.id, 'bnoc'); await sessionBoundaryExpire(page);
+    const cancelled = await sessionBoundaryReauthenticate(page, 'requester');
+    expect(cancelled.session.actor.id).toBe(originalSession.actor.id); expect(cancelled.session.actor.role).toBe('bnoc');
+    expect({ dialogs: cancelled.dialogs, status: cancelled.finalStatus, expired: cancelled.expired, editorRetained: await editor.evaluate(element => element.isConnected), attachmentRetained: await attachmentRow.evaluate(element => element.isConnected) }, 'ROLE_CHANGE_MUST_NOT_DROP_DIRTY_CONTEXT').toEqual({ dialogs: ['confirm'], status: 401, expired: true, editorRetained: true, attachmentRetained: true });
+    await expect(page.locator('.guided-request-editor')).toContainText(text); await expect(page.locator('.guided-request-editor')).toContainText(fileName);
+    expect(await editor.evaluate(element => Boolean(element.closest('[inert]')))).toBe(true); expect(new URL(page.url()).pathname).toBe('/new'); expect(writes).toEqual([]);
+
+    const accepted = await sessionBoundaryReauthenticate(page, 'requester', 'accept');
+    expect(accepted.dialogs).toEqual(['confirm']); expect(accepted.finalStatus).toBe(200); expect(accepted.expired).toBe(false); expect(accepted.session.actor.id).toBe(originalSession.actor.id); expect(accepted.session.actor.role).toBe('bnoc');
+    await expect(page.getByRole('heading', { name: '대리 등록', exact: true })).toBeVisible(); await expectGuidedEmpty(page);
+    expect(await editor.evaluate(element => element.isConnected)).toBe(false); expect(await attachmentRow.evaluate(element => element.isConnected)).toBe(false);
+    await expect(page.locator('.guided-request-editor')).not.toContainText(text); await expect(page.locator('.guided-request-editor')).not.toContainText(fileName); expect(writes).toEqual([]);
+  } finally { try { await sessionBoundaryRestoreRole(admin, original); } finally { await adminRequest.dispose(); } }
+});
+
+test('session boundary: same-id role changes cannot release an uncertain planned submission or its original operation', async ({ page }) => {
+  const originalSession = await apiLogin(page, 'team-wireless');
+  const adminRequest = await apiRequest.newContext({ baseURL: base }), admin = { request: adminRequest };
+  await apiLogin(admin, 'access-admin'); const original = await sessionBoundaryAccount(admin, originalSession.actor.id);
+  const submissions: Array<{ operationId: string; title: string; firstWorkDate: string }> = [];
+  let hideResult = true, committedId = '';
+  await page.route('**/api/planned-works', async route => {
+    if (route.request().method() === 'POST') {
+      submissions.push(route.request().postDataJSON());
+      if (hideResult) {
+        hideResult = false; const committed = await route.fetch(); expect(committed.status(), 'the original planned submission commits before its response is hidden').toBe(200);
+        const saved = (await committed.json()).data.plannedWork; committedId = saved.id;
+        expect(saved.title).toBe(submissions[0].title); expect(saved.firstWorkDate).toBe(submissions[0].firstWorkDate);
+        await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ code: 'SAVE_FAILED', message: '처리를 확인하지 못했습니다. 같은 제출 번호로 다시 확인하세요.' }) }); return;
+      }
+    }
+    await route.continue();
+  });
+  try {
+    const title = `역할 전환 미확정 ${randomUUID()}`; await page.goto('/requests?view=planned-maintenance');
+    const titleInput = page.getByLabel('작업 제목', { exact: true }), dateInput = page.locator('.planned-date-panel input[type="date"]');
+    await titleInput.fill(title); const date = await dateInput.inputValue(); await page.getByRole('button', { name: '작업 추가', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('같은 제출을 다시 확인하세요.'); await expect(titleInput).toBeDisabled(); await expect(dateInput).toBeDisabled();
+    expect(submissions).toHaveLength(1); expect(committedId).toBeTruthy(); const pending = await sessionBoundaryPending(page);
+    expect(pending).toHaveLength(1); expect(JSON.parse(pending[0].value!).operationId).toBe(submissions[0].operationId); expect(JSON.parse(pending[0].value!).firstWorkDate).toBe(date);
+    const form = (await page.locator('.planned-add').elementHandle())!;
+
+    await sessionBoundaryExpire(page); const same = await sessionBoundaryReauthenticate(page, 'team-wireless');
+    expect(same.dialogs).toEqual([]); expect(same.session.actor.id).toBe(originalSession.actor.id); expect(same.session.actor.role).toBe('team'); expect(same.finalStatus).toBe(200); expect(same.expired).toBe(false);
+    await expect(titleInput).toHaveValue(title); await expect(dateInput).toHaveValue(date); expect(await sessionBoundaryPending(page)).toEqual(pending); expect(await form.evaluate(element => element.isConnected)).toBe(true);
+    await navItem(page, '부서별 작업 현황'); await expect(page).toHaveURL(/view=planned-maintenance/); await expect(page.getByText('저장 결과를 계획 화면에서 확인한 뒤 이동할 수 있습니다.', { exact: true })).toBeVisible();
+
+    await sessionBoundaryChangeRole(admin, originalSession.actor.id, 'requester'); await sessionBoundaryExpire(page);
+    const rejected = await sessionBoundaryReauthenticate(page, 'team-wireless');
+    expect(rejected.session.actor.id).toBe(originalSession.actor.id); expect(rejected.session.actor.role).toBe('requester');
+    const frozen = await page.evaluate(() => { const title = document.querySelector<HTMLInputElement>('.planned-add input'), date = document.querySelector<HTMLInputElement>('.planned-date-panel input[type="date"]'), submit = document.querySelector<HTMLButtonElement>('.planned-add button[type="submit"]'); return { title: title?.value ?? null, date: date?.value ?? null, titleDisabled: title?.disabled ?? null, dateDisabled: date?.disabled ?? null, submit: submit?.textContent?.trim() ?? null, inert: Boolean(submit?.closest('[inert]')) }; });
+    expect({ dialogs: rejected.dialogs, status: rejected.finalStatus, expired: rejected.expired, formRetained: await form.evaluate(element => element.isConnected), frozen, pending: await sessionBoundaryPending(page), submitted: submissions.length }, 'ROLE_CHANGE_MUST_NOT_RELEASE_UNCERTAIN_GUARD').toEqual({ dialogs: [], status: 401, expired: true, formRetained: true, frozen: { title, date, titleDisabled: true, dateDisabled: true, submit: '같은 제출 재확인', inert: true }, pending, submitted: 1 });
+    expect(new URL(page.url()).searchParams.get('view')).toBe('planned-maintenance');
+
+    await sessionBoundaryRestoreRole(admin, original);
+    const restored = await sessionBoundaryReauthenticate(page, 'team-wireless'); expect(restored.dialogs).toEqual([]); expect(restored.finalStatus).toBe(200); expect(restored.expired).toBe(false); expect(restored.session.actor.id).toBe(originalSession.actor.id); expect(restored.session.actor.role).toBe('team');
+    await expect(titleInput).toHaveValue(title); await expect(dateInput).toHaveValue(date); expect(await sessionBoundaryPending(page)).toEqual(pending);
+    await navItem(page, '부서별 작업 현황'); await expect(page).toHaveURL(/view=planned-maintenance/); expect(submissions).toHaveLength(1);
+    await page.getByRole('button', { name: '같은 제출 재확인', exact: true }).click(); await expect(page.locator('.planned-item').filter({ hasText: title })).toBeVisible();
+    expect(submissions).toHaveLength(2); expect(submissions[1]).toEqual(submissions[0]);
+    const current = (await apiRead(page, `/api/planned-works?workDate=${date}`)).data;
+    const matching = [...current.inProgress, ...current.completed].filter((item: { title: string }) => item.title === title); expect(matching).toHaveLength(1); expect(matching[0].id).toBe(committedId);
+    await expect.poll(() => sessionBoundaryPending(page)).toEqual([]);
+  } finally { try { await sessionBoundaryRestoreRole(admin, original); } finally { await page.unroute('**/api/planned-works'); await adminRequest.dispose(); } }
+});
+
+type PlannedEditItem = { id: string; title: string; firstWorkDate: string; revision: number };
+function plannedEditDates() {
+  const queryDate = calendarToday();
+  const shifted = (days: number) => { const date = new Date(`${queryDate}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10); };
+  return { queryDate, originalDate: shifted(-2), changedDate: shifted(-1), nextQueryDate: shifted(1) };
+}
+async function plannedEditCreate(surface: ApiSurface, title: string, firstWorkDate: string): Promise<PlannedEditItem> {
+  const session = (await apiRead(surface, '/api/session')).data;
+  const response = await surface.request.post('/api/planned-works', { headers: { Origin: new URL(base).origin, 'X-CSRF-Token': session.csrfToken }, data: { operationId: randomUUID(), title, firstWorkDate } });
+  expect(response.status()).toBe(200); const item = (await response.json()).data.plannedWork;
+  expect(item).toMatchObject({ title, firstWorkDate, revision: 1 }); return item;
+}
+async function plannedEditCurrent(surface: ApiSurface, id: string, workDate: string): Promise<PlannedEditItem> {
+  const list = (await apiRead(surface, `/api/planned-works?workDate=${workDate}`)).data;
+  const item = [...list.inProgress, ...list.completed].find((item: PlannedEditItem) => item.id === id);
+  expect(item, 'the same authorized planned item remains in the queried list').toBeTruthy(); return item;
+}
+async function plannedEditOpen(page: Page, item: PlannedEditItem, workDate: string) {
+  await page.goto('/requests?view=planned-maintenance');
+  const selected = page.locator('.planned-date-panel input[type="date"]'); await expect(selected).toBeVisible();
+  if (await selected.inputValue() !== workDate) {
+    const changed = page.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/planned-works' && new URL(response.url()).searchParams.get('workDate') === workDate);
+    await selected.fill(workDate); expect((await changed).status()).toBe(200);
+  }
+  await page.locator('.planned-item').filter({ has: page.getByRole('heading', { name: item.title, exact: true }) }).getByRole('button', { name: '수정', exact: true }).click();
+  await expect(page.locator('.planned-edit').getByLabel('작업 제목', { exact: true })).toHaveValue(item.title);
+  await expect(page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true })).toHaveValue(item.firstWorkDate);
+}
+async function plannedEditSnapshot(page: Page) {
+  return page.evaluate(() => {
+    const forms = document.querySelectorAll('.planned-edit'), form = forms[0];
+    return { count: forms.length, title: form?.querySelector<HTMLInputElement>('input:not([type="date"])')?.value ?? null, firstWorkDate: form?.querySelector<HTMLInputElement>('input[type="date"]')?.value ?? null, saveDisabled: form?.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled ?? null };
+  });
+}
+async function plannedEditDiscardAction(page: Page, decision: 'cancel' | 'accept', action: () => Promise<void>) {
+  const dialogs: string[] = [];
+  const handler = async (dialog: { type(): string; accept(): Promise<void>; dismiss(): Promise<void> }) => { dialogs.push(dialog.type()); await (decision === 'accept' ? dialog.accept() : dialog.dismiss()); };
+  page.on('dialog', handler);
+  try { await action(); return dialogs; } finally { page.off('dialog', handler); }
+}
+function plannedEditTrackWrites(page: Page) {
+  const writes: string[] = [];
+  page.on('request', request => { const pathname = new URL(request.url()).pathname; if (/^(POST|PUT|PATCH|DELETE)$/.test(request.method()) && pathname.startsWith('/api/') && !pathname.startsWith('/api/auth/')) writes.push(`${request.method()} ${pathname}`); });
+  return writes;
+}
+
+test('planned edit: same-account reauthentication retains a dirty edit during and after a held refresh', async ({ page }) => {
+  const original = await apiLogin(page, 'team-wireless'), dates = plannedEditDates();
+  const item = await plannedEditCreate(page, `재조회 편집 보호 ${randomUUID()}`, dates.originalDate);
+  await plannedEditOpen(page, item, dates.queryDate); await page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true }).fill(dates.changedDate);
+  const writes = plannedEditTrackWrites(page); await sessionBoundaryExpire(page);
+  let release!: () => void, held = false, holdReady!: (item: PlannedEditItem) => void;
+  const gate = new Promise<void>(resolve => { release = resolve; }), fetched = new Promise<PlannedEditItem>(resolve => { holdReady = resolve; });
+  const delivered = page.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/planned-works' && new URL(response.url()).searchParams.get('workDate') === dates.queryDate && response.status() === 200);
+  await page.route('**/api/planned-works?**', async route => {
+    if (!held && route.request().method() === 'GET' && new URL(route.request().url()).searchParams.get('workDate') === dates.queryDate) {
+      held = true; const response = await route.fetch(); expect(response.status()).toBe(200); const list = (await response.json()).data;
+      const current = [...list.inProgress, ...list.completed].find((value: PlannedEditItem) => value.id === item.id); expect(current).toMatchObject({ id: item.id, title: item.title, revision: item.revision }); holdReady(current);
+      await gate; await route.fulfill({ response }); return;
+    }
+    await route.continue();
+  });
+  try {
+    const same = await sessionBoundaryReauthenticate(page, 'team-wireless');
+    expect(same.session.actor.id).toBe(original.actor.id); expect(same.session.actor.role).toBe('team'); expect(same.dialogs).toEqual([]); expect(same.finalStatus).toBe(200); expect(same.expired).toBe(false);
+    expect(await fetched).toMatchObject({ id: item.id, revision: 1 }); await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(await plannedEditSnapshot(page), 'PLANNED_EDIT_DIRTY_MUST_SURVIVE_REFRESH').toEqual({ count: 1, title: item.title, firstWorkDate: dates.changedDate, saveDisabled: true });
+    await page.locator('.planned-edit').evaluate(form => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    expect(writes, 'an unconfirmed current target must not produce a PATCH even through the submit handler').toEqual([]);
+    expect(await plannedEditDiscardAction(page, 'cancel', () => navItem(page, '부서별 작업 현황')), 'PLANNED_EDIT_DIRTY_MUST_SURVIVE_REFRESH').toEqual(['confirm']);
+    expect(new URL(page.url()).searchParams.get('view')).toBe('planned-maintenance'); expect(await plannedEditSnapshot(page)).toMatchObject({ count: 1, title: item.title, firstWorkDate: dates.changedDate });
+    release(); expect((await delivered).status()).toBe(200); await expect(page.getByText('불러오는 중…', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.planned-edit').getByLabel('작업 제목', { exact: true })).toHaveValue(item.title); await expect(page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true })).toHaveValue(dates.changedDate);
+    await expect(page.locator('.planned-edit').getByRole('button', { name: '저장', exact: true })).toBeEnabled();
+    expect(await plannedEditDiscardAction(page, 'cancel', () => navItem(page, '부서별 작업 현황'))).toEqual(['confirm']); expect(new URL(page.url()).searchParams.get('view')).toBe('planned-maintenance');
+    const selected = page.locator('.planned-date-panel input[type="date"]');
+    expect(await plannedEditDiscardAction(page, 'cancel', () => page.getByRole('button', { name: '다음 날짜', exact: true }).click())).toEqual(['confirm']);
+    await expect(selected).toHaveValue(dates.queryDate); await expect(page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true })).toHaveValue(dates.changedDate);
+    expect(await plannedEditDiscardAction(page, 'accept', () => page.getByRole('button', { name: '다음 날짜', exact: true }).click())).toEqual(['confirm']);
+    await expect(selected).toHaveValue(dates.nextQueryDate); await expect(page.locator('.planned-edit')).toHaveCount(0);
+    await page.locator('.planned-item').filter({ has: page.getByRole('heading', { name: item.title, exact: true }) }).getByRole('button', { name: '수정', exact: true }).click();
+    await expect(page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true })).toHaveValue(dates.originalDate);
+    expect(await plannedEditDiscardAction(page, 'cancel', () => navItem(page, '부서별 작업 현황'))).toEqual([]); await expect(page).toHaveURL(/\/operations$/);
+    expect(writes).toEqual([]); expect(await plannedEditCurrent(page, item.id, dates.queryDate)).toMatchObject({ id: item.id, title: item.title, firstWorkDate: dates.originalDate, revision: 1 });
+  } finally { release(); await delivered.catch(() => null); await page.unroute('**/api/planned-works?**'); }
+});
+
+test('planned edit: an old draft keeps its opening revision after another session changes the item', async ({ page }) => {
+  const original = await apiLogin(page, 'team-wireless'), dates = plannedEditDates();
+  const item = await plannedEditCreate(page, `시작 버전 보호 ${randomUUID()}`, dates.originalDate), title2 = item.title + ' 다른 세션 수정';
+  await plannedEditOpen(page, item, dates.queryDate); await page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true }).fill(dates.changedDate);
+  const otherRequest = await apiRequest.newContext({ baseURL: base }), other = { request: otherRequest };
+  const patches: Array<{ revision: number; title: string; firstWorkDate: string }> = [];
+  page.on('request', request => { if (request.method() === 'PATCH' && new URL(request.url()).pathname === `/api/planned-works/${item.id}`) patches.push(request.postDataJSON()); });
+  try {
+    await apiLogin(other, 'team-wireless'); const session = (await apiRead(other, '/api/session')).data;
+    const external = await otherRequest.patch(`/api/planned-works/${item.id}`, { headers: { Origin: new URL(base).origin, 'X-CSRF-Token': session.csrfToken }, data: { operationId: randomUUID(), revision: item.revision, title: title2, firstWorkDate: dates.originalDate } });
+    expect(external.status()).toBe(200); expect((await external.json()).data.plannedWork).toMatchObject({ id: item.id, title: title2, firstWorkDate: dates.originalDate, revision: 2 });
+    await sessionBoundaryExpire(page);
+    const refreshed = page.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/planned-works' && new URL(response.url()).searchParams.get('workDate') === dates.queryDate && response.status() === 200);
+    const same = await sessionBoundaryReauthenticate(page, 'team-wireless'); expect(same.session.actor.id).toBe(original.actor.id); expect(same.session.actor.role).toBe('team'); expect(same.dialogs).toEqual([]); expect(same.finalStatus).toBe(200); expect(same.expired).toBe(false);
+    const list = (await (await refreshed).json()).data;
+    expect([...list.inProgress, ...list.completed].find((value: PlannedEditItem) => value.id === item.id)).toMatchObject({ id: item.id, title: title2, firstWorkDate: dates.originalDate, revision: 2 });
+    await expect(page.getByText('불러오는 중…', { exact: true })).toHaveCount(0); await expect(page.locator('.planned-edit').getByLabel('작업 제목', { exact: true })).toHaveValue(item.title); await expect(page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true })).toHaveValue(dates.changedDate);
+    const save = page.locator('.planned-edit').getByRole('button', { name: '저장', exact: true }); await expect(save).toBeEnabled(); expect(patches).toEqual([]);
+    const conflicted = page.waitForResponse(response => response.request().method() === 'PATCH' && new URL(response.url()).pathname === `/api/planned-works/${item.id}`);
+    await save.click(); const conflict = await conflicted, submitted = conflict.request().postDataJSON();
+    expect({ revision: submitted.revision, title: submitted.title, firstWorkDate: submitted.firstWorkDate, status: conflict.status() }, 'PLANNED_EDIT_MUST_KEEP_OPENING_REVISION').toEqual({ revision: 1, title: item.title, firstWorkDate: dates.changedDate, status: 409 });
+    expect(submitted).not.toHaveProperty('expectedRevision'); const failure = await conflict.json(); expect(failure.errorCode ?? failure.code).toBe('CONFLICT');
+    await expect(page.locator('.planned-edit').getByLabel('작업 제목', { exact: true })).toHaveValue(item.title); await expect(page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true })).toHaveValue(dates.changedDate);
+    expect(await plannedEditCurrent(other, item.id, dates.queryDate)).toMatchObject({ id: item.id, title: title2, firstWorkDate: dates.originalDate, revision: 2 }); expect(patches).toHaveLength(1);
+    await page.locator('.planned-edit').getByRole('button', { name: '취소', exact: true }).click(); await expect(page.locator('.planned-edit')).toHaveCount(0);
+    await page.locator('.planned-item').filter({ has: page.getByRole('heading', { name: title2, exact: true }) }).getByRole('button', { name: '수정', exact: true }).click();
+    await expect(page.locator('.planned-edit').getByLabel('작업 제목', { exact: true })).toHaveValue(title2); await expect(page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true })).toHaveValue(dates.originalDate);
+    await page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true }).fill(dates.changedDate);
+    const saved = page.waitForResponse(response => response.request().method() === 'PATCH' && new URL(response.url()).pathname === `/api/planned-works/${item.id}`);
+    await page.locator('.planned-edit').getByRole('button', { name: '저장', exact: true }).click(); const response = await saved;
+    expect(response.request().postDataJSON()).toMatchObject({ revision: 2, title: title2, firstWorkDate: dates.changedDate }); expect(response.status()).toBe(200);
+    expect((await response.json()).data.plannedWork).toMatchObject({ id: item.id, title: title2, firstWorkDate: dates.changedDate, revision: 3 });
+    await expect(page.locator('.planned-edit')).toHaveCount(0); expect(await plannedEditCurrent(other, item.id, dates.queryDate)).toMatchObject({ id: item.id, title: title2, firstWorkDate: dates.changedDate, revision: 3 }); expect(patches).toHaveLength(2);
+  } finally { await otherRequest.dispose(); }
+});
+
+test('planned edit: selecting another item asks before discarding a dirty draft and leaves clean switching silent', async ({ page }) => {
+  await apiLogin(page, 'team-wireless'); const dates = plannedEditDates();
+  const first = await plannedEditCreate(page, `편집 대상 A ${randomUUID()}`, dates.originalDate), second = await plannedEditCreate(page, `편집 대상 B ${randomUUID()}`, dates.originalDate);
+  const writes = plannedEditTrackWrites(page); await plannedEditOpen(page, first, dates.queryDate);
+  const edit = page.locator('.planned-edit'), secondRow = page.locator('.planned-item').filter({ has: page.getByRole('heading', { name: second.title, exact: true }) });
+  await edit.getByLabel('업무 날짜', { exact: true }).fill(dates.changedDate);
+  expect(await plannedEditDiscardAction(page, 'cancel', () => secondRow.getByRole('button', { name: '수정', exact: true }).click()), 'PLANNED_EDIT_TARGET_SWITCH_REQUIRES_DISCARD_CONFIRMATION').toEqual(['confirm']);
+  await expect(edit.getByLabel('작업 제목', { exact: true })).toHaveValue(first.title); await expect(edit.getByLabel('업무 날짜', { exact: true })).toHaveValue(dates.changedDate);
+  expect(await plannedEditDiscardAction(page, 'accept', () => secondRow.getByRole('button', { name: '수정', exact: true }).click())).toEqual(['confirm']);
+  await expect(edit.getByLabel('작업 제목', { exact: true })).toHaveValue(second.title); await expect(edit.getByLabel('업무 날짜', { exact: true })).toHaveValue(dates.originalDate);
+  const firstRow = page.locator('.planned-item').filter({ has: page.getByRole('heading', { name: first.title, exact: true }) });
+  expect(await plannedEditDiscardAction(page, 'cancel', () => firstRow.getByRole('button', { name: '수정', exact: true }).click())).toEqual([]);
+  await expect(edit.getByLabel('작업 제목', { exact: true })).toHaveValue(first.title); await expect(edit.getByLabel('업무 날짜', { exact: true })).toHaveValue(dates.originalDate);
+  expect(writes).toEqual([]);
+  for (const item of [first, second]) expect(await plannedEditCurrent(page, item.id, dates.queryDate)).toMatchObject({ id: item.id, title: item.title, firstWorkDate: dates.originalDate, revision: 1 });
+});
+
+async function focus15Paint(page: Page) {
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+}
+async function focus15Snapshot(page: Page) {
+  return page.evaluate(() => {
+    const form = document.querySelector('.planned-edit'), title = form?.querySelector<HTMLInputElement>('input:not([type="date"])'), date = form?.querySelector<HTMLInputElement>('input[type="date"]');
+    const active = document.activeElement, modal = document.querySelector<HTMLDialogElement>('dialog.reauth-dialog');
+    return {
+      count: document.querySelectorAll('.planned-edit').length, inline: document.querySelectorAll('.planned-item .planned-edit').length, retained: document.querySelectorAll('.planned-edit-retained').length,
+      active: document.activeElement === title ? 'title' : document.activeElement === date ? 'date' : 'outside',
+      title: title?.value ?? null, date: date?.value ?? null, selectionStart: title?.selectionStart ?? null, selectionEnd: title?.selectionEnd ?? null,
+      addTitle: document.querySelector<HTMLInputElement>('.planned-add input')?.value ?? null,
+      modalOwnsFocus: Boolean(document.activeElement?.closest('dialog[open]')), editorInert: Boolean(form?.closest('[inert]')),
+      documentHasFocus: document.hasFocus(), activeTag: active?.tagName ?? null, activeIsSsoButton: Boolean(active?.matches('dialog.reauth-dialog button.auth-button') && active.textContent?.trim() === 'SSO 로그인'),
+      modalOpen: Boolean(modal?.open), modalIsModal: Boolean(modal?.matches(':modal')), backgroundWorkFocused: Boolean(active?.closest('main,[inert],.planned-page')),
+    };
+  });
+}
+async function focus15NextKey(page: Page) {
+  return page.evaluateHandle(() => {
+    const observed = { targets: [] as Array<{ key: string; field: string; tag: string }> };
+    document.addEventListener('keydown', event => {
+      const target = event.target as Element;
+      observed.targets.push({ key: event.key, field: target.closest('dialog[open]') ? 'dialog' : target.closest('.planned-edit') ? target.getAttribute('type') === 'date' ? 'date' : 'title' : 'outside', tag: target.tagName });
+    }, { capture: true, once: true });
+    return observed;
+  });
+}
+async function focus15Hold(page: Page, item: PlannedEditItem, workDate: string) {
+  let release!: () => void, held = false, fetched: PlannedEditItem | undefined, inFlight: Promise<void> | undefined;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const delivered = page.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/planned-works' && new URL(response.url()).searchParams.get('workDate') === workDate && response.status() === 200);
+  const handler = async (route: import('@playwright/test').Route) => {
+    if (held || route.request().method() !== 'GET' || new URL(route.request().url()).searchParams.get('workDate') !== workDate) { await route.continue(); return; }
+    held = true;
+    inFlight = (async () => {
+      const response = await route.fetch(); expect(response.status()).toBe(200); const list = (await response.json()).data;
+      expect(list.workDate).toBe(workDate);
+      const current = [...list.inProgress, ...list.completed].find((value: PlannedEditItem) => value.id === item.id);
+      expect(current, 'the held body contains the same actual server row').toMatchObject({ id: item.id, title: item.title, firstWorkDate: item.firstWorkDate, revision: item.revision });
+      fetched = current; await gate; await route.fulfill({ response });
+    })();
+    await inFlight;
+  };
+  await page.route('**/api/planned-works?**', handler);
+  return {
+    async ready() { await expect.poll(() => fetched).toMatchObject({ id: item.id, revision: item.revision }); await focus15Paint(page); },
+    async deliver() {
+      release(); expect((await delivered).status()).toBe(200); await inFlight;
+      await page.waitForFunction(() => !document.querySelector('.planned-edit-retained') && document.querySelectorAll('.planned-edit').length === 1 && ![...document.querySelectorAll('.planned-page [role="status"]')].some(node => node.textContent?.includes('불러오는 중')));
+      await focus15Paint(page);
+    },
+    async close() { release(); try { await Promise.all([inFlight, delivered.catch(() => null)]); } finally { await page.unroute('**/api/planned-works?**', handler); } },
+  };
+}
+async function focus15Reauthenticate(page: Page, item: PlannedEditItem, workDate: string, actorId: string) {
+  await sessionBoundaryExpire(page); const holding = await focus15Hold(page, item, workDate);
+  try {
+    const same = await sessionBoundaryReauthenticate(page, 'team-wireless');
+    expect(same.session.actor.id).toBe(actorId); expect(same.session.actor.role).toBe('team'); expect(same.dialogs).toEqual([]); expect(same.finalStatus).toBe(200); expect(same.expired).toBe(false);
+    await holding.ready(); expect(await focus15Snapshot(page)).toMatchObject({ count: 1, retained: 1 }); return holding;
+  } catch (error) { await holding.close(); throw error; }
+}
+async function focus15Open(page: Page, item: PlannedEditItem, workDate: string) {
+  await plannedEditOpen(page, item, workDate); await focus15Paint(page);
+  expect(await focus15Snapshot(page), 'explicit edit start focuses its single inline title').toMatchObject({ count: 1, inline: 1, retained: 0, active: 'title', title: item.title, date: item.firstWorkDate });
+}
+async function focus15Caret4(page: Page) {
+  const title = page.locator('.planned-edit').getByLabel('작업 제목', { exact: true }); await title.click();
+  for (let count = 0, length = (await title.inputValue()).length; count < length; count++) await page.keyboard.press('ArrowLeft');
+  expect(await focus15Snapshot(page), 'actual ArrowLeft reaches the title start before the held response is released').toMatchObject({ active: 'title', selectionStart: 0, selectionEnd: 0 });
+  for (let count = 0; count < 4; count++) await page.keyboard.press('ArrowRight');
+  expect(await focus15Snapshot(page)).toMatchObject({ active: 'title', selectionStart: 4, selectionEnd: 4 });
+}
+
+test('planned edit focus: a real date digit keeps its selected field through same-account refresh', async ({ page }) => {
+  const original = await apiLogin(page, 'team-wireless'), dates = plannedEditDates();
+  const item = await plannedEditCreate(page, `FOCUS15-DATE-${randomUUID()}`, dates.originalDate), writes = plannedEditTrackWrites(page);
+  for (const held of [false, true]) {
+    let holding: Awaited<ReturnType<typeof focus15Hold>> | undefined;
+    try {
+      await focus15Open(page, item, dates.queryDate); await page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true }).fill(dates.changedDate);
+      if (held) holding = await focus15Reauthenticate(page, item, dates.queryDate, original.actor.id);
+      const date = page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true }); await date.click(); await date.fill(dates.changedDate);
+      const before = await focus15Snapshot(page); expect(before).toMatchObject({ active: 'date', title: item.title, date: dates.changedDate });
+      const key = await focus15NextKey(page); if (holding) await holding.deliver();
+      // After delivery, observe and send the real key without repairing focus or native date selection.
+      const released = await focus15Snapshot(page); await page.keyboard.press('7'); await focus15Paint(page); const after = await focus15Snapshot(page);
+      expect({ targets: await key.evaluate(value => value.targets), title: after.title }, held ? 'PLANNED_EDIT_DATE_KEY_MUST_NOT_MUTATE_TITLE' : 'NORMAL_DATE_KEY_MUST_TARGET_DATE_AND_KEEP_TITLE').toEqual({ targets: [{ key: '7', field: 'date', tag: 'INPUT' }], title: before.title });
+      expect({ released: released.count, after: after.count, inline: after.inline }).toEqual({ released: 1, after: 1, inline: 1 });
+      expect(await plannedEditCurrent(page, item.id, dates.queryDate)).toMatchObject({ id: item.id, title: item.title, firstWorkDate: dates.originalDate, revision: 1 }); expect(writes).toEqual([]);
+      await key.dispose();
+    } finally { if (holding) await holding.close(); }
+    await page.locator('.planned-edit').getByRole('button', { name: '취소', exact: true }).click();
+  }
+});
+
+test('planned edit focus: actual title typing stays at keyboard caret4 through same-account refresh', async ({ page }) => {
+  const original = await apiLogin(page, 'team-wireless'), dates = plannedEditDates();
+  const item = await plannedEditCreate(page, `FOCUS15-TITLE-${randomUUID()}`, dates.originalDate), draft = item.title + '-LOCAL', writes = plannedEditTrackWrites(page);
+  for (const held of [false, true]) {
+    let holding: Awaited<ReturnType<typeof focus15Hold>> | undefined;
+    try {
+      await focus15Open(page, item, dates.queryDate); await page.locator('.planned-edit').getByLabel('작업 제목', { exact: true }).fill(draft); await page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true }).fill(dates.changedDate);
+      if (held) holding = await focus15Reauthenticate(page, item, dates.queryDate, original.actor.id);
+      await focus15Caret4(page); const before = await focus15Snapshot(page), key = await focus15NextKey(page);
+      if (holding) await holding.deliver();
+      // No locator action or caret reset may hide the original misplaced-X failure.
+      const released = await focus15Snapshot(page); await page.keyboard.press('X'); await focus15Paint(page); const after = await focus15Snapshot(page);
+      expect({ targets: await key.evaluate(value => value.targets), title: after.title }, held ? 'PLANNED_EDIT_TITLE_CARET_MUST_SURVIVE_AUTOMATIC_REFRESH' : 'NORMAL_TITLE_KEY_MUST_INSERT_AT_KEYBOARD_CARET').toEqual({ targets: [{ key: 'X', field: 'title', tag: 'INPUT' }], title: draft.slice(0, 4) + 'X' + draft.slice(4) });
+      expect(before).toMatchObject({ title: draft, date: dates.changedDate, selectionStart: 4, selectionEnd: 4 }); expect(released.title).toBe(draft);
+      expect(after).toMatchObject({ count: 1, inline: 1, date: dates.changedDate, selectionStart: 5, selectionEnd: 5 });
+      expect(await plannedEditCurrent(page, item.id, dates.queryDate)).toMatchObject({ id: item.id, title: item.title, firstWorkDate: dates.originalDate, revision: 1 }); expect(writes).toEqual([]);
+      await key.dispose();
+    } finally { if (holding) await holding.close(); }
+    await page.locator('.planned-edit').getByRole('button', { name: '취소', exact: true }).click();
+  }
+});
+
+test('planned edit focus: valid outside controls and the real expiry modal outrank a lost editor focus', async ({ page }) => {
+  const original = await apiLogin(page, 'team-wireless'), dates = plannedEditDates();
+  const item = await plannedEditCreate(page, `FOCUS15-PRIORITY-${randomUUID()}`, dates.originalDate), writes = plannedEditTrackWrites(page);
+  const observerRequest = await apiRequest.newContext({ baseURL: base }), observer = { request: observerRequest }; await apiLogin(observer, 'team-wireless');
+  let holding: Awaited<ReturnType<typeof focus15Hold>> | undefined;
+  try {
+    for (const control of ['input', 'button'] as const) {
+      await focus15Open(page, item, dates.queryDate); await page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true }).fill(dates.changedDate);
+      holding = await focus15Reauthenticate(page, item, dates.queryDate, original.actor.id);
+      await page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true }).click();
+      const add = page.locator('.planned-add'), addDraft = `외부 입력 ${randomUUID()}`; await add.locator('input').fill(addDraft);
+      if (control === 'button') await page.keyboard.press('Tab');
+      const outside = (await add.locator(control).elementHandle())!; expect(await outside.evaluate(element => element === document.activeElement)).toBe(true);
+      const key = await focus15NextKey(page); await holding.deliver();
+      await page.keyboard.press(control === 'input' ? 'X' : 'ArrowRight'); await focus15Paint(page);
+      expect(await key.evaluate(value => value.targets), 'PLANNED_EDIT_MUST_NOT_STEAL_VALID_EXTERNAL_FOCUS').toEqual([{ key: control === 'input' ? 'X' : 'ArrowRight', field: 'outside', tag: control === 'input' ? 'INPUT' : 'BUTTON' }]);
+      expect(await outside.evaluate(element => element === document.activeElement), 'blocked restoration must not run after an unrelated add-input render').toBe(true);
+      expect(await focus15Snapshot(page)).toMatchObject({ count: 1, inline: 1, active: 'outside', title: item.title, date: dates.changedDate, addTitle: addDraft + (control === 'input' ? 'X' : '') });
+      await page.keyboard.press('ArrowRight'); await focus15Paint(page); expect(await outside.evaluate(element => element === document.activeElement)).toBe(true);
+      await key.dispose(); await outside.dispose(); await holding.close(); holding = undefined;
+      await add.locator('input').fill(''); await page.locator('.planned-edit').getByRole('button', { name: '취소', exact: true }).click();
+    }
+    await focus15Open(page, item, dates.queryDate); await page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true }).fill(dates.changedDate);
+    holding = await focus15Reauthenticate(page, item, dates.queryDate, original.actor.id);
+    await page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true }).click(); await sessionBoundaryExpire(page);
+    expect(await focus15Snapshot(page)).toMatchObject({ modalOwnsFocus: true, editorInert: true });
+    const key = await focus15NextKey(page); await holding.deliver();
+    expect(await focus15Snapshot(page)).toMatchObject({ count: 1, inline: 1, title: item.title, date: dates.changedDate, modalOwnsFocus: true, modalOpen: true, modalIsModal: true, editorInert: true, backgroundWorkFocused: false });
+    await page.keyboard.press('Tab'); await focus15Paint(page);
+    expect(await key.evaluate(value => value.targets), 'PLANNED_EDIT_MUST_NOT_STEAL_MODAL_OR_INERT_FOCUS').toEqual([{ key: 'Tab', field: 'dialog', tag: 'BUTTON' }]);
+    const afterTab = await focus15Snapshot(page), inactiveBody = !afterTab.documentHasFocus && afterTab.activeTag === 'BODY';
+    expect(afterTab).toMatchObject({ count: 1, inline: 1, title: item.title, date: dates.changedDate, modalOpen: true, modalIsModal: true, editorInert: true, backgroundWorkFocused: false });
+    expect(afterTab.modalOwnsFocus || inactiveBody, 'a modal descendant or the observed inactive BODY is required after the first Tab').toBe(true);
+    if (inactiveBody) { await page.keyboard.press('Tab'); await focus15Paint(page); }
+    expect(await focus15Snapshot(page)).toMatchObject({ documentHasFocus: true, activeTag: 'BUTTON', activeIsSsoButton: true, modalOwnsFocus: true, modalOpen: true, modalIsModal: true, editorInert: true, backgroundWorkFocused: false, count: 1, inline: 1, title: item.title, date: dates.changedDate });
+    await key.dispose();
+    const opened = page.waitForEvent('popup'); await page.keyboard.press('Enter'); const popup = await opened;
+    try { await expect(popup.getByRole('combobox')).toBeVisible(); } finally { await popup.close(); }
+    await expect(page.getByRole('dialog', { name: '로그인 만료', exact: true })).toBeVisible();
+    expect(await plannedEditCurrent(observer, item.id, dates.queryDate)).toMatchObject({ id: item.id, title: item.title, firstWorkDate: dates.originalDate, revision: 1 }); expect(writes).toEqual([]);
+  } finally { try { if (holding) await holding.close(); } finally { await observerRequest.dispose(); } }
+});
+
+async function native17Snapshot(page: Page) {
+  return { ...await focus15Snapshot(page), ...await page.evaluate(() => ({ visibility: document.visibilityState, queryDate: document.querySelector<HTMLInputElement>('.planned-date-panel input[type="date"]')?.value ?? null })) };
+}
+
+test.describe('planned native date regression', () => {
+  test.use({ locale: 'en-US' });
+  test('planned native date: the actual ArrowUp result matches normal and unreleased controls after refresh', async ({ browser }, info) => {
+    const fixture = { queryDate: '2026-10-29', originalDate: '2026-10-27', inputDate: '2026-10-28', expectedDate: '2026-10-29', clickPosition: { x: 18, y: 20 }, locale: 'en-US', timezoneId: 'Asia/Seoul' };
+    const seedRequest = await apiRequest.newContext({ baseURL: base }), seedSurface = { request: seedRequest };
+    let item: PlannedEditItem | undefined;
+    type Snapshot = Awaited<ReturnType<typeof native17Snapshot>>;
+    const observations: Array<{
+      kind: 'normal' | 'releasedHeld' | 'retainedNoRelease'; account: { id: string; role: string; teamId: string | null } | null; accountAfter: { id: string; role: string; teamId: string | null } | null;
+      beforeRelease: Snapshot | null; beforeArrowUp: Snapshot | null; afterArrowUp: Snapshot | null;
+      keyTargets: Array<{ key: string; field: string; tag: string }>; uiBusinessWrites: string[]; pageErrors: string[];
+      heldDeliverySeenAtObservation: boolean; error: { stage: string; name: string } | null; cleanupErrors: string[]; rowAfterContextClose: PlannedEditItem | null;
+    }> = [];
+    try {
+      const actor = (await apiLogin(seedSurface, 'team-wireless')).actor;
+      item = await plannedEditCreate(seedSurface, `DATE17-PLANNED-ALPHA-${randomUUID()}`, fixture.originalDate);
+      for (const kind of ['normal', 'releasedHeld', 'retainedNoRelease'] as const) {
+        const context = await browser.newContext({ baseURL: base, viewport: info.project.use.viewport, locale: fixture.locale, timezoneId: fixture.timezoneId, serviceWorkers: 'block' });
+        const page = await context.newPage().catch(async error => { await context.close(); throw error; }), observation: typeof observations[number] = { kind, account: null, accountAfter: null, beforeRelease: null, beforeArrowUp: null, afterArrowUp: null, keyTargets: [], uiBusinessWrites: [], pageErrors: [], heldDeliverySeenAtObservation: false, error: null, cleanupErrors: [], rowAfterContextClose: null };
+        let observationPhase = true;
+        observations.push(observation); observation.uiBusinessWrites = plannedEditTrackWrites(page); page.on('pageerror', error => { if (observationPhase) observation.pageErrors.push(error.message); else observation.cleanupErrors.push('page error during post-observation cleanup'); });
+        let holding: Awaited<ReturnType<typeof focus15Hold>> | undefined, key: Awaited<ReturnType<typeof focus15NextKey>> | undefined, stage = 'same-account setup', observeHeldDelivery = false, heldDeliverySeen = false;
+        page.on('response', response => { const url = new URL(response.url()); if (observeHeldDelivery && response.request().method() === 'GET' && url.pathname === '/api/planned-works' && url.searchParams.get('workDate') === fixture.queryDate) heldDeliverySeen = true; });
+        try {
+          await page.route('https://fonts.googleapis.com/**', route => route.abort()); await page.route('https://fonts.gstatic.com/**', route => route.abort());
+          const current = (await apiLogin(page, 'team-wireless')).actor; observation.account = { id: current.id, role: current.role, teamId: current.teamId ?? null };
+          await focus15Open(page, item, fixture.queryDate); await page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true }).fill(fixture.inputDate);
+          if (kind !== 'normal') { stage = 'actual logout, mock-provider SSO and held GET200'; holding = await focus15Reauthenticate(page, item, fixture.queryDate, current.id); observeHeldDelivery = true; }
+          stage = 'identical relative click and one actual ArrowRight';
+          const date = page.locator('.planned-edit').getByLabel('업무 날짜', { exact: true }); await date.fill(fixture.inputDate); await date.click({ position: fixture.clickPosition }); await page.keyboard.press('ArrowRight');
+          observation.beforeRelease = await native17Snapshot(page); key = await focus15NextKey(page);
+          if (kind === 'releasedHeld') { stage = 'deliver held GET200'; await holding!.deliver(); }
+          // The chosen native segment receives only the real ArrowUp after delivery; observations never repair it.
+          stage = 'read-only observation and actual ArrowUp'; observation.beforeArrowUp = await native17Snapshot(page);
+          await page.keyboard.press('ArrowUp'); await focus15Paint(page); observation.afterArrowUp = await native17Snapshot(page);
+          observation.keyTargets = await key.evaluate(value => value.targets); observation.heldDeliverySeenAtObservation = heldDeliverySeen;
+          const after = (await apiRead(page, '/api/session')).data.actor; observation.accountAfter = { id: after.id, role: after.role, teamId: after.teamId ?? null };
+        } catch (error) { observation.error = { stage, name: error instanceof Error ? error.name : 'Error' }; }
+        finally {
+          const identity = `${kind}-${randomUUID()}`, observationPath = info.outputPath(`native-date-${identity}.json`);
+          try {
+            await writeFile(observationPath, JSON.stringify({ phase: 'native-observation-before-cleanup', fixture, item, observation, seedApiWrites: { POST: 1 }, uiWritesExcludeFixtureSetupAndCleanup: true, observedAt: new Date().toISOString() }, null, 2), { flag: 'wx', mode: 0o600 });
+            await info.attach(`native-date-${kind}-observation`, { path: observationPath, contentType: 'application/json' });
+            await info.attach(`native-date-${kind}`, { body: await page.screenshot(), contentType: 'image/png' });
+          } finally {
+            // Retained-no-release is measured and saved before this separate gate release and context close.
+            observationPhase = false;
+            try { if (holding) await holding.close(); } catch { observation.cleanupErrors.push('held GET cleanup failed'); }
+            try { if (key) await key.dispose(); } catch { observation.cleanupErrors.push('key observer cleanup failed'); }
+            try { await context.close(); } catch { observation.cleanupErrors.push('context cleanup failed'); }
+            try { observation.rowAfterContextClose = await plannedEditCurrent(seedSurface, item.id, fixture.queryDate); } catch { observation.cleanupErrors.push('server row read after context close failed'); }
+            const cleanupPath = info.outputPath(`native-date-${identity}-cleanup.json`);
+            await writeFile(cleanupPath, JSON.stringify({ phase: 'after-recorded-native-observation', kind, retainedGateReleasedOnlyForCleanup: kind === 'retainedNoRelease', cleanupErrors: observation.cleanupErrors, uiBusinessWritesAfterCleanup: observation.uiBusinessWrites, rowAfterContextClose: observation.rowAfterContextClose }, null, 2), { flag: 'wx', mode: 0o600 });
+            await info.attach(`native-date-${kind}-cleanup`, { path: cleanupPath, contentType: 'application/json' });
+          }
+        }
+      }
+      // All three actual observations and their PNGs are saved before result comparisons.
+      expect(observations).toHaveLength(3);
+      for (const observed of observations) {
+        expect(observed.error, `${observed.kind} setup and observation must complete`).toBeNull(); expect(observed.cleanupErrors).toEqual([]);
+        expect(observed.account).toEqual({ id: actor.id, role: actor.role, teamId: actor.teamId ?? null });
+        expect(observed.accountAfter).toEqual(observed.account);
+        expect(observed.beforeRelease).toMatchObject({ documentHasFocus: true, visibility: 'visible', queryDate: fixture.queryDate, active: 'date', count: 1, title: item.title, date: fixture.inputDate, modalOpen: false, editorInert: false });
+        expect(observed.beforeArrowUp).toMatchObject({ documentHasFocus: true, visibility: 'visible', queryDate: fixture.queryDate, active: 'date', count: 1, title: item.title, date: fixture.inputDate, modalOpen: false, editorInert: false });
+        expect(observed.afterArrowUp).toMatchObject({ documentHasFocus: true, visibility: 'visible', queryDate: fixture.queryDate, active: 'date', count: 1, title: item.title, modalOpen: false, editorInert: false });
+        expect(observed.afterArrowUp?.date).toMatch(/^\d{4}-\d{2}-\d{2}$/); expect(observed.keyTargets).toEqual([{ key: 'ArrowUp', field: 'date', tag: 'INPUT' }]);
+        expect(observed.uiBusinessWrites).toEqual([]); expect(observed.pageErrors).toEqual([]);
+        expect(observed.rowAfterContextClose).toMatchObject({ id: item.id, title: item.title, firstWorkDate: fixture.originalDate, revision: 1 });
+        expect(observed.heldDeliverySeenAtObservation).toBe(observed.kind === 'releasedHeld');
+        expect(observed.afterArrowUp).toMatchObject(observed.kind === 'retainedNoRelease' ? { retained: 1 } : { retained: 0, inline: 1 });
+      }
+      expect(observations[0].afterArrowUp?.date, 'NORMAL_ACTUAL_UP_MUST_KEEP_THE_APPROVED_DATE_RESULT').toBe(fixture.expectedDate);
+      expect(observations[2].afterArrowUp?.date, 'UNRELEASED_RETAINED_ACTUAL_UP_MUST_MATCH_ITS_NORMAL_CONTROL').toBe(fixture.expectedDate);
+      expect(observations[1].afterArrowUp?.date, 'DATE_NATIVE_SEGMENT_RESULT_MUST_MATCH_CONTROL').toBe(observations[0].afterArrowUp?.date);
+    } finally {
+      const cleanup = { phase: 'own-fixture-cleanup-after-worlds', seedPosts: item ? 1 : 0, ownDeleteStatus: null as number | null, ownRowAbsent: false };
+      try {
+        if (item) {
+          if ((await seedRequest.get('/api/session')).status() === 401) await apiLogin(seedSurface, 'team-wireless');
+          const current = await plannedEditCurrent(seedSurface, item.id, fixture.queryDate), session = (await apiRead(seedSurface, '/api/session')).data;
+          const deleted = await seedRequest.delete(`/api/planned-works/${encodeURIComponent(item.id)}`, { headers: { Origin: new URL(base).origin, 'X-CSRF-Token': session.csrfToken, 'If-Match': `"${current.revision}"` } });
+          cleanup.ownDeleteStatus = deleted.status(); expect(deleted.status(), 'only the seeded native-date fixture is deleted').toBe(200);
+          const list = (await apiRead(seedSurface, `/api/planned-works?workDate=${fixture.queryDate}`)).data;
+          cleanup.ownRowAbsent = ![...list.inProgress, ...list.completed].some((value: PlannedEditItem) => value.id === item!.id); expect(cleanup.ownRowAbsent).toBe(true);
+        }
+      } finally {
+        await seedRequest.dispose(); const cleanupPath = info.outputPath(`native-date-own-fixture-cleanup-${randomUUID()}.json`);
+        await writeFile(cleanupPath, JSON.stringify(cleanup, null, 2), { flag: 'wx', mode: 0o600 }); await info.attach('native-date-own-fixture-cleanup', { path: cleanupPath, contentType: 'application/json' });
+      }
+    }
+  });
+});
+
+test('demo readability: every role can read and use every header menu within the viewport', async ({ page }, info) => {
+  for (const subject of ['requester','bnoc','team-display','access-admin']) {
+    await apiLogin(page,subject);await page.goto('/requests');
+    await expect(page.getByRole('navigation',{name:'주 메뉴'})).toBeVisible();
+    const groups=page.locator('nav .nav-group');
+    expect(await groups.count(),'ROLE_MUST_HAVE_MENUS_TO_VERIFY').toBeGreaterThan(0);
+    for(let index=0;index<await groups.count();index++) {
+      const group=groups.nth(index),summary=group.locator('summary');
+      await summary.focus();await page.keyboard.press('Enter');
+      await expect(group).toHaveAttribute('open','');
+      const panel=group.locator('.nav-group__panel');
+      const geometry=await panel.evaluate(element=>{
+        const box=element.getBoundingClientRect();
+        const ranges=[...element.querySelectorAll('button')].map(button=>{const range=document.createRange();range.selectNodeContents(button);const text=range.getBoundingClientRect();return {left:text.left,right:text.right};});
+        return {left:box.left,right:box.right,width:innerWidth,ranges};
+      });
+      expect(geometry.left,'MENU_MUST_NOT_CLIP_LEFT').toBeGreaterThanOrEqual(0);
+      expect(geometry.right,'MENU_MUST_NOT_CLIP_RIGHT').toBeLessThanOrEqual(geometry.width);
+      for(const text of geometry.ranges){expect(text.left).toBeGreaterThanOrEqual(0);expect(text.right).toBeLessThanOrEqual(geometry.width);}
+      await panel.getByRole('button').first().focus();await page.keyboard.press('Enter');
+      await expect(group).not.toHaveAttribute('open','');
+    }
+    await noOverflow(page);
+  }
+  await screenshot(page,info,'demo-header-menus');
+});
+
+test('demo readability: assigned lists identify content and work dates and notifications identify their department', async ({ page }, info) => {
+  const number=await seed(page,`행정실 컴퓨터 전원 불량 ${info.project.name} ${'상세 증상 '.repeat(20)}`,[wire,'유선반']);
+  for(const subject of ['bnoc','team-wireless']) {
+    await apiLogin(page,subject);await page.goto('/requests');
+    const row=page.getByRole('row').filter({has:page.getByRole('button',{name:number,exact:true})});
+    await expect(row).toContainText('행정실 컴퓨터 전원 불량');await expect(row).toContainText('요청 위치');
+    for(const selector of ['.request-list-requester','.request-list-category']) {
+      const lines=await row.locator(selector).evaluate(element=>{const range=document.createRange();range.selectNodeContents(element);return range.getClientRects().length;});
+      expect(lines,'SHORT_REQUEST_IDENTITY_MUST_NOT_SPLIT_ACROSS_LINES').toBe(1);
+    }
+  }
+  const original=(await apiRead(page,`/api/requests/${number}`)).data;
+  const work=original.workItems.find((item:{teamId:string})=>item.teamId===wire);
+  await command(page,'updateWork',{nextStatus:'작업 중',scheduleIntervals:[{startsAt:'2026-10-28T14:00:00Z',endsAt:'2026-10-28T15:00:00Z'},{startsAt:'2026-10-30T01:00:00Z',endsAt:'2026-10-30T03:00:00Z'}]},{requestNumber:number,workNumber:work.workNumber,expectedRevision:work.revision});
+  await apiLogin(page,'requester');await page.goto(`/requests/${number}`);
+  const card=page.locator('article.work-card').filter({has:page.getByRole('heading',{name:`${wire} · 작업 ${work.workNumber}`,exact:true})});
+  await expect(card).toContainText('2026-10-28 · 23:00–24:00');await expect(card).toContainText('2026-10-30 · 10:00–12:00');
+  await screenshot(page,info,'demo-full-work-dates');
+  await page.goto('/notifications');
+  const alert=page.locator('article.notification').filter({has:page.getByRole('button',{name:number,exact:true})}).filter({hasText:`${wire} · 작업 준비`});
+  await expect(alert).toHaveCount(1);
+  await noOverflow(page);await screenshot(page,info,'demo-department-notification');
 });

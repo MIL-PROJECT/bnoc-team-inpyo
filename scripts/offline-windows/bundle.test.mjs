@@ -84,3 +84,15 @@ test('offline bundle rejects incomplete runtime inputs and path traversal', asyn
   const artifacts = data.artifacts.map(item => item.path === 'runtime/mysql.zip' ? { ...item, path: '../mysql.zip' } : item);
   await assert.rejects(createCdBundle({ outputRoot: join(data.root, 'traversal'), ...data, artifacts }), /Invalid bundle path/);
 });
+
+for (const name of ['java', 'application', 'node']) {
+  test(`offline verification rejects a missing or unlisted ${name} dependency reference`, async t => {
+    const data = await fixture();
+    t.after(() => rm(data.root, { recursive: true, force: true }));
+    const { destination, manifest } = await createCdBundle({ outputRoot: join(data.root, 'output'), ...data });
+    if (name === 'node') manifest.dependencies.node.path = 'runtime/not-listed-node.zip';
+    else delete manifest.dependencies[name];
+    await writeFile(join(destination, 'bundle-manifest.json'), JSON.stringify(manifest));
+    await assert.rejects(verifyCdBundle(destination), new RegExp(`Required ${name} artifact`), 'REQUIRED_DEPENDENCY_REFERENCE_MUST_BE_VALID');
+  });
+}

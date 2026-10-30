@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
 import type { Actor, ScheduleEntry } from '../types';
 import { ApiClient } from '../api/apiClient.mjs';
 import { useResource } from '../app/useResource';
@@ -11,6 +11,8 @@ import { QueryContext } from './QueryContext';
 
 type PlannedCalendarEntry = { source: 'planned'; plannedWorkId: string; title: string; teamId: string; status: string; firstWorkDate: string; completedDate?: string | null };
 type TeamSchedule = { entries: ScheduleEntry[]; completedRecords: ScheduleEntry[]; unscheduled: ScheduleEntry[]; plans: PlannedCalendarEntry[]; queriedAt?: string };
+export type TeamScheduleSelection = { mode: 'day' | 'week' | 'month'; date: string };
+export const initialTeamScheduleSelection = (): TeamScheduleSelection => ({ mode: 'week', date: seoulDate() });
 
 function calendarIntervalText(intervals: NonNullable<ScheduleEntry['scheduleIntervals']>) {
   const dates = new Set(intervals.flatMap(interval => [seoulDate(interval.startsAt), seoulDate(interval.endsAt)]));
@@ -20,9 +22,13 @@ function calendarIntervalText(intervals: NonNullable<ScheduleEntry['scheduleInte
   return intervals.map(interval => `${includeDates ? `${dateLabel(interval.startsAt)} ` : ''}${clock(interval.startsAt)}–${includeDates ? `${dateLabel(interval.endsAt)} ` : ''}${clock(interval.endsAt)}`).join(' · ');
 }
 
-export function TeamScheduleView({ actor, query, revision = 0, onOpen }: { actor: Actor; query: ApiClient; revision?: number; onOpen: (id: string) => void }) {
-  const [mode, setMode] = useState<'day' | 'week' | 'month'>('week');
-  const [date, setDate] = useState(seoulDate());
+export function TeamScheduleView({ actor, query, revision = 0, onOpen, selection, onSelectionChange }: {
+  actor: Actor; query: ApiClient; revision?: number; onOpen: (id: string) => void;
+  selection: TeamScheduleSelection; onSelectionChange: Dispatch<SetStateAction<TeamScheduleSelection>>;
+}) {
+  const { mode, date } = selection;
+  const setMode = (mode: TeamScheduleSelection['mode']) => onSelectionChange(previous => ({ ...previous, mode }));
+  const setDate = (date: string) => onSelectionChange(previous => ({ ...previous, date }));
   const range = calendarRange(date, mode);
   const context = { range, mode, conditions: `${({ day: '일', week: '주', month: '월' })[mode]} · ${range.firstDate}${range.firstDate !== range.lastDate ? ` ~ ${range.lastDate}` : ''}` };
   const result = useResource<TeamSchedule, typeof context>(signal => query.getTeamSchedule({ from: range.from, to: range.to }, signal), [query, actor.id, range.from, range.to, revision], context);

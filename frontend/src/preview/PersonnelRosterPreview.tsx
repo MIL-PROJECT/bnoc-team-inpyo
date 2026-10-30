@@ -7,7 +7,8 @@ import { DateInput } from '../ui/DateInput';
 import { ActionGroup } from '../ui/ActionGroup';
 import { useUnsavedChanges } from '../app/useUnsavedChanges';
 import { clearCommandRetry, commandForRetry, commandResultUnknown } from '../api/commandRetry.mjs';
-import { absenceKinds, absenceOn, seoulDate } from './mainFunctionsModel.mjs';
+import { absenceKinds, seoulDate } from './mainFunctionsModel.mjs';
+import './personnelFeedback.css';
 import { personCategories, personnelCategories, ranksByCategory, sortPersonnel, type Person, type Absence, type PersonCategory, type PersonnelSort } from './personnelModel';
 
 type DirectoryEntry = { personRef:string;department:string;displayName:string;active:boolean;category?:PersonCategory|null;rank?:string|null;complete:boolean;serviceNumber?:string;internalPhone?:string;absences:{absenceRef:string;absenceType:string;startDate:string;endDate:string;revision:number}[] };
@@ -42,10 +43,13 @@ export function PersonnelRosterPreview({actor,api,departments:allDepartments,mod
   const [editing,setEditing]=useState(false);
   const [draft,setDraft]=useState<PersonDraft>(()=>emptyPerson(departments[0]||''));
   const [absence,setAbsence]=useState<AbsenceDraft>(()=>emptyAbsence(departments[0]||'',date));
+  const [absenceMode,setAbsenceMode]=useState<'single'|'batch'>('single');
+  const [absenceText,setAbsenceText]=useState('');
   const [error,setError]=useState('');
   const [receipt,setReceipt]=useState('');
   const [saving,setSaving]=useState(false);
   const [dirty,setDirty]=useState(false);
+  const pendingAbsenceBatch=useRef<{signature:string;operationId:string}|null>(null);
   const pendingPerson=useRef<{signature:string;operationId:string}|null>(null);const pendingAbsence=useRef<{signature:string;operationId:string}|null>(null);
   useUnsavedChanges(dirty||uncertain,uncertain);
 
@@ -80,7 +84,7 @@ export function PersonnelRosterPreview({actor,api,departments:allDepartments,mod
     if(dirty&&!window.confirm('입력한 내용을 취소할까요?'))return;
     setPanel(current=>current===next?null:next);setReceipt('');setError('');setDirty(false);
     if(next==='person')resetPerson();
-    else setAbsence(emptyAbsence(department||departments[0]||'',date));
+    else {setAbsence(emptyAbsence(department||departments[0]||'',date));setAbsenceMode('single');setAbsenceText('');}
     focusEditor();
   };
   const savePerson=async(event:FormEvent)=>{
@@ -105,15 +109,31 @@ export function PersonnelRosterPreview({actor,api,departments:allDepartments,mod
     } catch(failure) { const unknown=commandResultUnknown(failure);setUncertain(unknown);if(!unknown)clearCommandRetry(pendingAbsence);setError(failure instanceof Error?failure.message:'저장하지 못했습니다.'); }
     finally {setSaving(false);}
   };
+  const saveAbsenceBatch=async(event:FormEvent)=>{
+    event.preventDefault();if(!isBnoc||saving||!absenceText.trim())return;
+    setSaving(true);setError('');
+    try {
+      const command=commandForRetry(pendingAbsenceBatch,{type:'saveAbsenceBatch',expectedRevision:directoryRevision,payload:{department:absence.department,text:absenceText}});
+      await api.dispatch(command);clearCommandRetry(pendingAbsenceBatch);setUncertain(false);
+      setReceipt('입력한 부재 기간을 일괄 등록했습니다.');setPanel(null);setAbsenceText('');setDirty(false);await reload();
+    } catch(failure) { const unknown=commandResultUnknown(failure);setUncertain(unknown);if(!unknown)clearCommandRetry(pendingAbsenceBatch);setError((failure as {fieldErrors?:Record<string,string>})?.fieldErrors?.text||(failure instanceof Error?failure.message:'부재 목록을 저장하지 못했습니다.')); }
+    finally {setSaving(false);}
+  };
+  const changeAbsenceMode=(next:'single'|'batch')=>{
+    if(uncertain||saving||next===absenceMode)return;
+    if(dirty&&!window.confirm('입력한 내용을 취소할까요?'))return;
+    setAbsenceMode(next);setAbsence(emptyAbsence(absence.department,date));setAbsenceText('');setDirty(false);setError('');
+  };
   const summary=summaryResult?.date===date&&summaryResult.department===(department||undefined)?summaryResult.data:null;
   const counts=summary?.departments as {department:string;total:number;current:number;absent:number;byAbsenceType:Record<string,number>}[]|undefined;
+  const absentPeople=sortPersonnel(scoped.filter(person=>(person as Person&{active?:boolean}).active!==false&&absences.some(item=>item.personId===person.id&&item.start<=date&&item.end>=date)),order);
   const groupedDepartments=departments.filter(team=>filtered.some(person=>person.team===team));
   const incompleteEntries=directoryEntries.filter(item=>!item.category||!item.rank||!item.complete);
   const editAbsence=(person:DirectoryEntry,record:DirectoryEntry['absences'][number])=>{
     if(uncertain||saving||loading||loadError)return;
     if(dirty&&!window.confirm('입력한 내용을 취소할까요?'))return;
     setAbsence({absenceRef:record.absenceRef,revision:record.revision,department:person.department,personId:person.personRef,kind:record.absenceType,start:record.startDate,end:record.endDate});
-    setPanel('absence');setReceipt('');setError('');setDirty(false);focusEditor();
+    setPanel('absence');setAbsenceMode('single');setAbsenceText('');setReceipt('');setError('');setDirty(false);focusEditor();
   };
   return <div className="main-preview-stack">
     <div className="page-head"><h1>{mode==='personnel'?'일일 병력 현황':'부대 인원 명부'}</h1><Button disabled={uncertain||saving||dirty} onClick={()=>void reload()}>새로고침</Button></div>
@@ -124,7 +144,7 @@ export function PersonnelRosterPreview({actor,api,departments:allDepartments,mod
       {mode==='personnel'&&<label className="field"><span>기준일</span><DateInput required value={date} onChange={event=>{if(event.target.value)setDate(event.target.value);}}/></label>}
       {isBnoc&&<ActionGroup className="personnel-tools"><Button aria-expanded={panel==='person'} disabled={uncertain||saving||loading||Boolean(loadError)} onClick={()=>openPanel('person')}>인원 등록</Button><Button aria-expanded={panel==='absence'} disabled={uncertain||saving||loading||Boolean(loadError)} onClick={()=>openPanel('absence')}>부재 등록</Button></ActionGroup>}
     </div>
-    {mode==='personnel'&&summary&&counts&&<section className="personnel-summary" aria-label={`${summaryResult?.date} 일일 병력 현황`}><div className="personnel-counts"><span>총원 <strong>{summary.total}</strong></span><span>현재원 <strong>{summary.current}</strong></span>{summary.absent>0&&<span className="exception">결원 <strong>{summary.absent}</strong></span>}</div>{!department&&counts.length>1&&<details><summary>부서별 병력</summary><div className="table-wrap"><table><thead><tr><th>부서</th><th>총원</th><th>현재원</th><th>부재</th></tr></thead><tbody>{counts.map(item=><tr key={item.department}><th scope="row">{item.department}</th><td>{item.total}</td><td>{item.current}</td><td>{absenceKinds.filter(kind=>item.byAbsenceType[kind]).map(kind=>`${kind} ${item.byAbsenceType[kind]}`).join(' · ')||'—'}</td></tr>)}</tbody></table></div></details>}</section>}
+    {mode==='personnel'&&summary&&counts&&<section className="personnel-summary" aria-label={`${summaryResult?.date} 일일 병력 현황`}><div className="personnel-counts"><span>총원 <strong>{summary.total}</strong></span><span>현재원 <strong>{summary.current}</strong></span>{summary.absent>0&&<span className="exception">결원 <strong>{summary.absent}</strong></span>}</div><div className="personnel-absence-counts" aria-label="부재 구분별 인원">{absenceKinds.map(kind=><span key={kind}>{kind} <strong>{counts.reduce((total,item)=>total+(item.byAbsenceType[kind]||0),0)}명</strong></span>)}</div>{!department&&counts.length>1&&<div><h2>부서별 병력</h2><div className="table-wrap"><table><thead><tr><th>부서</th><th>총원</th><th>현재원</th><th>부재</th></tr></thead><tbody>{counts.map(item=><tr key={item.department}><th scope="row">{item.department}</th><td>{item.total}</td><td>{item.current}</td><td>{absenceKinds.filter(kind=>item.byAbsenceType[kind]).map(kind=>`${kind} ${item.byAbsenceType[kind]}`).join(' · ')||'—'}</td></tr>)}</tbody></table></div></div>}<div className="personnel-absence-list" aria-label="부재자 명단"><h2>부재자 <span className="count">{absentPeople.length}명</span></h2>{absentPeople.length?<ul>{absentPeople.map(person=><li key={person.id}><strong>{person.rank} {person.name}</strong><span>{person.team}</span><span>{absences.filter(item=>item.personId===person.id&&item.start<=date&&item.end>=date).map(item=>`${item.kind} · ${item.start}~${item.end}`).join(' / ')}</span></li>)}</ul>:<p className="muted">기준일에 등록된 부재자가 없습니다.</p>}</div></section>}
 
     <div className="personnel-categories" role="group" aria-label="인원 구분">{(['',...personCategories] as const).map(value=><Button key={value||'all'} aria-pressed={category===value} onClick={()=>setCategory(value)}>{value||'전체'} <span className="count">{searched.filter(person=>!value||person.category===value).length}</span></Button>)}</div>
     {receipt&&<p className="summary-strip" role="status">{receipt}</p>}
@@ -139,18 +159,19 @@ export function PersonnelRosterPreview({actor,api,departments:allDepartments,mod
       <label className="field"><span>군내전화</span><PhoneInput value={draft.phone} onChange={event=>setDraft({...draft,phone:event.target.value})}/></label>
       <label className="check"><input type="checkbox" checked={draft.active} onChange={event=>setDraft({...draft,active:event.target.checked})}/>활성 인원</label>
     </fieldset>{error&&<p className="error" role="alert">{error}</p>}<ActionGroup><Button type="submit" variant="primary" disabled={saving}>{saving?'저장 중…':uncertain?'저장 결과 다시 확인':'저장'}</Button><Button disabled={uncertain||saving||loading||Boolean(loadError)} onClick={()=>{setPanel(null);resetPerson();}}>취소</Button></ActionGroup></form>}
-    {panel==='absence'&&isBnoc&&<form ref={editor} className="card personnel-editor" onSubmit={saveAbsence} onChangeCapture={()=>setDirty(true)}><div className="row-head"><h2>{absence.absenceRef?'부재 기간 수정':'부재 기간 등록'}</h2><Button disabled={uncertain||saving||loading||Boolean(loadError)} onClick={()=>{setPanel(null);setDirty(false);}}>닫기</Button></div><fieldset className="personnel-inputs" disabled={saving||uncertain} style={{border:0,padding:0,minWidth:0}}>
+    {panel==='absence'&&isBnoc&&<form ref={editor} className="card personnel-editor" onSubmit={absenceMode==='batch'?saveAbsenceBatch:saveAbsence} onChangeCapture={()=>setDirty(true)}><div className="row-head"><h2>{absence.absenceRef?'부재 기간 수정':absenceMode==='batch'?'부재 기간 일괄 등록':'부재 기간 등록'}</h2><Button disabled={uncertain||saving||loading||Boolean(loadError)} onClick={()=>{setPanel(null);setDirty(false);}}>닫기</Button></div>{!absence.absenceRef&&<ActionGroup aria-label="부재 입력 방식"><Button disabled={saving||uncertain} aria-pressed={absenceMode==='single'} onClick={()=>changeAbsenceMode('single')}>한 명 등록</Button><Button disabled={saving||uncertain} aria-pressed={absenceMode==='batch'} onClick={()=>changeAbsenceMode('batch')}>텍스트로 일괄 추가</Button></ActionGroup>}<fieldset className="personnel-inputs" disabled={saving||uncertain} style={{border:0,padding:0,minWidth:0}}>
       <label className="field"><span>대상 부서</span><select disabled={Boolean(absence.absenceRef)} value={absence.department} onChange={event=>setAbsence({...absence,department:event.target.value,personId:''})}>{departments.map(value=><option key={value}>{value}</option>)}</select></label>
-      <label className="field"><span>인원</span><select required value={absence.personId} onChange={event=>setAbsence({...absence,personId:event.target.value})}><option value="">인원 선택</option>{visibleAbsencePeople.map(person=><option key={person.id} value={person.id}>{person.rank} {person.name} · {person.category}</option>)}</select></label>
+      {absenceMode==='single'&&<><label className="field"><span>인원</span><select required value={absence.personId} onChange={event=>setAbsence({...absence,personId:event.target.value})}><option value="">인원 선택</option>{visibleAbsencePeople.map(person=><option key={person.id} value={person.id}>{person.rank} {person.name} · {person.category}</option>)}</select></label>
       <label className="field"><span>구분</span><select value={absence.kind} onChange={event=>setAbsence({...absence,kind:event.target.value})}>{absenceKinds.map(value=><option key={value}>{value}</option>)}</select></label>
       <label className="field"><span>시작일</span><DateInput required value={absence.start} onChange={event=>setAbsence({...absence,start:event.target.value})}/></label>
-      <label className="field"><span>종료일</span><DateInput required min={absence.start} value={absence.end} onChange={event=>setAbsence({...absence,end:event.target.value})}/></label>
-    </fieldset>{error&&<p className="error" role="alert">{error}</p>}<ActionGroup><Button type="submit" variant="primary" disabled={saving}>{saving?'저장 중…':uncertain?'저장 결과 다시 확인':absence.absenceRef?'수정':'등록'}</Button><Button disabled={uncertain||saving||loading||Boolean(loadError)} onClick={()=>{setPanel(null);setDirty(false);}}>취소</Button></ActionGroup></form>}
+      <label className="field"><span>종료일</span><DateInput required min={absence.start} value={absence.end} onChange={event=>setAbsence({...absence,end:event.target.value})}/></label></>}
+      {absenceMode==='batch'&&<label className="field absence-batch-input"><span>부재 목록</span><textarea required rows={7} maxLength={20000} aria-label="부재 목록" placeholder="계급 이름 구분 시작일 종료일" value={absenceText} onChange={event=>{setAbsenceText(event.target.value);setError('');}}/><small>한 줄에 계급 이름 구분 시작일 종료일. 날짜는 YYYY-MM-DD 또는 YYYYMMDD. 선택 부서 명부와 일치하는 인원만 등록합니다. 최대 100줄.</small></label>}
+    </fieldset>{error&&<p className="error" role="alert">{error}</p>}<ActionGroup><Button type="submit" variant="primary" disabled={saving}>{saving?'저장 중…':uncertain?'저장 결과 다시 확인':absence.absenceRef?'수정':absenceMode==='batch'?'입력한 부재 일괄 등록':'등록'}</Button><Button disabled={uncertain||saving||loading||Boolean(loadError)} onClick={()=>{setPanel(null);setDirty(false);}}>취소</Button></ActionGroup></form>}
     {!loading&&!filtered.length&&<p className="empty">{people.length?'검색 결과 없음':'등록된 인원이 없습니다.'}</p>}
     {groupedDepartments.map(team=><section className="card personnel-department" key={team} aria-label={`${team} 인원`}><div className="row-head"><h2>{team}</h2><span className="count">{filtered.filter(person=>person.team===team).length}명</span></div><div className="table-wrap"><table><thead><tr><th>계급·직급</th><th>이름</th>{isBnoc&&<th>군번</th>}<th>군내전화</th><th>{mode==='personnel'?`${date} 부재`:'부재 기간'}</th>{isBnoc&&<th>관리</th>}</tr></thead>{personnelCategories(order).map(group=>{
       const rows=filtered.filter(person=>person.team===team&&person.category===group);
       return rows.length>0&&<tbody key={group} aria-label={`${team} ${group}`}><tr className="personnel-group"><th colSpan={isBnoc?6:4} scope="rowgroup">{group} <span>{rows.length}명</span></th></tr>{rows.map(person=>{
-        const records=mode==='personnel'?[absenceOn(absences,person.id,date)].filter(Boolean) as Absence[]:absences.filter(item=>item.personId===person.id).sort((a,b)=>a.start.localeCompare(b.start));
+        const records=mode==='personnel'?absences.filter(item=>item.personId===person.id&&item.start<=date&&item.end>=date):absences.filter(item=>item.personId===person.id).sort((a,b)=>a.start.localeCompare(b.start));
         const active=(person as Person&{active?:boolean}).active!==false;
         const directoryPerson=directoryEntries.find(item=>item.personRef===person.id);
         return <tr key={person.id} className={!active?'personnel-inactive':''}><td>{person.rank}</td><td>{person.name}{!active&&<small className="badge">비활성</small>}</td>{isBnoc&&<td>{person.serviceNumber||'—'}</td>}<td>{person.phone||'—'}</td><td>{records.length?records.map(record=>{const source=directoryPerson?.absences.find(item=>item.absenceRef===record.id);return <span className="personnel-absence" key={record.id}>{record.kind}{mode==='roster'&&` · ${record.start.slice(5)}~${record.end.slice(5)}`}{isBnoc&&directoryPerson&&source&&<Button disabled={uncertain||saving||loading||Boolean(loadError)} aria-label={`${record.kind} ${record.start} 부재 수정`} onClick={()=>editAbsence(directoryPerson,source)}>수정</Button>}</span>;}):'—'}</td>{isBnoc&&<td><Button disabled={uncertain||saving||loading||Boolean(loadError)} onClick={()=>{if(dirty&&!window.confirm('입력한 내용을 취소할까요?'))return;setDirty(false);setDraftRevision(directoryRevision);setDraft({personRef:person.id,category:person.category,rank:person.rank,name:person.name,serviceNumber:person.serviceNumber,phone:person.phone,team:person.team,active});setEditing(true);setPanel('person');setError('');setReceipt('');focusEditor();}}>수정</Button></td>}</tr>;

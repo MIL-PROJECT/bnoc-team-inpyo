@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { requestFieldErrors, focusFormError, saveFailureMessage } from './formFeedback.mjs';
+import { requestFieldErrors, focusFormError, saveFailureMessage, guidedRequestErrorStep } from './formFeedback.mjs';
 
 test('server subtype group errors identify missing active choices without marking valid or hidden choices', () => {
   const input = { category:'장비/체계', systemType:'인터넷', resourceType:'PC', workType:'', meetingType:'', phoneType:'' };
@@ -39,4 +39,15 @@ test('unknown saves and expiry retain explicit recovery messages instead of succ
   assert.match(saveFailureMessage({ ok:false,errorCode:'UNAUTHENTICATED' }), /입력 내용은 유지됩니다/);
   assert.match(saveFailureMessage({ ok:false,errorCode:'CONFLICT' }), /최신 내용/);
   assert.equal(saveFailureMessage({ ok:false,errorCode:'VALIDATION',message:'서버 입력 오류' }), '서버 입력 오류');
+});
+
+test('guided input errors return to the visible common field step without treating unknown errors as input changes', () => {
+  for (const key of ['contact','personalContact','documentRef','schedulePreferences','date','maintenanceTarget','department','rank','name','phone','maintenanceTarget.department','maintenanceTarget.rank','maintenanceTarget.name','maintenanceTarget.phone']) {
+    const errors = { [key]:'입력 오류' };
+    assert.equal(guidedRequestErrorStep(errors), 'contact', `HIDDEN_COMMON_ERROR_MUST_REOPEN_CONTACT: ${key}`);
+    assert.deepEqual(errors, { [key]:'입력 오류' });
+  }
+  assert.equal(guidedRequestErrorStep({ requesterRef:'요청자 선택' }), 'requester');
+  assert.equal(guidedRequestErrorStep({ personalContact:'전화 오류', requesterRef:'요청자 선택' }), 'contact');
+  for (const errors of [{}, { attachments:'첨부 오류' }, { payload:'알 수 없는 입력' }, { requestItems:'대상 오류' }]) assert.equal(guidedRequestErrorStep(errors), null);
 });

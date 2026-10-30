@@ -97,11 +97,13 @@ class PlannedWorkService(val db:Database,transaction:TransactionTemplate) {
         }!!
     }
 
-    fun update(caller:Actor,workId:String,rawRevision:Long?,rawTitle:String?,rawFirstDate:String?,rawOperationId:String):Map<String,Any?> {
+    fun update(caller:Actor,workId:String,rawRevision:Long?,rawTitle:String?,rawFirstDate:String?,rawOperationId:String,rawCompletedDate:String?=null):Map<String,Any?> {
         val actor=team(caller);val revision=rawRevision?.takeIf { it>0 } ?: reject("VALIDATION",mapOf("revision" to "버전이 필요합니다."));val id=operationId(rawOperationId)
-        if(rawTitle==null && rawFirstDate==null) reject("VALIDATION")
+        if(rawTitle==null && rawFirstDate==null && rawCompletedDate==null) reject("VALIDATION")
         val cleanTitle=rawTitle?.let(::title);val firstDate=rawFirstDate?.let { date(it,"firstWorkDate").toString() }
+        val completionDate=rawCompletedDate?.let { date(it,"completedDate").toString() }
         val values=linkedMapOf<String,Any?>();if(cleanTitle!=null) values["title"]=cleanTitle;if(firstDate!=null) values["firstWorkDate"]=firstDate
+        if(completionDate!=null) values["completedDate"]=completionDate
         val fp=fingerprint("update",workId,revision,values)
         return writeTransaction.execute {
             val fresh=team(actor)
@@ -109,9 +111,11 @@ class PlannedWorkService(val db:Database,transaction:TransactionTemplate) {
             beginOperation(fresh,id,fp)?.let { return@execute it }
             if(work.revision!=revision) reject("CONFLICT")
             val nextTitle=cleanTitle ?: work.title;val nextDate=firstDate ?: work.firstWorkDate
-            if(work.status=="completed" && nextDate>work.completedDate!!) reject("VALIDATION",mapOf("firstWorkDate" to "업무 기준일은 완료일보다 늦을 수 없습니다."))
-            val at=now();val next=work.copy(title=nextTitle,firstWorkDate=nextDate,revision=work.revision+1,updatedAt=at)
-            db.jdbc.update("UPDATE bnoc_planned_works SET title=?,first_work_date=?,revision=?,updated_at=? WHERE planned_work_id=? AND revision=?",next.title,next.firstWorkDate,next.revision,next.updatedAt,next.id,work.revision).also { if(it!=1) reject("CONFLICT") }
+            if(completionDate!=null && work.status!="completed") reject("INVALID_STATE")
+            val nextCompletedDate=completionDate ?: work.completedDate
+            if(work.status=="completed") completedDate(nextCompletedDate,nextDate)
+            val at=now();val next=work.copy(title=nextTitle,firstWorkDate=nextDate,completedDate=nextCompletedDate,revision=work.revision+1,updatedAt=at)
+            db.jdbc.update("UPDATE bnoc_planned_works SET title=?,first_work_date=?,completed_date=?,revision=?,updated_at=? WHERE planned_work_id=? AND revision=?",next.title,next.firstWorkDate,next.completedDate,next.revision,next.updatedAt,next.id,work.revision).also { if(it!=1) reject("CONFLICT") }
             val result=viewMap(next);finishOperation(fresh,id,fp,next,result);result
         }!!
     }

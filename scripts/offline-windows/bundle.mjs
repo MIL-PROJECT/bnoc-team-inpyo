@@ -16,6 +16,13 @@ const safeRelativePath = path => {
   }
   return path;
 };
+const requiredDependencies = ['application', 'mysql', 'node', 'java', 'vcRuntime'];
+function assertRequiredDependencies(dependencies, paths) {
+  for (const name of requiredDependencies) {
+    const item = dependencies?.[name];
+    if (!item || !paths.has(item.path)) throw new Error(`Required ${name} artifact is missing from bundle inputs.`);
+  }
+}
 
 export async function createCdBundle({ outputRoot, artifacts, dependencies, application, publicFiles }) {
   if (!outputRoot || !Array.isArray(artifacts) || !Array.isArray(publicFiles)) throw new Error('Bundle inputs are incomplete.');
@@ -32,10 +39,7 @@ export async function createCdBundle({ outputRoot, artifacts, dependencies, appl
     if (!sourceStat?.isFile()) throw new Error(`Required package file is missing: ${item.source}`);
     plannedFiles.push({ source, path, size: sourceStat.size, sha256: await sha256File(source), role: item.role ?? 'support' });
   }
-  for (const name of ['application', 'mysql', 'node', 'java', 'vcRuntime']) {
-    const item = dependencies[name];
-    if (!item || !paths.has(item.path)) throw new Error(`Required ${name} artifact is missing from bundle inputs.`);
-  }
+  assertRequiredDependencies(dependencies, paths);
   const app = plannedFiles.find(file => file.path === application.path);
   if (!app || app.role !== 'application') throw new Error('Application JAR must be included as the application artifact.');
   const digestInput = plannedFiles.map(file => `${file.path}\0${file.sha256}\0${file.size}`).sort().join('\n');
@@ -88,6 +92,7 @@ export async function verifyCdBundle(bundleRoot, manifestInput) {
       throw new Error(`Bundle integrity check failed: ${path}`);
     }
   }
+  assertRequiredDependencies(manifest.dependencies, new Set(manifest.files.map(file => file.path)));
   const expectedPaths = new Set([...manifest.files.map(file => file.path), 'bundle-manifest.json']);
   const actualPaths = [];
   async function walk(directory, prefix = '') {

@@ -80,10 +80,11 @@ class ApiController(val auth:AuthService,val db:Database,val workflow:WorkflowSe
         return envelope(plannedCommandResult(plannedWorks.create(actor(request),plannedText(input,"title",160),plannedText(input,"firstWorkDate",10),plannedText(input,"operationId",128))))
     }
     @PatchMapping("/planned-works/{id}") fun updatePlannedWork(request:HttpServletRequest,@PathVariable id:String,@RequestBody input:Map<String,Any?>):Map<String,Any?> {
-        plannedBody(input,setOf("operationId","revision","title","firstWorkDate"))
+        plannedBody(input,setOf("operationId","revision","title","firstWorkDate","completedDate"))
         val title=if(input.containsKey("title")) plannedText(input,"title",160) else null
         val firstDate=if(input.containsKey("firstWorkDate")) plannedText(input,"firstWorkDate",10) else null
-        return envelope(plannedCommandResult(plannedWorks.update(actor(request),id,plannedRevision(input),title,firstDate,plannedText(input,"operationId",128))))
+        val completedDate=if(input.containsKey("completedDate")) plannedText(input,"completedDate",10) else null
+        return envelope(plannedCommandResult(plannedWorks.update(actor(request),id,plannedRevision(input),title,firstDate,plannedText(input,"operationId",128),completedDate)))
     }
     @PostMapping("/planned-works/{id}/complete") fun completePlannedWork(request:HttpServletRequest,@PathVariable id:String,@RequestBody input:Map<String,Any?>):Map<String,Any?> {
         plannedBody(input,setOf("operationId","revision","completedDate"))

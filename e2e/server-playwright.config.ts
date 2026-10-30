@@ -1,7 +1,19 @@
 import { defineConfig } from '@playwright/test';
+import fs from 'node:fs';
 import path from 'node:path';
 
-const evidence = process.env.BNOC_TEST_EVIDENCE_DIR ?? 'runtime/evidence/backend-implementation-20261013';
+const listing = process.argv.includes('--list');
+const configuredEvidence = process.env.BNOC_TEST_EVIDENCE_DIR;
+let evidence = configuredEvidence || path.resolve('runtime/evidence');
+if (!listing) {
+  if (configuredEvidence && !configuredEvidence.trim()) throw new Error('BNOC_TEST_EVIDENCE_DIR must not contain only whitespace');
+  if (!configuredEvidence) {
+    fs.mkdirSync(evidence, { recursive: true });
+    evidence = fs.mkdtempSync(path.join(evidence, 'server-ui-'));
+    process.env.BNOC_TEST_EVIDENCE_DIR = evidence;
+  }
+  console.info(`BNOC browser evidence: ${path.resolve(evidence)}`);
+}
 
 export default defineConfig({
   testDir: '.',
@@ -11,7 +23,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  reporter: [['line'], ['json', { outputFile: path.resolve(evidence, 'server-browser-results.json') }]],
+  reporter: listing ? [['line']] : [['line'], ['json', { outputFile: path.resolve(evidence, 'server-browser-results.json') }]],
   outputDir: path.resolve(evidence, 'server-browser-artifacts'),
   use: {
     baseURL: process.env.BNOC_TEST_URL ?? 'http://127.0.0.1:8083',

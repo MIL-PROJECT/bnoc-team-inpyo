@@ -160,6 +160,8 @@ class DocumentAnalysisContractTest {
         assertTrue(query.list(requester,mapOf("q" to "마이크 점검")).isEmpty())
         assertArrayEquals(bytes,files.download(requester,id).second)
         assertEquals("NOT_FOUND",assertThrows(BusinessFailure::class.java) { documents.document(db.actor("requester-secondary")!!,id,0,50) }.code)
+
+
     }
 
     @Test fun `partial document response names the processed range`() {
@@ -281,6 +283,73 @@ class DocumentAnalysisContractTest {
         assertEquals("",saved["body_text"])
         assertEquals("no_text",documents.document(requester,id,0,50)["status"])
         assertTrue(query.list(requester,mapOf("q" to "SCANNED REQUEST 7319")).isEmpty())
+        assertArrayEquals(bytes,files.download(requester,id).second)
+    }
+
+    @Test fun `unaffected bnoc2 results stay searchable and are not queued or rewritten`() {
+        val number=createRequest();val oldVersion="apache-tika-4.1.0-bnoc2"
+        val hwp=hwpFixture();val pdf=searchablePdf()
+        val states=listOf("ready" to "hwp","ready" to "pdf","partial" to "pdf","failed" to "pdf","unreadable" to "pdf","no_text" to "HWP")
+        val refs=states.mapIndexed { index,(status,extension) ->
+            val id=attach(number,if(extension.equals("hwp",true))hwp else pdf,"compatible-$index.$extension",if(extension.equals("hwp",true))"application/octet-stream" else "application/pdf")
+            val blocks=if(status=="ready")listOf(mapOf("id" to "b1","type" to "paragraph","text" to "COMPATIBLE-CACHE-7319")) else emptyList()
+            db.jdbc.update("INSERT INTO bnoc_document_analysis(attachment_ref,source_hash,parser_version,generation,status,body_json,body_text,metadata_json,processed_range,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",id,"a".repeat(64),oldVersion,7,status,db.json.writeValueAsString(blocks),if(status=="ready")"COMPATIBLE-CACHE-7319" else "","[]",if(status=="partial")"PDF 1~50쪽" else null,Instant.now().toString())
+            id
+        }
+        val before=db.rows("SELECT * FROM bnoc_document_analysis ORDER BY attachment_ref")
+        documents.runQueue()
+        assertEquals(before,db.rows("SELECT * FROM bnoc_document_analysis ORDER BY attachment_ref"),"UNAFFECTED_ANALYSIS_MUST_NOT_BE_INVALIDATED_OR_RELABELLED")
+        assertTrue(db.rows("SELECT * FROM bnoc_document_jobs").isEmpty())
+        refs.zip(states).forEach { (id,state) ->
+            val result=documents.document(requester,id,0,50)
+            assertEquals(state.first,result["status"])
+            assertEquals(oldVersion,result["parserVersion"])
+            if(state.first in setOf("failed","unreadable"))assertEquals(true,result["canRetry"])
+            assertArrayEquals(if(state.second.equals("hwp",true))hwp else pdf,files.download(requester,id).second)
+        }
+        assertEquals(number,query.list(requester,mapOf("q" to "COMPATIBLE-CACHE-7319")).single()["requestNumber"])
+        val incomplete=query.documentSearchStatus(requester,emptyMap())
+        assertEquals(4,incomplete["total"])
+        assertFalse((incomplete["items"] as List<Map<String,Any?>>).any { it["status"]=="pending" })
+        assertFalse(DocumentTikaConfig.compatibleAnalysis(oldVersion,"no_text","scan.PDF"))
+        assertFalse(DocumentTikaConfig.compatibleAnalysis(oldVersion,"pending","a.hwp"))
+        assertFalse(DocumentTikaConfig.compatibleAnalysis(oldVersion,"processing","a.pdf"))
+        assertFalse(DocumentTikaConfig.compatibleAnalysis("apache-tika-4.1.0-bnoc1","ready","old.hwp"))
+    }
+
+    @Test fun `PDF page limit remains partial when only unprocessed pages contain text`() {
+        val bytes=ByteArrayOutputStream().use { output ->
+            PDDocument().use { pdf ->
+                repeat(51) { index ->
+                    val page=PDPage();pdf.addPage(page)
+                    if(index==50)PDPageContentStream(pdf,page).use { stream ->
+                        stream.beginText();stream.setFont(PDType1Font(Standard14Fonts.FontName.HELVETICA),12f)
+                        stream.newLineAtOffset(50f,700f);stream.showText("LIMIT-TAIL-9182");stream.endText()
+                    }
+                }
+                pdf.save(output)
+            }
+            output.toByteArray()
+        }
+        val number=createRequest();val id=attach(number,bytes,"blank-first50.pdf","application/pdf")
+        documents.runQueue()
+        val document=documents.document(requester,id,0,50)
+        assertEquals("partial",document["status"],"UNPROCESSED_PAGES_MUST_NOT_BE_DECLARED_TEXTLESS")
+        assertEquals("PDF 1~50쪽",document["processedRange"])
+        assertTrue((document["blocks"] as List<*>).isEmpty())
+        assertTrue(query.list(requester,mapOf("q" to "LIMIT-TAIL-9182")).isEmpty())
+        assertTrue(query.documentSearchIncomplete(requester,mapOf("q" to "LIMIT-TAIL-9182")))
+        assertArrayEquals(bytes,files.download(requester,id).second)
+        assertEquals("NOT_FOUND",assertThrows(BusinessFailure::class.java) { documents.document(db.actor("requester-secondary")!!,id,0,50) }.code)
+        db.jdbc.update("UPDATE bnoc_document_analysis SET parser_version=?,status='no_text',processed_range=NULL WHERE attachment_ref=?","apache-tika-4.1.0-bnoc2",id)
+        db.jdbc.update("UPDATE bnoc_document_jobs SET parser_version=? WHERE attachment_ref=?","apache-tika-4.1.0-bnoc2",id)
+        assertEquals("pending",documents.document(requester,id,0,50)["status"],"LEGACY_TEXTLESS_RESULT_MUST_BE_INVALIDATED")
+        documents.runQueue()
+        val refreshed=documents.document(requester,id,0,50)
+        assertEquals("partial",refreshed["status"])
+        assertEquals("PDF 1~50쪽",refreshed["processedRange"])
+        assertEquals(DocumentTikaConfig.parserVersion,refreshed["parserVersion"])
+        assertEquals(2,(db.rows("SELECT generation FROM bnoc_document_analysis WHERE attachment_ref=?",id).single()["generation"] as Number).toInt())
         assertArrayEquals(bytes,files.download(requester,id).second)
     }
 

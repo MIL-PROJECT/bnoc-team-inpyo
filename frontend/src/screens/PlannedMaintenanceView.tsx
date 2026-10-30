@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError } from '../api/apiClient.mjs';
 import { ApiClient } from '../api/apiClient.mjs';
 import { moveDate, seoulDate } from '../app/dateTime.mjs';
@@ -19,6 +19,7 @@ const dateLabel = (value: string) => {
 };
 
 type PendingCreate = { operationId: string; firstWorkDate: string; createdAt: number };
+type EditInputFocus = { node: HTMLInputElement; field: 'title' | 'date' | 'completedDate'; start: number | null; end: number | null; direction: HTMLInputElement['selectionDirection'] };
 
 const createKey = (operationId: string) => JSON.stringify(['create', operationId]);
 const pendingCreateStoragePrefix = 'bnoc:planned-create:';
@@ -43,11 +44,11 @@ export function clearPendingPlannedCreateRecovery() {
   try { for (const key of Object.keys(window.localStorage)) if (key.startsWith(pendingCreateStoragePrefix)) window.localStorage.removeItem(key); } catch { /* Browser storage may be unavailable. */ }
 }
 
-function PlannedDateField({ label, value, min, max, today, showNavigation = false, disabled = false, onChange }: { label: string; value: string; min?: string; max?: string; today?: string; showNavigation?: boolean; disabled?: boolean; onChange: (value: string) => void }) {
+function PlannedDateField({ label, value, min, max, name, today, showNavigation = false, disabled = false, onChange }: { label: string; value: string; min?: string; max?: string; name?: string; today?: string; showNavigation?: boolean; disabled?: boolean; onChange: (value: string) => void }) {
   const id = useId();
   const dateKind = today && value ? value < today ? '지난 날짜' : value > today ? '미래 예정' : '오늘' : '';
   return <div className="field planned-date-field"><label htmlFor={id}>{label}{showNavigation && dateKind && <small className={`planned-date-kind planned-date-kind-${dateKind === '오늘' ? 'today' : dateKind === '미래 예정' ? 'future' : 'past'}`}>{dateKind}</small>}</label><span className="planned-date-control">
-    <DateInput id={id} value={value} min={min} max={max} required disabled={disabled} onChange={event => onChange(event.target.value)} />
+    <DateInput id={id} name={name} value={value} min={min} max={max} required disabled={disabled} onChange={event => onChange(event.target.value)} />
   </span>{showNavigation && value && <ActionGroup className="planned-date-nav" role="group" aria-label="날짜 빠른 이동">
     <Button type="button" disabled={disabled} aria-label="이전 날짜" onClick={() => onChange(moveDate(value, -1))}>이전</Button>
     <Button type="button" disabled={disabled} aria-current={value === today ? 'date' : undefined} onClick={() => today && onChange(today)}>오늘</Button>
@@ -77,9 +78,63 @@ export function PlannedMaintenanceView({ api, revision, department, onChanged, o
   const [writeError, setWriteError] = useState(() => pendingCreates.length > 0 ? '저장 결과를 확인하지 못했습니다. 원래 작업 제목을 다시 입력하면 같은 제출 번호로 확인합니다.' : '');
   useEffect(()=>{if(writeError){feedbackRef.current?.focus({preventScroll:true});feedbackRef.current?.scrollIntoView({block:'nearest'});}},[writeError]);
   const [saving, setSaving] = useState(false);
-  const [editingId, setEditingId] = useState('');
+  const [editingBase, setEditingBase] = useState<PlannedWork | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editFirstWorkDate, setEditFirstWorkDate] = useState('');
+  const [editCompletedDate, setEditCompletedDate] = useState('');
+  const editFocus = useRef<{
+    generation: number;
+    form: HTMLFormElement | null;
+    input: EditInputFocus | null;
+    request: { generation: number; input: EditInputFocus | null } | null;
+  }>({ generation: 0, form: null, input: null, request: null });
+  const clearEditFocus = useCallback(() => {
+    editFocus.current = { generation: editFocus.current.generation + 1, form: null, input: null, request: null };
+  }, []);
+  const rememberEditFocus = useCallback(() => {
+    const memory = editFocus.current;
+    const input = memory.form?.ownerDocument.activeElement;
+    memory.input = input instanceof HTMLInputElement && memory.form?.contains(input)
+      ? { node: input, field: input.name === 'completedDate' ? 'completedDate' : input.type === 'date' ? 'date' : 'title', start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection }
+      : null;
+  }, []);
+  const connectEditForm = useCallback((form: HTMLFormElement | null) => {
+    if (!form) return;
+    const generation = editFocus.current.generation;
+    editFocus.current.form = form;
+    return () => {
+      const memory = editFocus.current;
+      if (memory.form !== form || memory.generation !== generation) return;
+      const previousInput = memory.input;
+      rememberEditFocus();
+      const input = memory.input ?? previousInput;
+      const document = form.ownerDocument;
+      const active = document.activeElement;
+      if (input && form.contains(input.node) && (active === input.node || (!input.node.isConnected && (active === document.body || active === document.documentElement)))) {
+        memory.request = { generation, input };
+      }
+      memory.form = null;
+      memory.input = null;
+    };
+  }, [rememberEditFocus]);
+  useLayoutEffect(() => {
+    const memory = editFocus.current;
+    const request = memory.request;
+    memory.request = null;
+    const form = memory.form;
+    if (!request || request.generation !== memory.generation || !editingBase || !form?.isConnected) return;
+    const document = form.ownerDocument;
+    const active = document.activeElement;
+    if (writeError || !document.hasFocus() || document.visibilityState === 'hidden' || form.closest('[inert]') || document.querySelector('dialog[open]')) return;
+    if (request.input && (request.input.node.isConnected || (active && active !== document.body && active !== document.documentElement))) return;
+    const input = form.querySelector<HTMLInputElement>(request.input?.field === 'completedDate' ? 'input[name="completedDate"]' : request.input?.field === 'date' ? 'input[type="date"]' : 'input:not([type="date"])');
+    if (!input || input.disabled) return;
+    input.focus({ preventScroll: true });
+    if (request.input?.field === 'title' && request.input.start !== null && request.input.end !== null) input.setSelectionRange(request.input.start, request.input.end, request.input.direction ?? 'none');
+    rememberEditFocus();
+  });
+  useLayoutEffect(() => () => clearEditFocus(), [clearEditFocus]);
+  const finishEdit = () => { clearEditFocus(); setEditingBase(null); };
   const [completingId, setCompletingId] = useState('');
   const [completedDate, setCompletedDate] = useState(today);
   const pendingOperations = useRef(new Map<string, string>(pendingCreates.map(pending => [createKey(pending.operationId), pending.operationId])));
@@ -90,14 +145,19 @@ export function PlannedMaintenanceView({ api, revision, department, onChanged, o
   const inProgressItems = data?.inProgress ?? [];
   const dayItems = useMemo(() => inProgressItems.filter(item => isPlannedWorkInProgressOnDate(item, selectedDate)), [inProgressItems, selectedDate]);
   const completedItems = data?.completed ?? [];
+  const editingId = editingBase?.id ?? '';
   const editingItem = [...inProgressItems, ...completedItems].find(item => item.id === editingId);
-  const editDirty = Boolean(editingItem && (editTitle !== editingItem.title || editFirstWorkDate !== editingItem.firstWorkDate));
+  const editDirty = Boolean(editingBase && (editTitle !== editingBase.title || editFirstWorkDate !== editingBase.firstWorkDate || editCompletedDate !== (editingBase.completedDate ?? '')));
+  const editingGroup = dayItems.some(item => item.id === editingId) ? 'day' : completedItems.some(item => item.id === editingId) ? 'completed' : null;
+  const editingRows = editingGroup === 'day' ? dayItems : editingGroup === 'completed' ? completedItems : [];
+  const editingIndex = editingRows.findIndex(item => item.id === editingId);
+  const canSaveEdit = Boolean(editingBase && editingItem && !saving && !result.loading && !result.error);
   useUnsavedChanges(Boolean(title.trim()) || editDirty || creating || uncertainCreate, creating || uncertainCreate);
 
   const changeWorkDate = (value: string) => {
     if (uncertainCreate || saving || !value || value === selectedDate) return;
     if (editDirty && !window.confirm('수정 중인 내용이 저장되지 않았습니다. 날짜를 이동하면 수정 내용을 버릴까요?')) return;
-    if (editDirty) setEditingId('');
+    finishEdit();
     setSelectedDate(value);
     setNotice('');
     setWriteError('');
@@ -207,21 +267,26 @@ export function PlannedMaintenanceView({ api, revision, department, onChanged, o
   };
 
   const startEdit = (item: PlannedWork) => {
-    setEditingId(item.id); setEditTitle(item.title); setEditFirstWorkDate(item.firstWorkDate); setWriteError(''); setNotice('');
+    if (editDirty && !window.confirm('저장하지 않은 수정 내용을 버리고 선택한 작업을 수정할까요?')) return;
+    clearEditFocus();
+    editFocus.current.request = { generation: editFocus.current.generation, input: null };
+    setEditingBase({ ...item }); setEditTitle(item.title); setEditFirstWorkDate(item.firstWorkDate); setEditCompletedDate(item.completedDate ?? ''); setWriteError(''); setNotice('');
   };
 
   const saveEdit = (event: FormEvent) => {
     event.preventDefault();
     const cleanTitle = editTitle.trim();
-    if (!cleanTitle || !editFirstWorkDate || !editingItem) return;
-    if (editingItem.completedDate && editFirstWorkDate > editingItem.completedDate) {
-      setWriteError('업무 기준일은 완료일보다 늦을 수 없습니다.');
+    if (!cleanTitle || !editFirstWorkDate || !editingBase || !editingItem || !canSaveEdit) return;
+    if (editingBase.status === '완료' && (!editCompletedDate || editCompletedDate < editFirstWorkDate || editCompletedDate > today)) {
+      setWriteError('완료일은 업무 기준일 이후, 오늘 이하로 선택하세요.');
       return;
     }
-    const item = editingItem;
-    const key = JSON.stringify(['update', item.id, item.revision, cleanTitle, editFirstWorkDate]);
-    void write(key, operationId => api.updatePlannedWork(item.id, { operationId, revision: item.revision, title: cleanTitle, firstWorkDate: editFirstWorkDate }), '수정했습니다.').then(saved => {
-      if (saved) setEditingId('');
+    const item = editingBase;
+    const completion = item.status === '완료' ? { completedDate: editCompletedDate } : {};
+    const key = JSON.stringify(['update', item.id, item.revision, cleanTitle, editFirstWorkDate, completion]);
+    void write(key, operationId => api.updatePlannedWork(item.id, { operationId, revision: item.revision, title: cleanTitle, firstWorkDate: editFirstWorkDate, ...completion }), '수정했습니다.').then(saved => {
+      if (saved) finishEdit();
+      else if (lastWriteErrorCode.current === 'CONFLICT') setWriteError('다른 창에서 작업이 변경됐습니다. 입력은 유지했습니다. 취소한 뒤 최신 작업을 다시 선택해 수정하세요.');
     });
   };
 
@@ -247,10 +312,13 @@ export function PlannedMaintenanceView({ api, revision, department, onChanged, o
     } finally { setSaving(false); }
   };
 
-  const renderEdit = (item: PlannedWork) => <form className="planned-edit" onSubmit={saveEdit}>
-    <label className="field"><span>작업 제목</span><input value={editTitle} onChange={event => setEditTitle(event.target.value)} maxLength={160} required autoFocus /></label>
-    <PlannedDateField label="업무 날짜" value={editFirstWorkDate} onChange={setEditFirstWorkDate} />
-    <ActionGroup><Button type="submit" variant="primary" disabled={saving || !editTitle.trim() || !editFirstWorkDate}>저장</Button><Button disabled={saving} onClick={() => setEditingId('')}>취소</Button></ActionGroup>
+  const renderEdit = () => <form key={editFocus.current.generation} ref={connectEditForm} className="planned-edit" onSubmit={saveEdit} onFocusCapture={rememberEditFocus} onSelectCapture={rememberEditFocus} onBlurCapture={event => {
+    if (event.relatedTarget instanceof Node && !event.currentTarget.contains(event.relatedTarget)) editFocus.current.input = null;
+  }}>
+    <label className="field"><span>작업 제목</span><input value={editTitle} onChange={event => setEditTitle(event.target.value)} maxLength={160} required disabled={saving} /></label>
+    <PlannedDateField label="업무 날짜" value={editFirstWorkDate} disabled={saving} onChange={setEditFirstWorkDate} />
+    {editingBase?.status === '완료' && <PlannedDateField label="완료일" name="completedDate" value={editCompletedDate} min={editFirstWorkDate} max={today} disabled={saving} onChange={setEditCompletedDate} />}
+    <ActionGroup><Button type="submit" variant="primary" disabled={!canSaveEdit || !editTitle.trim() || !editFirstWorkDate}>저장</Button><Button disabled={saving} onClick={finishEdit}>취소</Button></ActionGroup>
   </form>;
 
   const renderCompletionCheck = (item: PlannedWork) => completingId === item.id ? <div className="planned-complete-check">
@@ -267,10 +335,19 @@ export function PlannedMaintenanceView({ api, revision, department, onChanged, o
   </ActionGroup>;
 
   const renderWorkItem = (item: PlannedWork) => <ActionRow className="planned-item" key={item.id}
-    actions={editingId === item.id ? undefined : renderActions(item)}
-    details={editingId !== item.id && item.status === '진행 중' ? renderCompletionCheck(item) : undefined}>
-    {editingId === item.id ? renderEdit(item) : <div className="planned-item-main"><h3>{item.title}</h3><small className="planned-item-status">{item.status}{item.completedDate && ` · 완료일 ${dateLabel(item.completedDate)}`}</small></div>}
+    actions={renderActions(item)}
+    details={item.status === '진행 중' ? renderCompletionCheck(item) : undefined}>
+    <div className="planned-item-main"><h3>{item.title}</h3><small className="planned-item-status">{item.status}{item.completedDate && ` · 완료일 ${dateLabel(item.completedDate)}`}</small></div>
   </ActionRow>;
+
+  const renderGroupHeading = (group: 'day' | 'completed') => <div className="row-head"><h2 id={`planned-${group}-title`}>{group === 'day' ? `${dateLabel(selectedDate)} 업무` : '완료 작업'} <span className="count">{group === 'day' ? dayItems.length : completedItems.length}</span></h2></div>;
+  const renderWorkSection = (group: 'day' | 'completed') => {
+    const items = group === 'day' ? dayItems : completedItems;
+    return <section key={group} className="planned-section" aria-labelledby={`planned-${group}-title`}>
+      {renderGroupHeading(group)}
+      {items.length ? <div className="planned-list">{items.map(renderWorkItem)}</div> : <p className="empty planned-empty">{group === 'day' ? '진행 중인 작업이 없습니다.' : '완료된 작업이 없습니다.'}</p>}
+    </section>;
+  };
 
   return <div className="planned-page">
     <div className="page-head planned-head">
@@ -312,17 +389,23 @@ export function PlannedMaintenanceView({ api, revision, department, onChanged, o
     </section>
 
     <ResourceStatus loading={result.loading} error={result.error} retry={result.reload} />
-    {data && <>
-      <section className="planned-section" aria-labelledby="planned-day-title">
-        <div className="row-head"><h2 id="planned-day-title">{dateLabel(selectedDate)} 업무 <span className="count">{dayItems.length}</span></h2></div>
-        {dayItems.length ? <div className="planned-list">{dayItems.map(renderWorkItem)}</div> : <p className="empty planned-empty">진행 중인 작업이 없습니다.</p>}
-      </section>
-
-      <section className="planned-section" aria-labelledby="planned-completed-title">
-        <div className="row-head"><h2 id="planned-completed-title">완료 작업 <span className="count">{completedItems.length}</span></h2></div>
-        {completedItems.length ? <div className="planned-list">{completedItems.map(renderWorkItem)}</div> : <p className="empty planned-empty">완료된 작업이 없습니다.</p>}
-      </section>
-    </>}
+    {/* Fixed fragment boundaries keep the editor in place as current rows and groups change. */}
+    <Fragment key="before-edit-section">
+      {data && editingGroup === 'completed' && renderWorkSection('day')}
+    </Fragment>
+    {editingBase && <section key={`editing-${editFocus.current.generation}`} className={`planned-section${editingGroup ? '' : ' planned-edit-retained'}`} aria-labelledby={editingGroup ? `planned-${editingGroup}-title` : 'planned-edit-retained-title'}>
+      {editingGroup ? renderGroupHeading(editingGroup) : <div className="row-head"><h2 id="planned-edit-retained-title">편집 중인 작업</h2></div>}
+      {!editingGroup && <p>{result.error ? '편집 화면을 유지했습니다. 목록을 다시 확인한 뒤 저장하세요.' : result.loading || !data ? '목록을 확인하는 동안 편집 화면을 유지합니다.' : editingItem ? '현재 날짜에 표시되지 않는 작업입니다. 편집 화면을 유지합니다.' : '현재 목록에서 편집 중인 작업을 찾을 수 없습니다. 편집 화면을 유지합니다.'}</p>}
+      <div key="editing-list" className="planned-list">
+        <Fragment key="before-edit-row">{editingRows.slice(0, editingIndex).map(renderWorkItem)}</Fragment>
+        <ActionRow key="editing-row" className={editingGroup ? 'planned-item' : undefined}>{renderEdit()}</ActionRow>
+        <Fragment key="after-edit-row">{editingRows.slice(editingIndex + 1).map(renderWorkItem)}</Fragment>
+      </div>
+    </section>}
+    <Fragment key="after-edit-section">
+      {data && !editingGroup && renderWorkSection('day')}
+      {data && editingGroup !== 'completed' && renderWorkSection('completed')}
+    </Fragment>
 
   </div>;
 }

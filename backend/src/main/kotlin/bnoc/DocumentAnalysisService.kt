@@ -31,7 +31,9 @@ internal fun processedDocumentRange(isPdf:Boolean,pageCount:Int,parserOutputLeng
 ).joinToString(" · ").ifBlank { null }
 
 internal object DocumentTikaConfig {
-    const val parserVersion="apache-tika-4.1.0-bnoc2"
+    const val parserVersion="apache-tika-4.1.0-bnoc3"
+    fun compatibleAnalysis(version:Any?,status:Any?,fileName:String):Boolean = version==parserVersion ||
+        version=="apache-tika-4.1.0-bnoc2" && (status in setOf("ready","partial","failed","unreadable") || status=="no_text" && fileName.endsWith(".hwp",true))
     private val forkClasspath by lazy { resolveForkClasspath() }
 
     fun forkClasspath():String = forkClasspath
@@ -103,7 +105,7 @@ class DocumentAnalysisService(
             "metadata" to emptyList<Any>(),"source" to if(temporary) "temporary" else if(excluded) "excluded" else "unsupported","parserVersion" to parserVersion,"errorCode" to null,"canRetry" to false
         )
         val row=db.rows("SELECT * FROM bnoc_document_analysis WHERE attachment_ref=?",ref).firstOrNull()
-        val currentParser=row?.get("parser_version")==parserVersion
+        val currentParser=DocumentTikaConfig.compatibleAnalysis(row?.get("parser_version"),row?.get("status"),attachment["file_name"] as String)
         val status=if(currentParser) row?.get("status") as? String ?: "pending" else "pending"
         val blocks=if(currentParser) row?.get("body_json")?.let { runCatching { db.json.readValue<List<Map<String,Any?>>>(it as String) }.getOrNull() }.orEmpty() else emptyList()
         val metadata=if(currentParser) row?.get("metadata_json")?.let { runCatching { db.json.readValue<List<Map<String,Any?>>>(it as String) }.getOrNull() }.orEmpty() else emptyList()
@@ -118,7 +120,7 @@ class DocumentAnalysisService(
             "totalBlocks" to blocks.size,
             "metadata" to metadata,
             "source" to "apache-tika",
-            "parserVersion" to parserVersion,
+            "parserVersion" to if(currentParser) row?.get("parser_version") else parserVersion,
             "errorCode" to if(currentParser) row?.get("error_code") else null,
             "canRetry" to (currentParser && attachment["current_link"]==true && workflow.canEdit(actor,query.requireRequest(actor,attachment["resource_ref"] as String)) && status in setOf("failed","unreadable"))
         )
@@ -170,7 +172,8 @@ class DocumentAnalysisService(
     }
 
     private fun enqueueMissing() {
-        db.rows("SELECT a.attachment_ref FROM bnoc_attachments a LEFT JOIN bnoc_document_analysis d ON d.attachment_ref=a.attachment_ref LEFT JOIN bnoc_document_jobs j ON j.attachment_ref=a.attachment_ref WHERE a.resource_kind='request' AND a.resource_ref IS NOT NULL AND a.content_analysis_excluded=FALSE AND (LOWER(a.file_name) LIKE '%.hwp' OR LOWER(a.file_name) LIKE '%.pdf') AND (d.attachment_ref IS NULL OR d.parser_version<>? OR (d.status='pending' AND j.attachment_ref IS NULL))",parserVersion)
+        db.rows("SELECT a.attachment_ref,a.file_name,d.parser_version,d.status FROM bnoc_attachments a LEFT JOIN bnoc_document_analysis d ON d.attachment_ref=a.attachment_ref LEFT JOIN bnoc_document_jobs j ON j.attachment_ref=a.attachment_ref WHERE a.resource_kind='request' AND a.resource_ref IS NOT NULL AND a.content_analysis_excluded=FALSE AND (LOWER(a.file_name) LIKE '%.hwp' OR LOWER(a.file_name) LIKE '%.pdf') AND (d.attachment_ref IS NULL OR d.parser_version<>? OR (d.status='pending' AND j.attachment_ref IS NULL))",parserVersion)
+            .filter { it["status"]=="pending" || !DocumentTikaConfig.compatibleAnalysis(it["parser_version"],it["status"],it["file_name"] as String) }
             .forEach { enqueue(it["attachment_ref"] as String) }
     }
 
@@ -179,7 +182,7 @@ class DocumentAnalysisService(
             val attachment=db.rows("SELECT * FROM bnoc_attachments WHERE attachment_ref=? AND resource_kind='request' AND resource_ref IS NOT NULL AND content_analysis_excluded=FALSE FOR UPDATE",ref).firstOrNull() ?: return@execute
             val previous=db.rows("SELECT * FROM bnoc_document_analysis WHERE attachment_ref=? FOR UPDATE",ref).firstOrNull()
             val existingJob=db.rows("SELECT attachment_ref FROM bnoc_document_jobs WHERE attachment_ref=? FOR UPDATE",ref).isNotEmpty()
-            if(previous!=null && previous["parser_version"]==parserVersion && ((previous["status"] as? String)!="pending" || existingJob)) return@execute
+            if(previous!=null && DocumentTikaConfig.compatibleAnalysis(previous["parser_version"],previous["status"],attachment["file_name"] as String) && ((previous["status"] as? String)!="pending" || existingJob)) return@execute
             val file=storedPath(attachment["stored_name"] as String)
             if(!isAnalyzedDocument(attachment["file_name"] as String) || !Files.isRegularFile(file)) return@execute
             val hash=sha256(Files.readAllBytes(file));val generation=((previous?.get("generation") as? Number)?.toInt() ?: 0)+1;val now=Instant.now().toString()
@@ -227,12 +230,10 @@ class DocumentAnalysisService(
                 } else {
                     val resultMetadata=result.metadata
                     val extracted=DocumentContentExtractor.extractHtml(result.content.orEmpty(),resultMetadata.get(TikaCoreProperties.TITLE))
-                    if(extracted.bodyText.isBlank()) finishResult(job,"no_text",extracted.blocks,extracted.bodyText,extracted.metadata,null)
-                    else {
-                        val pageCount=listOf("xmpTPg:NPages","meta:page-count","meta:pageCount").mapNotNull { resultMetadata.get(it)?.toIntOrNull() }.maxOrNull() ?: 0
-                        val processedRange=processedDocumentRange(extension=="pdf",pageCount,result.content?.length ?: 0)
-                        finishResult(job,if(processedRange!=null) "partial" else "ready",extracted.blocks,extracted.bodyText,extracted.metadata,null,processedRange)
-                    }
+                    val pageCount=listOf("xmpTPg:NPages","meta:page-count","meta:pageCount").mapNotNull { resultMetadata.get(it)?.toIntOrNull() }.maxOrNull() ?: 0
+                    val processedRange=processedDocumentRange(extension=="pdf",pageCount,result.content?.length ?: 0)
+                    val status=if(processedRange!=null) "partial" else if(extracted.bodyText.isBlank()) "no_text" else "ready"
+                    finishResult(job,status,extracted.blocks,extracted.bodyText,extracted.metadata,null,processedRange)
                 }
             }
         } finally { Files.deleteIfExists(temp);Files.deleteIfExists(tikaConfig) }

@@ -10,8 +10,9 @@ import type {RunCommand} from './RequestRegistrationForm';
 import {DepartmentContactEditor} from './DepartmentContactEditor';
 import { ResourceStatus } from './ResourceStatus';
 import { describeConditions, QueryContext } from './QueryContext';
+import './workFeedback.css';
 
-const initial = () => ({ teamId: '', category: '', workType: '', systemType: '', status: '', priority: '' });
+const initial = () => ({ teamIds: [] as string[], category: '', workType: '', systemType: '', status: '', priority: '' });
 const bucketLabels: Record<string, string> = { assigned:'할당 작업', completed:'완료 작업', remaining:'남은 작업', returned:'반환 대기 작업', unassigned:'미배정 요청', 'after-action':'선조치 후보고', planned:'계획 정비', all:'전체 작업' };
 const dateLabel = (value?: string) => value ? new Intl.DateTimeFormat('ko-KR', { timeZone: 'UTC', dateStyle: 'medium' }).format(new Date(`${value}T00:00:00Z`)) : '—';
 
@@ -21,13 +22,13 @@ function ProgressTrack({ label, completed, remaining, total, planned = false }: 
   return <div className={`overview-progress${planned?' overview-progress--planned':''}`} role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={max} aria-valuenow={value} aria-valuetext={`완료 ${completed}건, ${planned?'진행':'남음'} ${remaining}건`}><span aria-hidden="true" style={{width:`${width}%`}} /></div>;
 }
 
-export function SharedWorkOverview({ api, teams, revision, onOpen, actor, run }: { actor?:Actor;run?:RunCommand;api: ApiClient; teams: string[]; revision: number; onOpen: (number: string) => void }) {
-  const [criteria, setCriteria] = useState(initial), [applied, setApplied] = useState(initial), [bucket, setBucket] = useState('assigned'), [page, setPage] = useState(0), [advanced, setAdvanced] = useState(false);
-  const context = { bucket, page, teamId:applied.teamId, conditions: describeConditions([
-    ['부서', applied.teamId], ['지원 유형', applied.category], ['체계 종류', applied.systemType], ['작업 유형', applied.workType],
+export function SharedWorkOverview({ api, teams, revision, onOpen, actor, run, initialBucket = 'assigned' }: { actor?:Actor;run?:RunCommand;api: ApiClient; teams: string[]; revision: number; onOpen: (number: string) => void; initialBucket?:'assigned'|'returned' }) {
+  const [criteria, setCriteria] = useState(initial), [applied, setApplied] = useState(initial), [bucket, setBucket] = useState<string>(initialBucket), [page, setPage] = useState(0), [advanced, setAdvanced] = useState(false);
+  const context = { bucket, page, teamIds:applied.teamIds, conditions: describeConditions([
+    ['부서', applied.teamIds.join(' · ')], ['지원 유형', applied.category], ['체계 종류', applied.systemType], ['작업 유형', applied.workType],
     ['작업 상태', applied.status], ['일반·긴급', applied.priority ? priorityLabel(applied.priority) : '']
   ]) + ` · ${bucketLabels[bucket]} · ${page + 1}페이지` };
-  const result = useResource<WorkOverview, typeof context>(signal => api.getWorkOverview({ ...applied, bucket, page, size: 20 }, signal), [api, applied, bucket, page, revision], context);
+  const result = useResource<WorkOverview, typeof context>(signal => api.getWorkOverview({ ...applied, teamIds:applied.teamIds.join(','), bucket, page, size: 20 }, signal), [api, applied, bucket, page, revision], context);
   const view = result.data;
   const count = (key: string) => view?.counts[key] ?? (key === 'unassigned' ? typeof view?.unassignedRequests === 'number' ? view.unassignedRequests : view?.unassignedRequests?.length : key === 'after-action' ? typeof view?.afterActionCompleted === 'number' ? view.afterActionCompleted : view?.afterActionCompleted?.length : 0) ?? 0;
   const assignedTotal=view?.counts.assigned??0, assignedCompleted=view?.counts.completed??0, assignedRemaining=view?.counts.remaining??0;
@@ -41,9 +42,9 @@ export function SharedWorkOverview({ api, teams, revision, onOpen, actor, run }:
     : displayTime(item.schedule ?? item.scheduledAt);
   const requestOnlyFilters = Boolean(applied.category || applied.workType || applied.systemType || applied.priority);
   const displayed = result.success?.context ?? context;
-  const displayedDepartments=view?.byDepartment.filter(row=>!displayed.teamId||row.department===displayed.teamId)??[];
+  const displayedDepartments=view?.byDepartment.filter(row=>!displayed.teamIds.length||displayed.teamIds.includes(row.department))??[];
   const search = (event: FormEvent) => { event.preventDefault(); setApplied({ ...criteria }); setPage(0); };
-  const set = (field: keyof ReturnType<typeof initial>, value: string) => setCriteria(previous => ({ ...previous, [field]: value }));
+  const set = (field: Exclude<keyof ReturnType<typeof initial>,'teamIds'>, value: string) => setCriteria(previous => ({ ...previous, [field]: value }));
   const openBucket = (value: string) => { setBucket(value); setPage(0); };
   const renderRow = (item: SharedWork) => {
     const planned = item.source === 'planned';
@@ -61,11 +62,10 @@ export function SharedWorkOverview({ api, teams, revision, onOpen, actor, run }:
     </tr>;
   };
 
-  const selectDepartment = (teamId: string) => { const next={...applied,teamId};setCriteria(next);setApplied(next);setBucket('assigned');setPage(0); };
+  const selectDepartment = (teamId: string) => { const next={...applied,teamIds:applied.teamIds.includes(teamId)?applied.teamIds.filter(value=>value!==teamId):[...applied.teamIds,teamId]};setCriteria(next);setApplied(next);setBucket('assigned');setPage(0); };
   return <div className="work-overview-page"><div className="page-head"><h1>부서별 작업 현황</h1><Button onClick={result.reload}>새로고침</Button></div>
     {actor?.role==='admin'&&run&&<DepartmentContactEditor api={api} run={run}/>}
-    <form onSubmit={search} className="overview-filters"><div className="overview-filter-bar">
-      <label className="field"><span>부서</span><select aria-label="부서" value={criteria.teamId} onChange={e => set('teamId', e.target.value)}><option value="">전체</option>{teams.map(team => <option key={team}>{team}</option>)}</select></label>
+    <form onSubmit={search} className="overview-filters"><fieldset className="overview-departments"><legend>부서 선택</legend><label className="check"><input type="checkbox" checked={!criteria.teamIds.length} onChange={()=>setCriteria(previous=>({...previous,teamIds:[]}))}/>전체</label>{teams.map(team=><label className="check" key={team}><input type="checkbox" checked={criteria.teamIds.includes(team)} onChange={()=>setCriteria(previous=>({...previous,teamIds:previous.teamIds.includes(team)?previous.teamIds.filter(value=>value!==team):[...previous.teamIds,team]}))}/>{team}</label>)}</fieldset><div className="overview-filter-bar">
       <label className="field"><span>작업 상태</span><select aria-label="작업 상태" value={criteria.status} onChange={e => set('status',e.target.value)}><option value="">전체</option>{['배정','작업 중','진행 중','완료','반환'].map(value => <option key={value} value={value}>{workStatusLabel(value)}</option>)}</select></label>
       <Button type="submit" variant="primary">검색</Button><Button onClick={() => { const empty=initial();setCriteria(empty);setApplied(empty);openBucket('assigned'); }}>초기화</Button>
       <Button aria-expanded={advanced} aria-controls="overview-extra-filters" onClick={()=>setAdvanced(value=>!value)}>상세 조회 조건</Button>
@@ -83,8 +83,13 @@ export function SharedWorkOverview({ api, teams, revision, onOpen, actor, run }:
         <ProgressTrack label="전체 작업 완료율" completed={allCompleted} remaining={allRemaining} total={allTotal} />
       </section>
       {requestOnlyFilters&&<p className="notice">상세 요청 조건이 적용되어 계획 정비는 이 조회에서 제외됩니다.</p>}
+      <section className="department-work-chart" aria-label="부서별 작업 그래프"><div className="row-head"><h2>부서별 작업 비교</h2><p className="chart-legend"><span>남음</span><span>완료</span></p></div>{displayedDepartments.map(row=>{
+        const remaining=row.allRemaining??((row.remaining??0)+(row.plannedInProgress??0)),completed=row.allCompleted??((row.completed??0)+(row.plannedCompleted??0));
+        const max=Math.max(1,...displayedDepartments.map(item=>item.all??((item.assigned??0)+(item.planned??0))));
+        return <div className="department-chart-row" key={row.department} role="img" aria-label={`${row.department} 남음 ${remaining}건, 완료 ${completed}건`}><strong>{row.department}</strong><div className="department-chart-track" aria-hidden="true"><span className="department-chart-remaining" style={{width:`${remaining/max*100}%`}}/><span className="department-chart-completed" style={{width:`${completed/max*100}%`}}/></div><span>남음 {remaining} · 완료 {completed}</span></div>;
+      })}</section>
       <section className="department-comparison-section" aria-labelledby="department-overview-title"><h2 id="department-overview-title">부서별 진행 상황</h2>
-        {displayedDepartments.length?<div className="table-wrap"><table className="department-comparison"><thead><tr><th scope="col" rowSpan={2}>부서</th><th scope="col" rowSpan={2}>미완료</th><th scope="colgroup" colSpan={2}>배정 작업</th><th scope="colgroup" colSpan={2}>계획 정비</th><th scope="col" rowSpan={2}>전체</th><th scope="col" rowSpan={2}>포함 내역</th></tr><tr><th scope="col">남음</th><th scope="col">완료</th><th scope="col">진행</th><th scope="col">완료</th></tr></thead><tbody>{[...displayedDepartments].sort((a,b)=>(b.allRemaining??((b.remaining??0)+(b.plannedInProgress??0)))-(a.allRemaining??((a.remaining??0)+(a.plannedInProgress??0)))).map(row=>{
+        {displayedDepartments.length?<div className="table-wrap"><table className="department-comparison"><thead><tr><th scope="col" rowSpan={2}>부서</th><th scope="col" rowSpan={2}>미완료</th><th scope="colgroup" colSpan={2}>배정 작업</th><th scope="colgroup" colSpan={2}>계획 정비</th><th scope="col" rowSpan={2}>전체</th></tr><tr><th scope="col">남음</th><th scope="col">완료</th><th scope="col">진행</th><th scope="col">완료</th></tr></thead><tbody>{[...displayedDepartments].sort((a,b)=>(b.allRemaining??((b.remaining??0)+(b.plannedInProgress??0)))-(a.allRemaining??((a.remaining??0)+(a.plannedInProgress??0)))).map(row=>{
           const assigned=row.assigned??0,completed=row.completed??0,remaining=row.remaining??0;
           const plannedDone=row.plannedCompleted??0,plannedLeft=row.plannedInProgress??0,planned=row.planned??(plannedDone+plannedLeft);
           const total=row.all??(assigned+planned),open=row.allRemaining??(remaining+plannedLeft);
@@ -93,7 +98,7 @@ export function SharedWorkOverview({ api, teams, revision, onOpen, actor, run }:
             <td className="department-open"><strong>{open}</strong></td><td>{remaining}</td>
             <td>{completed}<ProgressTrack label={`${row.department} 배정 작업 완료율`} completed={completed} remaining={remaining} total={assigned}/></td>
             <td>{plannedLeft}</td><td>{plannedDone}<ProgressTrack label={`${row.department} 계획 정비 완료율`} completed={plannedDone} remaining={plannedLeft} total={planned} planned/></td>
-            <td>{total}</td><td className="department-subsets">{row.afterAction? <span>후보고 {row.afterAction}건 포함</span>:null}{row.returned?<span className="exception">반환 {row.returned}건 포함</span>:null}{!row.afterAction&&!row.returned?'—':null}</td>
+            <td>{total}</td>
           </tr>;
         })}</tbody></table></div>:<p className="empty">표시할 부서별 집계가 없습니다.</p>}
         <details className="overview-definitions"><summary>집계 기준</summary><p>전체 작업은 배정 작업과 계획 정비의 합계입니다. 선조치 후보고·반환은 배정 작업에 포함되며 중복 합산하지 않습니다. 미배정은 요청 단위입니다.</p></details>

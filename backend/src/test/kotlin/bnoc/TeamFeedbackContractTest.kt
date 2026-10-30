@@ -126,7 +126,7 @@ class TeamFeedbackContractTest {
         val list=query.list(actor("requester"),emptyMap()).associateBy { it["requestNumber"] }
         assertEquals(true,list[direct]!!["canReuse"]);assertEquals(false,list[proxy]!!["canReuse"])
         assertEquals("지원 요청",list[direct]!!["detailPreview"]);assertEquals("신청 위치",list[direct]!!["location"])
-        assertFalse(list[proxy]!!.containsKey("detailPreview"))
+        assertEquals("지원 요청",list[proxy]!!["detailPreview"]);assertEquals("신청 위치",list[proxy]!!["location"])
         assertFalse(list[direct]!!.containsKey("registeredBy"));assertFalse(list[direct]!!.containsKey("requesterSubject"))
         assertEquals(listOf(direct),query.list(actor("requester"),mapOf("reusableOnly" to "true")).map { it["requestNumber"] },"REUSE_FILTER_MUST_RUN_BEFORE_PAGING")
         assertEquals(2,query.list(actor("requester"),mapOf("reusableOnly" to "false")).size)

@@ -1,16 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Actor, Notification } from '../types';
+import { workStatusLabel } from '../types';
 import { ApiClient } from '../api/apiClient.mjs';
 import { displayDate } from '../app/dateTime.mjs';
 import { useResource } from '../app/useResource';
 import { ResourceStatus } from './ResourceStatus';
 import type { RunCommand } from './RequestRegistrationForm';
+import './workFeedback.css';
 export function NotificationInbox({ actor, query, run, revision = 0, onOpen }: { actor: Actor; query: ApiClient; run:RunCommand; revision?: number; onOpen: (id:string) => void }) {
   const [page,setPage] = useState(0);
   const [markError,setMarkError]=useState('');
   const [retryKey,setRetryKey]=useState(0);
   const submitted=useRef(new Set<string>());
-  const result = useResource<{ items: Notification[]; total: number }>(signal => query.getNotifications(signal,{ page,size:20 }), [actor.id, query, revision, page]);
+  const context = { page };
+  const result = useResource<{ items: Notification[]; total: number }, typeof context>(signal => query.getNotifications(signal,{ page,size:20 }), [actor.id, query, revision, page], context);
+  const displayedPage = result.success?.context?.page ?? page;
   const items = result.data?.items ?? [];
   const unreadIds=items.filter(item=>!item.read && item.notificationId).map(item=>item.notificationId);
   useEffect(()=>{
@@ -24,5 +28,5 @@ export function NotificationInbox({ actor, query, run, revision = 0, onOpen }: {
     });
   },[items,result.data,run,retryKey]);
   useEffect(() => { const timer = window.setInterval(() => { if (document.visibilityState === 'visible') result.reload(); },30000); const refresh = () => { if (document.visibilityState === 'visible') result.reload(); }; document.addEventListener('visibilitychange',refresh); return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange',refresh); }; }, [result.reload]);
-  return <><div className="page-head"><h1>알림함</h1><button onClick={result.reload}>새로고침</button></div><ResourceStatus loading={result.loading} error={result.error} retry={result.reload} />{result.error && result.data && <p className="muted">마지막 성공 조회 결과를 표시합니다.</p>}{markError && <p className="error" role="alert">{markError}<button type="button" onClick={()=>{unreadIds.forEach(id=>submitted.current.delete(id));setRetryKey(value=>value+1);}}>알림 확인 다시 시도</button></p>}{items.length ? <div className="card notification-list">{items.map(item => <article className={`notification${item.read?' read':''}`} key={item.notificationId}><strong>{item.event}</strong>{!item.read&&<span className="exception">새 알림</span>}<span>{displayDate(item.at)}</span>{item.relatedRequestId && <button className="link" onClick={() => onOpen(item.relatedRequestId!)}>{item.relatedRequestId}</button>}</article>)}</div> : !result.loading && !result.error && <p className="empty">알림이 없습니다.</p>}{result.data && <div className="actions pagination"><button disabled={page === 0 || result.loading} onClick={() => setPage(value => value - 1)}>이전 알림</button><span>{page + 1}페이지 · {result.data.total}건</span><button disabled={(page + 1) * 20 >= result.data.total || result.loading} onClick={() => setPage(value => value + 1)}>다음 알림</button></div>}</>;
+  return <><div className="page-head"><h1>알림함</h1><button onClick={result.reload}>새로고침</button></div><ResourceStatus loading={result.loading} error={result.error} retry={result.reload} />{result.error && result.data && <p className="muted">마지막 성공 조회 결과를 표시합니다.</p>}{markError && <p className="error" role="alert">{markError}<button type="button" onClick={()=>{unreadIds.forEach(id=>submitted.current.delete(id));setRetryKey(value=>value+1);}}>알림 확인 다시 시도</button></p>}{items.length ? <div className="card notification-list">{items.map(item => <article className={`notification${item.read?' read':''}`} key={item.notificationId}><div className="notification-copy"><strong>{item.relatedDepartment && `${item.relatedDepartment} · `}{item.relatedWorkItemId ? workStatusLabel(item.event) : item.event}</strong>{!item.read&&<span className="exception">새 알림</span>}{item.summary&&<p className="notification-summary">{item.summary}</p>}</div><span>{displayDate(item.at)}</span>{item.relatedRequestId && <button className="link" onClick={() => onOpen(item.relatedRequestId!)}>{item.relatedRequestId}</button>}</article>)}</div> : !result.loading && !result.error && <p className="empty">알림이 없습니다.</p>}{result.data && <div className="actions pagination"><button disabled={page === 0 || result.loading} onClick={() => setPage(value => value - 1)}>이전 알림</button><span>{displayedPage + 1}페이지 · {result.data.total}건{displayedPage !== page ? ` · 조회 선택 ${page + 1}페이지` : ''}</span><button disabled={(page + 1) * 20 >= result.data.total || result.loading} onClick={() => setPage(value => value + 1)}>다음 알림</button></div>}</>;
 }

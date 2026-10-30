@@ -78,6 +78,49 @@ test('team feedback: requester sees current department phone and admin can edit 
  }finally{await login(page,'access-admin');const current=(await read(page,'/department-contacts')).items.find((row:any)=>row.department==='유선반');await command(page,'saveDepartmentContact',{department:'유선반',phone:original.phone},{expectedRevision:current.revision});}
 });
 test('team feedback: department comparison follows applied filter and retains it after a failed query',async({page})=>{
- await login(page);await page.goto('/operations');const rows=page.locator('.department-comparison tbody tr');await expect(rows).toHaveCount(5);await page.getByLabel('부서',{exact:true}).selectOption('무선반');await button(page,'검색').click();await expect(rows).toHaveCount(1);await expect(rows).toContainText('무선반');
- await page.getByLabel('부서',{exact:true}).selectOption('유선반');await expect(rows).toContainText('무선반');await page.route('**/api/work-overview?**',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({ok:false,errorCode:'SAVE_FAILED',message:'조회 실패 검증'})}));await button(page,'검색').click();await expect(page.getByRole('alert')).toContainText('조회 실패 검증');await expect(rows).toHaveCount(1);await expect(rows).toContainText('무선반');await page.unroute('**/api/work-overview?**');await button(page,'초기화').click();await expect(rows).toHaveCount(5);
+ await login(page);await page.goto('/operations');const rows=page.locator('.department-comparison tbody tr');await expect(rows).toHaveCount(5);await page.getByRole('group',{name:'부서 선택'}).getByLabel('무선반',{exact:true}).check();await button(page,'검색').click();await expect(rows).toHaveCount(1);await expect(rows).toContainText('무선반');
+ await page.getByRole('group',{name:'부서 선택'}).getByLabel('무선반',{exact:true}).uncheck();await page.getByRole('group',{name:'부서 선택'}).getByLabel('유선반',{exact:true}).check();await expect(rows).toContainText('무선반');await page.route('**/api/work-overview?**',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({ok:false,errorCode:'SAVE_FAILED',message:'조회 실패 검증'})}));await button(page,'검색').click();await expect(page.getByRole('alert')).toContainText('조회 실패 검증');await expect(rows).toHaveCount(1);await expect(rows).toContainText('무선반');await page.unroute('**/api/work-overview?**');await button(page,'초기화').click();await expect(rows).toHaveCount(5);
+});
+
+async function optionalContact(page:Page){
+ await button(page,'작동이 멈췄어요').click();await page.getByLabel('요청자 군내전화번호',{exact:true}).fill('000-1234');
+ await page.getByText('희망 일정·추가 연락처·정비대상자',{exact:true}).click();
+}
+async function submitResponse(page:Page){
+ const response=page.waitForResponse(row=>new URL(row.url()).pathname==='/api/commands'&&row.request().method()==='POST');
+ await button(page,'신청 등록').click();return response;
+}
+for(const subject of ['requester','bnoc'])test(`competition: ${subject} confirms every supplied common option without extra edit actions`,async({page},info)=>{
+ await login(page,subject);await begin(page);await optionalContact(page);
+ await page.getByLabel('요청자 개인전화번호',{exact:true}).fill('000-0000-0000');await page.getByLabel('문서 참조정보',{exact:true}).fill('검증문서-20261028');
+ for(const [rank,date,period] of [[1,'2026-11-01','AM'],[2,'2026-11-02','PM']] as const){await page.getByLabel(`${rank}지망 날짜`,{exact:true}).fill(date);await page.getByLabel(`${rank}지망 오전·오후`,{exact:true}).selectOption(period);}
+ await page.getByLabel('정비대상자가 요청자와 다름').check();
+ for(const [label,value] of [['소속','검증소속'],['계급','검증구분'],['이름','검증식별값'],['군내전화번호','000-2222']])await page.getByLabel(`정비대상자 ${label}`,{exact:true}).fill(value);
+ await button(page,'다음').click();if(subject==='bnoc'){const requesters=await read(page,'/requesters');await page.getByLabel('요청자 계정',{exact:true}).selectOption(requesters[0].requesterRef);await button(page,'최종 확인').click();}
+ await at(page,'review');const review=page.locator('.intake-question');
+ for(const text of ['000-0000-0000','검증문서-20261028','2026-11-01','오전','2026-11-02','오후','검증소속','검증구분','검증식별값','000-2222'])await expect(review).toContainText(text);
+ for(const name of ['신청 목적 변경','대상·수량 변경','연락처 수정','정보·첨부 수정'])await expect(button(page,name)).toHaveCount(0);
+ await page.screenshot({path:`${process.env.BNOC_TEST_EVIDENCE_DIR}/common-options-${subject}-${info.project.name}.png`});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ const created=await (await submitResponse(page)).json();expect(created.ok).toBe(true);const saved=await read(page,`/requests/${created.requestNumber}`);
+ expect(saved.personalContact).toBe('000-0000-0000');expect(saved.documentRef).toBe('검증문서-20261028');expect(saved.schedulePreferences).toEqual([{rank:1,date:'2026-11-01',period:'AM'},{rank:2,date:'2026-11-02',period:'PM'}]);
+ if(subject==='requester'){expect(saved.maintenanceTarget).toBeNull();await login(page,'bnoc');}
+ expect((await read(page,`/requests/${created.requestNumber}`)).maintenanceTarget).toEqual({department:'검증소속',rank:'검증구분',name:'검증식별값',phone:'000-2222'});
+});
+for(const error of ['personalContact','schedulePreferences','targetName'])test(`competition: ${error} opens its hidden input and preserves the request through correction`,async({page},info)=>{
+ await login(page);await begin(page);await optionalContact(page);await page.getByLabel('문서 참조정보',{exact:true}).fill('오류후보존');
+ if(error==='personalContact')await page.getByLabel('요청자 개인전화번호',{exact:true}).fill('123');
+ if(error==='schedulePreferences')await page.getByLabel('1지망 날짜',{exact:true}).fill('2026-11-01');
+ if(error==='targetName'){
+  await page.getByLabel('정비대상자가 요청자와 다름').check();await page.getByLabel('정비대상자 소속',{exact:true}).fill('검증소속');await page.getByLabel('정비대상자 계급',{exact:true}).fill('검증구분');await page.getByLabel('정비대상자 군내전화번호',{exact:true}).fill('000-2222');
+ }
+ await button(page,'다음').click();await at(page,'review');await page.getByLabel('이 대상의 첨부파일',{exact:true}).setInputFiles({name:'preserved.txt',mimeType:'text/plain',buffer:Buffer.from('preserved attachment')});await expect(page.locator('.attachment-row')).toHaveCount(1);
+ const before=(await read(page,'/requests?size=1')).total;expect((await submitResponse(page)).status()).toBe(400);await at(page,'contact');
+ expect((await read(page,'/requests?size=1')).total).toBe(before);
+ const field=page.getByLabel(error==='personalContact'?'요청자 개인전화번호':error==='targetName'?'정비대상자 이름':'1지망 날짜',{exact:true});
+ await expect(field).toBeVisible();await expect(field).toBeFocused();await expect(field).toHaveAttribute('aria-invalid','true');const described=await field.getAttribute('aria-describedby');expect(described).toBeTruthy();await expect(page.locator(`[id="${described}"]`)).toBeVisible();
+ await expect(page.getByLabel('문서 참조정보',{exact:true})).toHaveValue('오류후보존');await expect(page.getByLabel('요청자 군내전화번호',{exact:true})).toHaveValue('000-1234');
+ await page.screenshot({path:`${process.env.BNOC_TEST_EVIDENCE_DIR}/recovered-${error}-${info.project.name}.png`});
+ if(error==='personalContact')await field.fill('000-0000-0000');if(error==='targetName')await field.fill('검증식별값');if(error==='schedulePreferences')await page.getByLabel('1지망 오전·오후',{exact:true}).selectOption('AM');
+ await button(page,'다음').click();await at(page,'review');await expect(page.locator('.intake-summary')).toContainText('확인 위치');await expect(page.locator('.attachment-row')).toHaveCount(1);
+ const created=await (await submitResponse(page)).json();expect(created.ok).toBe(true);const saved=await read(page,`/requests/${created.requestNumber}`);expect(saved.requestItems[0].quantity).toBe(1);expect(saved.documentRef).toBe('오류후보존');expect(saved.attachments.map((row:any)=>row.fileName)).toEqual(['preserved.txt']);
 });
