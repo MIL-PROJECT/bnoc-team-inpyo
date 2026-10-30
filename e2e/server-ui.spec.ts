@@ -1099,14 +1099,15 @@ test('document navigation: search page and unapplied criteria survive Back and s
   await page.goto('/requests');const query=page.getByRole('textbox',{name:'내용·문서 검색'});
   await query.fill(marker);await page.getByRole('button',{name:'검색',exact:true}).click();await expect(page.locator('.result-count')).toHaveText('요청 21건');
   await page.getByRole('button',{name:'다음 페이지',exact:true}).click();await expect(page.locator('.pagination')).toContainText('2페이지');
+  await page.getByRole('button',{name:'다음 페이지',exact:true}).click();await expect(page.locator('.pagination')).toContainText('3페이지');
   await expect(page.getByRole('button',{name:numbers[0],exact:true})).toBeVisible();await query.fill('미적용 조건');
   await page.getByRole('button',{name:numbers[0],exact:true}).click();await expect(page.getByRole('heading',{name:'신청 상세',exact:true})).toBeVisible();await page.goBack();
-  await expect(query).toHaveValue('미적용 조건');await expect(page.locator('.pagination')).toContainText('2페이지');await expect(page.getByRole('button',{name:numbers[0],exact:true})).toBeVisible();await expect(page.locator('.result-count')).toHaveText('요청 21건');
+  await expect(query).toHaveValue('미적용 조건');await expect(page.locator('.pagination')).toContainText('3페이지');await expect(page.getByRole('button',{name:numbers[0],exact:true})).toBeVisible();await expect(page.locator('.result-count')).toHaveText('요청 21건');
   const session=(await apiRead(page,'/api/session')).data;
   expect((await page.request.post('/api/auth/logout',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},data:{}})).status()).toBe(200);
   await page.getByRole('button',{name:numbers[0],exact:true}).click();await expect(page.getByRole('dialog',{name:'로그인 만료'})).toBeVisible();
   await loginWithPopup(page,'requester');await expect(page.getByRole('heading',{name:'신청 상세',exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'신청 목록',exact:true}).click();await expect(query).toHaveValue('미적용 조건');await expect(page.locator('.pagination')).toContainText('2페이지');await expect(page.locator('.result-count')).toHaveText('요청 21건');
+  await page.getByRole('button',{name:'신청 목록',exact:true}).click();await expect(query).toHaveValue('미적용 조건');await expect(page.locator('.pagination')).toContainText('3페이지');await expect(page.locator('.result-count')).toHaveText('요청 21건');
   await switchWithPopup(page,'bnoc');await expect(query).toHaveValue('');await expect(page.locator('.pagination')).toContainText('1페이지');
   await switchWithPopup(page,'requester');await expect(query).toHaveValue('');await expect(page.locator('.pagination')).toContainText('1페이지');
 });

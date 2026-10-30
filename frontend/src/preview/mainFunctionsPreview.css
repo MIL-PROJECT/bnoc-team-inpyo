@@ -221,4 +221,4 @@ body:has(.duty-page) { height: 100dvh; overflow: clip; }
 .duty-day-more { font-size: .72rem; font-weight: 400; color: var(--color-muted); }
 
 /* Expanded day details must scroll as content, never compress candidate rows under save. */
-.duty-workspace--week .duty-editor { grid-auto-rows: max-content; align-content: start; }
+.duty-workspace--week .duty-editor,.duty-workspace--month .duty-editor { grid-auto-rows: max-content; align-content: start; }
