@@ -3313,3 +3313,84 @@ test('demo readability: assigned lists identify content and work dates and notif
   await expect(alert).toHaveCount(1);
   await noOverflow(page);await screenshot(page,info,'demo-department-notification');
 });
+
+test('HWP preview: whole pages fit the viewport and zoom returns to page fit', async ({ page }, info) => {
+  const session=await apiLogin(page,'requester'),bytes=await readFile('frontend/src/preview/fixtures/support.hwp');
+  const name=`한글 전체 페이지 맞춤 확인을 위한 긴 첨부파일 이름-${randomUUID()}.hwp`;
+  const uploaded=await page.request.post('/api/attachments?resourceKind=request',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},multipart:{file:{name,mimeType:'application/octet-stream',buffer:bytes}}});
+  expect(uploaded.status()).toBe(200);const attachment=(await uploaded.json()).data;
+  const created=await command(page,'createRequest',{...requestPayload('한글 전체 쪽 보기'),attachments:[{id:attachment.id}]});
+  await page.goto(`/requests/${created.requestNumber}`);
+  await page.getByRole('link',{name,exact:true}).locator('xpath=..').getByRole('button',{name:'문서 보기',exact:true}).click();
+  const dialog=page.getByRole('dialog'),image=dialog.locator('.hwp-page-view__image');
+  await expect.poll(()=>image.evaluate((node:HTMLImageElement)=>node.complete&&node.naturalWidth>0)).toBeTruthy();
+  const fitted=()=>image.evaluate(node=>{
+    const image=node.getBoundingClientRect(),body=node.closest('.document-dialog__body')!,bounds=body.getBoundingClientRect();
+    const stage=node.closest('.hwp-page-view__viewport') as HTMLElement|null;
+    return image.width>0&&image.height>0&&image.left>=bounds.left-1&&image.right<=bounds.right+1&&image.top>=bounds.top-1&&image.bottom<=bounds.bottom+1&&(!stage||(stage.scrollHeight<=stage.clientHeight+1&&stage.scrollWidth<=stage.clientWidth+1));
+  });
+  for(const height of [720,900]){
+    await page.setViewportSize({width:page.viewportSize()!.width,height});
+    await expect.poll(fitted,{message:'HWP_WHOLE_PAGE_MUST_FIT_WITHOUT_SCROLL'}).toBe(true);
+    await expect(dialog.getByRole('button',{name:'페이지 맞춤',exact:true})).toHaveAttribute('aria-pressed','true');
+    const pageFitColor=await dialog.getByRole('button',{name:'페이지 맞춤',exact:true}).evaluate(node=>getComputedStyle(node).backgroundColor);
+    const widthFitColor=await dialog.getByRole('button',{name:'너비 맞춤',exact:true}).evaluate(node=>getComputedStyle(node).backgroundColor);
+    expect(pageFitColor,'HWP_ACTIVE_FIT_MODE_MUST_BE_VISIBLE').not.toBe(widthFitColor);
+    for(const label of ['닫기','원본 다운로드']){
+      const control=dialog.getByRole(label==='닫기'?'button':'link',{name:label,exact:true});
+      const bounds=await control.boundingBox();expect(bounds&&bounds.y>=0&&bounds.y+bounds.height<=height).toBeTruthy();
+    }
+    const percent=dialog.getByLabel('현재 확대 배율',{exact:true}),before=Number((await percent.innerText()).replace('%',''));
+    await dialog.getByRole('button',{name:'확대',exact:true}).click();await dialog.getByRole('button',{name:'확대',exact:true}).click();
+    expect(Number((await percent.innerText()).replace('%',''))).toBeGreaterThan(before);
+    expect(await dialog.locator('.hwp-page-view__viewport').evaluate(node=>node.scrollHeight>node.clientHeight)).toBe(true);
+    await dialog.getByRole('button',{name:'축소',exact:true}).click();
+    await dialog.getByRole('button',{name:'너비 맞춤',exact:true}).click();
+    await expect(dialog.getByRole('button',{name:'너비 맞춤',exact:true})).toHaveAttribute('aria-pressed','true');
+    await dialog.getByRole('button',{name:'페이지 맞춤',exact:true}).click();
+    await expect.poll(fitted,{message:'HWP_PAGE_FIT_MUST_RECOVER_AFTER_ZOOM'}).toBe(true);
+    await screenshot(page,info,`hwp-page-fit-${height}`);
+  }
+  await dialog.getByRole('button',{name:'닫기',exact:true}).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+test('HWP preview: engine prepares before opening while every reopening reads the original again', async ({page},info)=>{
+  const session=await apiLogin(page,'requester'),bytes=await readFile('frontend/src/preview/fixtures/support.hwp'),name=`엔진 준비-${randomUUID()}.hwp`;
+  const uploaded=await page.request.post('/api/attachments?resourceKind=request',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},multipart:{file:{name,mimeType:'application/octet-stream',buffer:bytes}}});
+  expect(uploaded.status()).toBe(200);const attachment=(await uploaded.json()).data;
+  const created=await command(page,'createRequest',{...requestPayload('한글 엔진 먼저 준비'),attachments:[{id:attachment.id}]});
+  const wasmRequests:string[]=[],sourceRequests:string[]=[];
+  page.on('request',request=>{if(/\.wasm(?:\?|$)/.test(request.url()))wasmRequests.push(request.url());if(request.url().includes('/render-source'))sourceRequests.push(request.url());});
+  const prepared=page.waitForResponse(response=>/\.wasm(?:\?|$)/.test(response.url()));
+  await page.goto(`/requests/${created.requestNumber}`);await (await prepared).finished();
+  expect(wasmRequests).toHaveLength(1);expect(sourceRequests).toHaveLength(0);
+  const timings:number[]=[];
+  for(let opening=0;opening<2;opening++){
+    const started=Date.now();await page.getByRole('link',{name,exact:true}).locator('xpath=..').getByRole('button',{name:'문서 보기',exact:true}).click();
+    const dialog=page.getByRole('dialog'),image=dialog.locator('.hwp-page-view__image');
+    await expect.poll(()=>image.evaluate((node:HTMLImageElement)=>node.complete&&node.naturalWidth>0)).toBeTruthy();
+    timings.push(Date.now()-started);expect(wasmRequests).toHaveLength(1);expect(sourceRequests).toHaveLength(opening+1);
+    await dialog.getByRole('button',{name:'닫기',exact:true}).click();await expect(page.getByRole('dialog')).toHaveCount(0);
+  }
+  await info.attach('hwp-opening-observations',{body:JSON.stringify({milliseconds:timings,wasmRequests:wasmRequests.length,sourceRequests:sourceRequests.length}),contentType:'application/json'});
+});
+
+test('HWP preview: a stalled engine preparation expires and a fresh retry opens the document',async({page})=>{
+  const session=await apiLogin(page,'requester'),bytes=await readFile('frontend/src/preview/fixtures/support.hwp'),name=`엔진 재시도-${randomUUID()}.hwp`;
+  const uploaded=await page.request.post('/api/attachments?resourceKind=request',{headers:{Origin:new URL(base).origin,'X-CSRF-Token':session.csrfToken},multipart:{file:{name,mimeType:'application/octet-stream',buffer:bytes}}});
+  expect(uploaded.status()).toBe(200);const attachment=(await uploaded.json()).data;
+  const created=await command(page,'createRequest',{...requestPayload('한글 준비 응답 지연'),attachments:[{id:attachment.id}]});
+  let release=()=>{},wasmRequests=0;const held=new Promise<void>(resolve=>{release=resolve;});
+  await page.route(/\.wasm(?:\?|$)/,async route=>{wasmRequests++;if(wasmRequests===1){await held;await route.abort().catch(()=>{});}else await route.continue();});
+  try{
+    await page.clock.install();await page.goto(`/requests/${created.requestNumber}`);
+    await expect.poll(()=>wasmRequests).toBe(1);
+    await page.getByRole('link',{name,exact:true}).locator('xpath=..').getByRole('button',{name:'문서 보기',exact:true}).click();
+    const dialog=page.getByRole('dialog');await expect(dialog.getByText('한글 파일 여는 중…',{exact:true})).toBeVisible();
+    await page.clock.fastForward(30001);
+    await dialog.getByRole('button',{name:'한글 파일 다시 열기',exact:true}).click();
+    await expect.poll(()=>wasmRequests,{message:'HWP_ENGINE_RETRY_MUST_START_A_FRESH_REQUEST'}).toBeGreaterThan(1);
+    await expect.poll(()=>dialog.locator('.hwp-page-view__image').evaluate((image:HTMLImageElement)=>image.complete&&image.naturalWidth>0)).toBeTruthy();
+  }finally{release();}
+});

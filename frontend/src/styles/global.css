@@ -277,8 +277,20 @@ nav .nav-badge--error { background: var(--color-warning); }
 .document-dialog__body,.document-dialog__metadata { min-width:0; max-height:58vh; overflow:auto; padding:var(--space-4); border:1px solid var(--color-divider); border-radius:var(--radius-card); overflow-wrap:anywhere; }
 .document-dialog__body iframe { display:block; width:100%; min-height:52vh; border:0; }
 .document-dialog__body img { display:block; max-width:100%; height:auto; margin:auto; }
-.hwp-page-view__image { width:min(100%, 48rem); max-height:none; aspect-ratio:auto; border:1px solid var(--color-divider); background:var(--color-surface); box-shadow:var(--shadow-document); }
-.hwp-page-view__controls { display:flex; align-items:center; justify-content:center; gap:var(--space-3); margin-top:var(--space-4); }
+.hwp-page-view { display:flex; flex-direction:column; gap:var(--space-2); height:min(54dvh,40rem); min-height:0; }
+.hwp-page-view__controls { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; flex:0 0 auto; gap:var(--space-2); }
+.hwp-page-view__group { display:flex; align-items:center; gap:var(--space-2); flex-wrap:wrap; }
+.hwp-page-view__group span,.hwp-page-view__group output { min-width:3.5rem; text-align:center; font-variant-numeric:tabular-nums; }
+.hwp-page-view__viewport { flex:1; min-height:0; overflow:auto; position:relative; background:var(--color-bg); overscroll-behavior:contain; }
+.hwp-page-view__surface { display:grid; place-items:center; }
+.hwp-page-view__image { flex:none; border:1px solid var(--color-divider); background:var(--color-surface); box-shadow:var(--shadow-document); }
+.hwp-page-view__status { position:absolute; top:var(--space-2); left:var(--space-2); z-index:1; margin:0; padding:var(--space-1) var(--space-2); background:var(--color-surface); }
+.document-dialog--hwp { width:min(1200px,calc(100% - 2rem)); height:calc(100dvh - 2rem); overflow:hidden; }
+.document-dialog--hwp[open] { display:flex; flex-direction:column; }
+.document-dialog--hwp .document-dialog__head { position:static; flex:0 0 auto; }
+.document-dialog--hwp .document-dialog__content { flex:1; min-height:0; }
+.document-dialog--hwp .document-dialog__body { display:flex; flex-direction:column; min-height:0; max-height:none; overflow:hidden; }
+.document-dialog--hwp .document-dialog__body>.hwp-page-view { flex:1; height:auto; }
 .document-dialog__body table { width:100%; border-collapse:collapse; }
 .document-dialog__body th,.document-dialog__body td { border:1px solid var(--color-divider); padding:.4rem; text-align:left; vertical-align:top; }
 .document-dialog__body [data-document-search-target] { outline:2px solid var(--color-primary); outline-offset:2px; }

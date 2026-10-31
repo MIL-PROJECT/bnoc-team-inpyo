@@ -6,6 +6,7 @@ import { uploadAttachmentBatch, attachmentSubmissionBlocked } from '../api/attac
 import { ApiClient } from '../api/apiClient.mjs';
 import { AttachmentDocumentDialog } from './AttachmentDocumentDialog';
 import { Button } from '../ui/Button';
+import { prepareHwpEngine } from '../ui/hwpEngine';
 export type UploadAttachment = (file: File) => Promise<AttachmentMeta>;
 type FailedUpload = { file: File; error: Error };
 export function AttachmentPicker({ files, onChange, upload, onBusyChange, disabled = false, label = '첨부파일', required = false, previewEnabled = true }: {
@@ -15,6 +16,7 @@ export function AttachmentPicker({ files, onChange, upload, onBusyChange, disabl
   const [busy,setBusy] = useState(false), [failures,setFailures] = useState<FailedUpload[]>([]);
   const [previewApi] = useState(() => new ApiClient());
   const [preview,setPreview] = useState<string|null>(null);
+  useEffect(()=>{if(previewEnabled&&files.some(file=>/\.hwpx?$/i.test(file.fileName)))void prepareHwpEngine();},[files,previewEnabled]);
   const processing = useRef(false), failed = useRef<FailedUpload[]>([]);
   const latest = useRef({ files,onChange,upload,onBusyChange }); latest.current = { files,onChange,upload,onBusyChange };
   const mounted = useRef(true);

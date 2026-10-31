@@ -1,7 +1,7 @@
 import init, { HwpDocument } from '@rhwp/core';
 import wasmUrl from '@rhwp/core/rhwp_bg.wasm?url';
 
-type RequestMessage = { type: 'load'; buffer: ArrayBuffer } | { type: 'render'; page: number };
+type RequestMessage = { type: 'load'; buffer: ArrayBuffer; module?: WebAssembly.Module } | { type: 'render'; page: number };
 type ResponseMessage = { type: 'ready'; pageCount: number } | { type: 'page'; page: number; svg: string } | { type: 'error' };
 type RendererGlobal = typeof globalThis & {
   measureTextWidth?: (font: string, text: string) => number;
@@ -14,6 +14,8 @@ let document: HwpDocument | null = null;
 let pageCount = 0;
 let ready: Promise<unknown> | null = null;
 let measureContext: OffscreenCanvasRenderingContext2D | null = null;
+const pages = new Map<number, string>();
+let cachedBytes = 0;
 
 scope.onmessage = async ({ data }) => {
   try {
@@ -24,8 +26,9 @@ scope.onmessage = async ({ data }) => {
         measureContext.font = font;
         return measureContext.measureText(text).width;
       };
-      ready ??= init({ module_or_path: wasmUrl });
+      ready ??= init({ module_or_path: data.module ?? wasmUrl });
       await ready;
+      pages.clear();cachedBytes=0;
       document?.free();
       document = new HwpDocument(new Uint8Array(data.buffer));
       pageCount = document.pageCount();
@@ -34,8 +37,11 @@ scope.onmessage = async ({ data }) => {
       return;
     }
     if (!document || data.page < 0 || data.page >= pageCount) throw new Error('PageUnavailable');
-    const svg = document.renderPageSvg(data.page);
+    const svg = pages.get(data.page) ?? document.renderPageSvg(data.page);
     if (!svg.startsWith('<svg') || svg.length > 10 * 1024 * 1024) throw new Error('RenderLimit');
+    if(pages.has(data.page))cachedBytes-=svg.length*2;
+    pages.delete(data.page);pages.set(data.page,svg);cachedBytes+=svg.length*2;
+    while(pages.size>3||cachedBytes>20*1024*1024){const oldest=pages.keys().next().value!;cachedBytes-=pages.get(oldest)!.length*2;pages.delete(oldest);}
     scope.postMessage({ type: 'page', page: data.page, svg });
   } catch {
     scope.postMessage({ type: 'error' });

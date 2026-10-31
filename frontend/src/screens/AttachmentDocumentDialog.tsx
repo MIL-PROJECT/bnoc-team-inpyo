@@ -3,6 +3,7 @@ import type { ApiClient } from '../api/apiClient.mjs';
 import { ApiError } from '../api/apiClient.mjs';
 import type { AttachmentDocument } from '../types';
 import { HwpPageRenderer } from '../ui/HwpPageRenderer';
+import { prepareHwpEngine } from '../ui/hwpEngine';
 import { DocxPageRenderer } from '../ui/DocxPageRenderer';
 
 const labels:Record<string,string>={temporary:'첨부 확인',pending:'분석 대기',processing:'분석 중',ready:'분석 완료',partial:'일부 추출',failed:'분석 실패',unreadable:'읽을 수 없음',no_text:'본문 텍스트 없음',excluded:'본문 분석 제외',unsupported:'본문 분석 대상 아님'};
@@ -33,6 +34,7 @@ export function AttachmentDocumentDialog({api,attachmentId,searchTerm,targetBloc
   const targetOffset=targetBlockIndex!==undefined&&targetBlockIndex>=0?Math.floor(targetBlockIndex/50)*50:0;
   useEffect(()=>{dialog.current?.showModal();void load(targetOffset);return()=>{dialog.current?.close();if(opener.current?.isConnected)opener.current.focus();};},[attachmentId,targetOffset]);
   const isHwp=/\.hwpx?$/i.test(document?.fileName??'');
+  useEffect(()=>{if(isHwp)void prepareHwpEngine();},[isHwp]);
   const isDocx=/\.docx$/i.test(document?.fileName??'');
   const canShowOriginal=/\.(pdf|hwpx?|docx|png|jpe?g)$/i.test(document?.fileName??'');
   const canShowExtracted=!!document&&!['temporary','excluded','unsupported'].includes(document.status);
@@ -47,7 +49,7 @@ export function AttachmentDocumentDialog({api,attachmentId,searchTerm,targetBloc
   useEffect(()=>{if(!document||!['pending','processing'].includes(document.status))return;const timer=window.setInterval(()=>void load(offset),3000);return()=>window.clearInterval(timer);},[document?.status,offset]);
   useEffect(()=>{if(!document||!searchTerm)return;const frame=window.requestAnimationFrame(()=>{const target=targetMetadataIndex!==undefined&&targetMetadataIndex>=0?dialog.current?.querySelector(`[data-document-metadata-index="${targetMetadataIndex}"]`):targetBlockIndex!==undefined&&targetBlockIndex>=0?dialog.current?.querySelector(`[data-document-block-index="${targetBlockIndex}"]`):dialog.current?.querySelector('[data-document-search-hit]');target?.scrollIntoView({block:'center'});});return()=>window.cancelAnimationFrame(frame);},[document,searchTerm,targetBlockIndex,targetMetadataIndex]);
   const retry=async()=>{try{await api.reprocessAttachment(attachmentId);void load(0);}catch(e){setError(e instanceof ApiError?e.message:'문서 분석을 다시 요청하지 못했습니다.');}};
-  return <dialog ref={dialog} className="document-dialog" aria-labelledby={id} onCancel={event=>{event.preventDefault();onClose();}}>
+  return <dialog ref={dialog} className={`document-dialog${original&&isHwp?' document-dialog--hwp':''}`} aria-labelledby={id} onCancel={event=>{event.preventDefault();onClose();}}>
     <header className="document-dialog__head"><div><h2 id={id}>{document?.fileName??'첨부 문서'}</h2><p className="muted" role="status">{document?labels[document.status]??document.status:!loading&&error?'문서 조회 실패':'문서 정보 불러오는 중'}{document&&statusMessage(document.status,document.processedRange)&&<span className="document-dialog__status-detail">{statusMessage(document.status,document.processedRange)}</span>}</p></div><div className="document-dialog__actions"><a className="ui-button" href={api.attachmentUrl(attachmentId)} download>원본 다운로드</a><button type="button" onClick={onClose}>닫기</button></div></header>
     {error&&<p className="field-error" role="alert">{error} <button type="button" disabled={loading} onClick={()=>void load(document?offset:targetOffset)}>문서 다시 불러오기</button></p>}
     {document&&<>

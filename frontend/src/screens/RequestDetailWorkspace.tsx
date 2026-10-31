@@ -22,6 +22,7 @@ import { requestDetailGuidance, requestLocationGuidance } from '../app/requestGu
 import { StatusBadge, StatusProcess } from '../ui/WorkflowStatus';
 import { AttachmentDocumentDialog } from './AttachmentDocumentDialog';
 import { Button } from '../ui/Button';
+import { prepareHwpEngine } from '../ui/hwpEngine';
 type DetailDraft = RequestInput;
 const editingInput = (detail: RequestDetail): DetailDraft => {
   let guidedDraft:GuidedDraft|null=null;
@@ -31,6 +32,7 @@ const editingInput = (detail: RequestDetail): DetailDraft => {
 export function RequestDetailWorkspace({ actor, requestNumber, api, teams, run, upload, revision = 0, onBack, onAssigned, initialMessage = '', initialAttachmentId, initialAttachmentSearchTerm, initialAttachmentBlockIndex, initialAttachmentMetadataIndex, onAttachmentOpened, onReuseRequest }: { actor: Actor; requestNumber: string; api: ApiClient; teams: string[]; run: RunCommand; upload: UploadAttachment; revision?: number; onBack: () => void; onAssigned?: (message: string) => void; initialMessage?: string; initialAttachmentId?: string; initialAttachmentSearchTerm?: string; initialAttachmentBlockIndex?: number; initialAttachmentMetadataIndex?: number; onAttachmentOpened?: () => void; onReuseRequest?: (number:string)=>Promise<void> }) {
   const result = useResource<RequestDetail>(signal => api.getRequestDetail(requestNumber, signal), [api, actor.id, requestNumber, revision]);
   const detail = result.data;
+  useEffect(()=>{if(detail?.attachments.some(file=>/\.hwpx?$/i.test(file.fileName)))void prepareHwpEngine();},[detail?.attachments]);
   const [reusing,setReusing]=useState(false);
   const [selected, setSelected] = useState<string[]>([]), [reassignment, setReassignment] = useState<Record<string,string[]>>({}), [addingTeams,setAddingTeams]=useState<string[]>([]);
   const [priorityDraft, setPriorityDraft] = useState<string|null>(null), [editingPriority,setEditingPriority]=useState(false), [editing, setEditing] = useState(false), [draft, setDraft] = useState<DetailDraft | null>(null), [draftRevision, setDraftRevision] = useState(0);
