@@ -3392,5 +3392,6 @@ test('HWP preview: a stalled engine preparation expires and a fresh retry opens 
     await dialog.getByRole('button',{name:'한글 파일 다시 열기',exact:true}).click();
     await expect.poll(()=>wasmRequests,{message:'HWP_ENGINE_RETRY_MUST_START_A_FRESH_REQUEST'}).toBeGreaterThan(1);
     await expect.poll(()=>dialog.locator('.hwp-page-view__image').evaluate((image:HTMLImageElement)=>image.complete&&image.naturalWidth>0)).toBeTruthy();
+    await expect(dialog.getByText('원본 페이지를 만들지 못했습니다. 다시 열거나 추출 본문을 확인하세요.',{exact:true}),'HWP_SUCCESSFUL_RETRY_MUST_CLEAR_OLD_WARNING').toHaveCount(0);
   }finally{release();}
 });
